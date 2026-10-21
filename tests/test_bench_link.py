@@ -15,8 +15,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from concord_label import peer
-from concord_label.core.models import AudioFile, Dataset, Run, Segment, SegmentStatus
+from concord_label import adapters, peer
+from concord_label.core.models import AudioFile, Dataset, Model, Run, Segment, SegmentStatus
 from concord_label.core.settings import reset_settings
 from concord_label.label import refpkg
 from concord_label.runs import jobs
@@ -283,7 +283,10 @@ def test_pseudo_labelled_dataset_complete_and_any(labelled, client, tmp_path, no
     assert len(outs) == 1
     o = outs[0]
     assert o["model"] == "pyannote-diarization" and o["sha256"] == files_csv(root)[0]["sha256"]
-    assert o["params"] == run.params["seg_adapter"] and o["params"]["adapter"] == "OIPSegmenter"
+    # params are exactly the seg adapter's own params for that call, nothing added
+    seg_adapter = adapters.for_model(session.get(Model, run.params["seg_model_id"]))
+    assert o["params"] == seg_adapter.params == run.params["seg_adapter"]
+    assert set(o["params"]) == {"adapter", "image"} and o["params"]["adapter"] == "OIPSegmenter"
     assert o["image"] and o["image"] == o["params"]["image"] and o["latency_s"] >= 0
     assert o["output"]["segments"] and len(o["output"]["speakers"]) == len(o["output"]["segments"])
 

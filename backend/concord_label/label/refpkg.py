@@ -188,7 +188,7 @@ def seg_outputs(session: Session, ds: Dataset, shas: list[str]) -> list[dict[str
             ModelOutput.span_start == 0.0, ModelOutput.span_end == cache.WHOLE,
             ModelOutput.audio_sha256.in_(shas)).order_by(ModelOutput.audio_sha256))
         for row in rows:
-            image = row.image or params.get("image")
+            image = params.get("image")  # the tag in the params; the cache row was made with it (it is in the hash)
             key = (row.model_name, row.audio_sha256, ph)
             if key in seen or not image:
                 continue
