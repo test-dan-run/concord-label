@@ -54,7 +54,7 @@ markers = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-src = ["backend", "tests", "fixtures/synth"]
+src = ["backend", "tests"]
 extend-exclude = ["backend/concord_label/migrations/versions"]
 
 [tool.ruff.lint]

@@ -1,10 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Smoke test per screen against a replayed fixture set (tests/e2e_server.py). Needs `npm run build`
-// first (the API serves frontend/dist). Run: `npm run build && npx playwright test`.
+// The Label screens against a replayed fixture set (tests/e2e_server.py). Needs `npm run build` first (the
+// API serves frontend/dist). Run: `npm run build && npx playwright test`.
 // With E2E_BASE_URL set, an already running server is used (e.g. browsers in the Playwright image:
-// `just e2e` starts tests/e2e_server.py on the host and runs Playwright in mcr.microsoft.com/playwright).
-const PORT = 8611;
+// `just e2e` starts tests/e2e_server.py in a container and runs Playwright in mcr.microsoft.com/playwright).
+const PORT = 8621;
 const external = process.env.E2E_BASE_URL;
 
 export default defineConfig({

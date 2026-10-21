@@ -5,7 +5,6 @@ data
 **/node_modules
 frontend/dist
 frontend/test-results
-fixtures/synth
 fixtures/recorded
 fixtures/generated/dataset
 fixtures/generated/refs
