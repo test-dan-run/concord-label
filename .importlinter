@@ -1,13 +1,13 @@
 [importlinter]
 root_packages =
-    concord
+    concord_label
     concord_improve
 include_external_packages = False
 
 [importlinter:contract:no-improve]
-name = Evaluate / Label / Bring-your-own must not import Improve
+name = Concord Label must not import Improve
 type = forbidden
 source_modules =
-    concord
+    concord_label
 forbidden_modules =
     concord_improve

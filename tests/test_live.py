@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from concord.adapters import for_model
-from concord.adapters.base import AudioRef
-from concord.platform.services import ensure_services, health
-from concord.registry.check import check_clip, run_check
+from concord_label.adapters import for_model
+from concord_label.adapters.base import AudioRef
+from concord_label.platform.services import ensure_services, health
+from concord_label.registry.check import check_clip, run_check
 
 pytestmark = pytest.mark.live
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import shutil
 
-from concord.acceptance import FIXTURES
-from concord.runs import jobs
+from concord_label.acceptance import FIXTURES
+from concord_label.runs import jobs
 
 
 def _ok(r, *codes):

@@ -8,9 +8,9 @@ import zipfile
 import soundfile as sf
 from sqlalchemy import select
 
-from concord.core import paths
-from concord.core.models import AudioFile, Dataset, FileStatus, Segment
-from concord.datasets.ingest import ingest, inspect_source
+from concord_label.core import paths
+from concord_label.core.models import AudioFile, Dataset, FileStatus, Segment
+from concord_label.datasets.ingest import ingest, inspect_source
 from conftest import GEN, truth
 
 

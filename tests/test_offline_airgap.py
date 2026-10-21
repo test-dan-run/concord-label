@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from concord.acceptance import stage_fixture_dataset
-from concord.offline import export, kit
+from concord_label.acceptance import stage_fixture_dataset
+from concord_label.offline import export, kit
 
 pytestmark = pytest.mark.offline
 

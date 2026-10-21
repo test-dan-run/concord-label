@@ -11,8 +11,8 @@ import time
 
 import pytest
 
-from concord.core.models import AudioFile, Dataset, Model, ModelOutput, Run, Segment
-from concord.runs import scoring
+from concord_label.core.models import AudioFile, Dataset, Model, ModelOutput, Run, Segment
+from concord_label.runs import scoring
 
 pytestmark = pytest.mark.perf
 
