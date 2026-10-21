@@ -1,12 +1,12 @@
 """FastAPI app. Serves `/api/*` and, when built, the frontend.
 
-The Improve router (Phase 3) is mounted only when `FEATURE_IMPROVE` is on *and* `concord_improve`
-imports; `GET /api/config` reports which.
+Improve (Phase 3, `concord_improve`) is on hold and installed in no image, so nothing mounts it here. When
+Phase 3 is scoped, a `concord-label-full` image brings back a feature flag that mounts its router at
+`/api/improve` (SPLIT_PLAN.md §3.2).
 """
 
 from __future__ import annotations
 
-import importlib
 import logging
 from contextlib import asynccontextmanager
 
@@ -15,22 +15,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..core import db
-from ..core.settings import get_settings
-from . import audio, benchmarks, config, datasets, errors, label, models, offline, runs, sync
+from ..core.settings import VERSION, get_settings
+from . import audio, config, datasets, jobs, label, models, offline, sync
 
 log = logging.getLogger("concord_label")
-
-
-def improve_router():
-    """The Improve router, or None when the flag is off or the package is not installed (lite image)."""
-    if not get_settings().feature_improve:
-        return None
-    try:
-        mod = importlib.import_module("concord_improve")
-    except ImportError:
-        log.warning("FEATURE_IMPROVE is set but concord_improve is not installed; Improve stays off")
-        return None
-    return getattr(mod, "router", None)
 
 
 def create_app(migrate: bool = True) -> FastAPI:
@@ -42,14 +30,10 @@ def create_app(migrate: bool = True) -> FastAPI:
             db.migrate()
         yield
 
-    app = FastAPI(title="Concord", version="0.1.0", lifespan=lifespan)
-    improve = improve_router()
-    app.state.features = {"improve": improve is not None}
-    for r in (config.router, datasets.router, models.router, runs.router, benchmarks.router, errors.router,
-              audio.router, label.router, sync.router, offline.router):
+    app = FastAPI(title="Concord Label", version=VERSION, lifespan=lifespan)
+    for r in (config.router, datasets.router, models.router, jobs.router, audio.router, label.router, sync.router,
+              offline.router):
         app.include_router(r, prefix="/api")
-    if improve is not None:
-        app.include_router(improve, prefix="/api/improve")
 
     dist = settings.frontend_dist
     if (dist / "index.html").is_file():

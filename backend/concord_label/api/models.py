@@ -12,12 +12,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..analysis.suggest import rank_datasets
 from ..core.db import get_session
-from ..core.models import Dataset, Job, JobStatus, Model, Run
+from ..core.models import Job, JobStatus, Model, Run, RunTask
 from ..platform import services
 from ..registry import reader
 from ..runs import jobs
@@ -88,7 +87,13 @@ def model_json(session: Session, m: Model) -> dict[str, Any]:
             "parent_model_id": m.parent_model_id, "capabilities": m.capabilities, "timing_level": m.timing_level,
             "check_report": m.check_report, "registry": m.registry_snapshot, "created_at": m.created_at.isoformat(),
             "stages": (["seg"] if m.is_seg else []) + (["asr"] if m.is_asr else []),
-            "runs": session.scalar(select(func.count(Run.id)).where(Run.model_id == m.id))}
+            "runs": label_runs(session, m)}
+
+
+def label_runs(session: Session, m: Model) -> int:
+    """How many label runs used the model, as segmenter or ensemble member."""
+    params = session.scalars(select(Run.params).where(Run.task == RunTask.label))
+    return sum(1 for p in params if p.get("seg_model_id") == m.id or m.id in (p.get("asr_model_ids") or []))
 
 
 @router.post("/models", status_code=201)
@@ -167,11 +172,3 @@ def recheck(model_id: int, session: Session = Depends(get_session)) -> dict[str,
     job = jobs.enqueue(session, "check", {"service": m.registry_name, "update_model": True}, [m.registry_name])
     session.commit()
     return job_brief(job)
-
-
-@router.get("/suggestions/datasets")
-def suggest_datasets(capabilities: str = "", tags: str = "", session: Session = Depends(get_session)) -> list:
-    """Datasets to benchmark a (new) model on: labels for its tasks, ranked by shared tags."""
-    caps = [c for c in capabilities.split(",") if c]
-    tag_list = [t for t in tags.split(",") if t]
-    return rank_datasets(tag_list, caps, list(session.scalars(select(Dataset))))

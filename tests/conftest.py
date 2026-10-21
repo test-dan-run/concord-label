@@ -27,7 +27,7 @@ def data_dir(tmp_path, monkeypatch):
     from concord_label.core.settings import reset_settings
 
     monkeypatch.setenv("CONCORD_DATA", str(tmp_path / "data"))
-    for var in ("REPLAY_DIR", "RECORD_DIR", "FEATURE_IMPROVE", "NO_EVICT"):
+    for var in ("REPLAY_DIR", "RECORD_DIR", "NO_EVICT"):
         monkeypatch.delenv(var, raising=False)
     reset_settings()
     db.reset_engines()
@@ -62,7 +62,7 @@ def replay(monkeypatch, data_dir):
     from concord_label.core.settings import reset_settings
 
     if not (RECORDED / "endpoints.generated.yaml").is_file():
-        pytest.skip("no recorded responses; run `just record`")
+        pytest.skip("no recorded responses; copy fixtures/recorded from Concord Bench")
     monkeypatch.setenv("REPLAY_DIR", str(RECORDED))
     monkeypatch.setenv("AICORE_ENDPOINTS", str(RECORDED / "endpoints.generated.yaml"))
     reset_settings()
@@ -74,14 +74,10 @@ def replay(monkeypatch, data_dir):
 
 @pytest.fixture
 def label_flow(replay, client, tmp_path):
-    """The Phase 1 acceptance flow, plus an audio-only copy of the same audio ("unlabelled")."""
-    from concord_label.acceptance import run_flow
-    from label_helpers import audio_only_dataset
+    """Registered models, an annotated dataset and an audio-only copy of the same audio ("unlabelled")."""
+    from label_helpers import seed
 
-    out = run_flow(client, tmp_path / "staging", log=lambda m: None)
-    out["ids"] = {n: m["id"] for n, m in out["models"].items()}
-    out["unlabelled"] = audio_only_dataset(client, tmp_path)
-    return out
+    return seed(client, tmp_path / "staging")
 
 
 @pytest.fixture

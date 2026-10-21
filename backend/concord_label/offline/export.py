@@ -20,13 +20,13 @@ from pathlib import Path
 from typing import Any
 
 from ..core.models import utcnow
-from ..core.settings import get_settings
+from ..core.settings import VERSION, get_settings
 from ..platform.services import platform_command, platform_env
 from . import kit as kitfiles
 
 KINDS = ("full", "models")
-CONCORD_VERSION = "0.1.0"
-KNOWN_CONCORD_IMAGES = ("concord-lite:0.1.0", "concord-full:0.1.0")
+CONCORD_VERSION = VERSION
+KNOWN_CONCORD_IMAGES = ("concord-label:0.2.0",)
 
 Log = Callable[[str], None]
 Progress = Callable[[float, str | None], None]
@@ -161,7 +161,7 @@ def preview(names: list[str], kind: str, dest: Path, concord_image: str | None =
         facts = image_facts(image)
         concord = {"image": image, "present": facts is not None, **(facts or {"id": None, "bytes": None})}
         if facts is None:
-            problems.insert(0, f"Concord image {image} is not present locally (`just build-lite` / `just build-full`)")
+            problems.insert(0, f"Concord image {image} is not present locally (`just build`)")
     if not dest.is_absolute():
         problems.insert(0, f"destination {dest} is not an absolute path")
     total = rep["bytes"] + ((concord or {}).get("bytes") or 0)
@@ -213,7 +213,7 @@ def export(names: list[str], kind: str, dest: Path, concord_image: str | None = 
         image = concord_image or get_settings().concord_image
         facts = image_facts(image)
         if facts is None:
-            raise ExportError(f"Concord image {image} is not present locally (`just build-lite` / `just build-full`)")
+            raise ExportError(f"Concord image {image} is not present locally (`just build`)")
         concord = {"image": image, **facts}
     dest.mkdir(parents=True, exist_ok=True)
     kit = kit_path(dest, kit_name(names, kind, name))

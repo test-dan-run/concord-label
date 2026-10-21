@@ -1,38 +1,30 @@
-"""Config, feature flags, tags, normalisers, task list."""
+"""Config (CONTRACTS.md §1), tags, normalisers."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.db import get_session
 from ..core.models import Dataset, Model
-from ..core.settings import get_settings
+from ..core.settings import APP, CONTRACT_VERSION, VERSION, get_settings
 from ..metrics import normalisers
 from ..metrics.der import DEFAULT_COLLAR
 
 router = APIRouter(tags=["config"])
 
-# Benchmark tabs are built from this list, so KWS is one more entry when it lands (Q6).
-TASKS: list[dict[str, Any]] = [
-    {"id": "asr", "label": "ASR", "label_type": "asr", "metric": "WER", "enabled": True},
-    {"id": "diar", "label": "Diarisation", "label_type": "diar", "metric": "DER", "enabled": True},
-    {"id": "pipeline", "label": "ASR + diarisation pipelines", "label_type": "asr", "metric": "cpWER",
-     "enabled": True},
-]
-
-
 @router.get("/config")
-def get_config(request: Request) -> dict[str, Any]:
+def get_config() -> dict[str, Any]:
     s = get_settings()
     return {
-        "version": "0.1.0",
-        "features": request.app.state.features,
-        "variant": "full" if request.app.state.features.get("improve") else "lite",
-        "tasks": TASKS,
+        "app": APP,
+        "version": VERSION,
+        "contract_version": CONTRACT_VERSION,
+        # Concord Bench (SPLIT_PLAN.md §5): filled in when BENCH_URL is set and Bench answers (milestone S5).
+        "peer": {"url": None, "reachable": False, "contract_version": None},
         "default_normaliser": normalisers.DEFAULT,
         "default_collar": DEFAULT_COLLAR,
         "collars": [0.0, 0.1, 0.25, 0.5],

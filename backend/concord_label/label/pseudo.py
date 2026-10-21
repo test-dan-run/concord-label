@@ -1,7 +1,7 @@
 """Ensemble pseudo-labelling as a `label` run (PLAN §6.2).
 
 A label run is a seg -> ASR pipeline without a reference: the seg model's segments are merged and padded
-exactly like a pipeline's (so outputs saved by earlier pipeline runs are cache hits), each cut is
+(`cuts.prepare_cuts`, so outputs saved by earlier label runs are cache hits), each cut is
 transcribed by every ASR member, and the members are fused per cut. Members already in the cache for
 every cut cost nothing; the run then needs no service at all ("Re-fuse 4 saved outputs").
 
@@ -26,10 +26,10 @@ from sqlalchemy.orm import Session
 from .. import adapters
 from ..core import paths
 from ..core.models import AudioFile, Dataset, Model, ModelOutput, Run, Segment, utcnow
+from ..cuts import prepare_cuts, usable_files
 from ..datasets.audio import cut, load_derived
 from ..platform.services import image_info
 from ..runs import cache
-from ..runs.executor import prepare_cuts, usable_files
 from . import fusion
 
 Log = Callable[[str], None]
@@ -58,7 +58,7 @@ def _models(session: Session, params: dict[str, Any]) -> tuple[Model, list[Model
 
 
 def asr_span(c_start: float, c_end: float, duration: float) -> tuple[float, float] | None:
-    """The cache span the executor uses for a cut (whole file -> (0, WHOLE)); None when too short."""
+    """The cache span of a cut (whole file -> (0, WHOLE)); None when too short."""
     if c_end - c_start < MIN_ASR_SPAN:
         return None
     if c_start <= 0.0 and c_end >= duration - 1e-3:

@@ -1,4 +1,4 @@
-"""HTTP API on the fixture set (TestClient): uploads, ingest job, variants, registry errors, templates."""
+"""HTTP API on the fixture set (TestClient): config, uploads, ingest job, registry errors, templates."""
 
 from __future__ import annotations
 
@@ -26,24 +26,18 @@ def upload_fixture(client, refs="stm") -> str:
     return uid
 
 
-def test_config_lite_by_default(client):
+def test_config_names_the_app(client):
+    """CONTRACTS.md §1; the peer (Concord Bench) is filled in by milestone S5."""
     cfg = client.get("/api/config").json()
-    assert cfg["features"] == {"improve": False} and cfg["variant"] == "lite"
-    assert [t["id"] for t in cfg["tasks"]] == ["asr", "diar", "pipeline"]
-    assert client.get("/api/improve/status").status_code == 404
+    assert cfg["app"] == "concord-label" and cfg["version"] == "0.2.0" and cfg["contract_version"] == 1
+    assert cfg["peer"] == {"url": None, "reachable": False, "contract_version": None}
+    assert "features" not in cfg and "variant" not in cfg
 
 
-def test_full_variant_mounts_improve(monkeypatch, data_dir):
-    from fastapi.testclient import TestClient
-
-    from concord_label.api.app import create_app
-    from concord_label.core.settings import reset_settings
-
-    monkeypatch.setenv("FEATURE_IMPROVE", "1")
-    reset_settings()
-    with TestClient(create_app()) as c:
-        assert c.get("/api/config").json()["features"]["improve"] is True
-        assert c.get("/api/improve/status").json()["state"] == "on hold"
+def test_no_benchmark_or_improve_routes(client):
+    for path in ("/api/improve/status", "/api/benchmarks/asr", "/api/runs", "/api/errors/asr/utterances"):
+        assert client.get(path).status_code == 404, path
+    assert client.get("/api/jobs").status_code == 200
 
 
 def test_upload_inspect_create_ingest(client, data_dir):
@@ -92,7 +86,7 @@ def test_unsafe_upload_path_rejected(client):
 
 
 def test_local_path_ingest_and_validation(client, tmp_path):
-    from concord_label.acceptance import stage_fixture_dataset
+    from label_helpers import stage_fixture_dataset
 
     src = stage_fixture_dataset(tmp_path / "src", refs="rttm")
     assert client.post("/api/uploads/inspect-path", json={"path": "relative/path"}).status_code == 400

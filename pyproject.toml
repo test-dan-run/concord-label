@@ -23,9 +23,8 @@ dependencies = [
     "aicore[oip]",
 ]
 
-[project.optional-dependencies]
-# concord-full: Phase 3 (Improve). Training dependencies are added here when Phase 3 is scoped (Q5).
-full = []
+# Phase 3 (Improve, backend/concord_improve) is on hold: it is installed in no image. When it is scoped
+# (PLAN.md Q5), its training dependencies come back as an optional `full` extra for a concord-label-full image.
 
 [dependency-groups]
 dev = [
@@ -47,11 +46,9 @@ aicore = { path = "../../platform/clients/aicore", editable = true }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["backend", "tests"]
-addopts = "--import-mode=importlib -m 'not live and not perf and not offline'"
+addopts = "--import-mode=importlib -m 'not live'"
 markers = [
     "live: needs running platform services (run with `just test-live`)",
-    "perf: realistic-size performance check (run with `just test-perf`)",
-    "offline: air-gap test of an offline kit, needs Docker (run with `just test-offline`)",
 ]
 
 [tool.ruff]

@@ -7,8 +7,8 @@
 - Below MIN_RANK confirmed segments the standings say "too few to rank". 95% intervals are a
   percentile bootstrap over segments (corpus WER of each resample).
 - DER uses only fully reviewed files (every segment reviewed), so missing labels never count as misses.
-- The locked benchmark score is the model's latest score on a dataset promoted from this one, else on
-  this dataset itself.
+- The locked benchmark score comes from Concord Bench (SPLIT_PLAN.md §5.3). Until the link to Bench is
+  built (milestone S5) it is always None, and the page hides it.
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import adapters
-from ..core.models import AudioFile, Dataset, Model, ModelOutput, Run, RunTask, Score, Segment, SegmentStatus
+from ..core.models import AudioFile, Dataset, Model, ModelOutput, Segment, SegmentStatus
+from ..cuts import usable_files
 from ..metrics import der, normalisers
 from ..metrics.der import Turn
 from ..runs import cache
-from ..runs.executor import usable_files
 from . import fusion
 
 MIN_RANK = 30
@@ -56,17 +56,7 @@ def _outputs(session: Session, service: str, phash: str, shas: list[str]) -> dic
 
 
 def _locked(session: Session, ds: Dataset, model: Model, nkey: str) -> dict[str, Any] | None:
-    promoted = [d.id for d in session.scalars(select(Dataset)) if (d.report or {}).get("promoted_from") == ds.id]
-    for did in promoted[::-1] + [ds.id]:
-        run = session.scalar(select(Run).where(Run.task == RunTask.asr, Run.model_id == model.id, Run.dataset_id == did,
-                                               Run.status == "done").order_by(Run.id.desc()))
-        if run is None:
-            continue
-        sc = session.scalar(select(Score).where(Score.run_id == run.id, Score.normaliser == nkey)) or \
-            session.scalar(select(Score).where(Score.run_id == run.id).order_by(Score.id.desc()))
-        if sc is not None:
-            return {"wer": sc.aggregates.get("wer"), "dataset_id": did, "run_id": run.id, "normaliser": sc.normaliser,
-                    "promoted": did != ds.id}
+    """The model's locked benchmark score: asked of Concord Bench over HTTP once the apps are linked (S5)."""
     return None
 
 

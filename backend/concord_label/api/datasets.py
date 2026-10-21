@@ -110,13 +110,6 @@ def inspect_path(body: PathIn) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- datasets
 
-class PlanIn(BaseModel):
-    seg_model_ids: list[int] = Field(default_factory=list)
-    asr_model_ids: list[int] = Field(default_factory=list)
-    oracle: bool = False
-    mode: str = "grid"  # grid | stages
-
-
 class DatasetIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     language: str | None = None
@@ -124,7 +117,6 @@ class DatasetIn(BaseModel):
     tags: list[str] = Field(default_factory=list)
     upload_id: str | None = None
     local_path: str | None = None
-    plan: PlanIn | None = None
 
 
 def _clean_tags(tags: list[str]) -> list[str]:
@@ -175,8 +167,7 @@ def create_dataset(body: DatasetIn, session: Session = Depends(get_session)) -> 
     session.add(ds)
     session.flush()
     job = jobs.enqueue(session, "ingest", {"dataset_id": ds.id, "source": str(source),
-                                           "cleanup": bool(body.upload_id),
-                                           "plan": body.plan.model_dump() if body.plan else None})
+                                           "cleanup": bool(body.upload_id)})
     session.commit()
     return {"dataset": dataset_json(session, ds), "job": job_brief(job)}
 

@@ -1,6 +1,7 @@
-"""Server for the Playwright smoke tests: a fresh data dir populated by replaying the acceptance flow
-on recorded responses (plus a pseudo-labelled audio-only dataset for the Label screens), then the API +
-built frontend on --port. No GPU or platform needed.
+"""Server for the Playwright tests: a fresh data dir seeded through Label's own API on recorded responses
+(models registered from the registry, an annotated dataset, and an audio-only copy of the same audio
+pseudo-labelled by pyannote -> both Whispers), then the API + built frontend on --port. No GPU or
+platform needed.
 
     uv run python tests/e2e_server.py --port 8611
 """
@@ -23,21 +24,26 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8611)
     ap.add_argument("--host", default="127.0.0.1")
     args = ap.parse_args()
-    work = Path(tempfile.mkdtemp(prefix="concord-e2e-"))
+    work = Path(tempfile.mkdtemp(prefix="concord-label-e2e-"))
     rec = ROOT / "fixtures" / "recorded"
     os.environ.update({"CONCORD_DATA": str(work / "data"), "REPLAY_DIR": str(rec),
-                       "AICORE_ENDPOINTS": str(rec / "endpoints.generated.yaml"), "FEATURE_IMPROVE": "0"})
-    sys.path.insert(0, str(ROOT / "backend"))
+                       "AICORE_ENDPOINTS": str(rec / "endpoints.generated.yaml")})
+    sys.path[:0] = [str(ROOT / "backend"), str(ROOT / "tests")]
     import uvicorn
     from fastapi.testclient import TestClient
 
-    from concord_label.acceptance import run_flow, run_label_flow
     from concord_label.api.app import create_app
+    from label_helpers import label, seed
+
+    def log(m: str) -> None:
+        print(m, flush=True)
 
     app = create_app()
     with TestClient(app) as client:
-        flow = run_flow(client, work / "staging", log=lambda m: print(m, flush=True))
-        run_label_flow(client, work / "staging-label", flow, log=lambda m: print(m, flush=True))
+        flow = seed(client, work / "staging", log=log)
+        _, res = label(client, flow)
+        log(f"label dataset {flow['unlabelled']}: {res['summary']['segments']} segments, "
+            f"triage {res['summary']['triage']}")
     # Jobs started from the browser (e.g. re-fusing pseudo-labels) need a worker, as under `just dev`.
     from concord_label.runs import jobs
 

@@ -1,8 +1,8 @@
-"""initial schema
+"""Concord Label initial schema (SPLIT_PLAN.md §2.1, §8: Label starts with an empty database)
 
 Revision ID: 0001
-Revises: 
-Create Date: 2026-10-17 23:13:42.481971
+Revises:
+Create Date: 2026-10-21 20:39:33.700447
 """
 
 from collections.abc import Sequence
@@ -95,20 +95,26 @@ def upgrade() -> None:
     with op.batch_alter_table('audio_file', schema=None) as batch_op:
         batch_op.create_index('ix_audio_sha', ['sha256'], unique=False)
 
-    op.create_table('pipeline',
+    op.create_table('offline_export',
     sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('seg_model_id', sa.Integer(), nullable=True),
-    sa.Column('asr_model_id', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['asr_model_id'], ['model.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['seg_model_id'], ['model.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('seg_model_id', 'asr_model_id')
+    sa.Column('kind', sa.String(length=8), nullable=False),
+    sa.Column('services', sa.JSON(), nullable=False),
+    sa.Column('concord_image', sa.String(length=300), nullable=True),
+    sa.Column('dest', sa.String(length=1000), nullable=False),
+    sa.Column('name', sa.String(length=200), nullable=True),
+    sa.Column('status', sa.String(length=16), nullable=False),
+    sa.Column('path', sa.String(length=1000), nullable=True),
+    sa.Column('bytes', sa.Integer(), nullable=True),
+    sa.Column('error', sa.Text(), nullable=True),
+    sa.Column('job_id', sa.Integer(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('finished_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['job_id'], ['job.id'], ondelete='SET NULL'),
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_table('run',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('task', sa.String(length=16), nullable=False),
-    sa.Column('model_id', sa.Integer(), nullable=True),
-    sa.Column('pipeline_id', sa.Integer(), nullable=True),
     sa.Column('dataset_id', sa.Integer(), nullable=False),
     sa.Column('status', sa.String(length=16), nullable=False),
     sa.Column('error', sa.Text(), nullable=True),
@@ -120,8 +126,23 @@ def upgrade() -> None:
     sa.Column('started_at', sa.DateTime(), nullable=True),
     sa.Column('finished_at', sa.DateTime(), nullable=True),
     sa.ForeignKeyConstraint(['dataset_id'], ['dataset.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['model_id'], ['model.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['pipeline_id'], ['pipeline.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('sync_package',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('direction', sa.String(length=8), nullable=False),
+    sa.Column('dataset_id', sa.Integer(), nullable=True),
+    sa.Column('status', sa.String(length=16), nullable=False),
+    sa.Column('scope', sa.JSON(), nullable=False),
+    sa.Column('counts', sa.JSON(), nullable=False),
+    sa.Column('manifest', sa.JSON(), nullable=False),
+    sa.Column('conflicts', sa.JSON(), nullable=False),
+    sa.Column('path', sa.String(length=1000), nullable=True),
+    sa.Column('snapshot_path', sa.String(length=1000), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('applied_at', sa.DateTime(), nullable=True),
+    sa.Column('undone_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['dataset_id'], ['dataset.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('keyword_event',
@@ -137,19 +158,9 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['source_run_id'], ['run.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_table('score',
-    sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('run_id', sa.Integer(), nullable=False),
-    sa.Column('normaliser', sa.String(length=100), nullable=False),
-    sa.Column('collar', sa.Float(), nullable=False),
-    sa.Column('aggregates', sa.JSON(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), nullable=False),
-    sa.ForeignKeyConstraint(['run_id'], ['run.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('run_id', 'normaliser', 'collar')
-    )
     op.create_table('segment',
     sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('uid', sa.String(length=32), nullable=False),
     sa.Column('audio_file_id', sa.Integer(), nullable=False),
     sa.Column('start', sa.Float(), nullable=False),
     sa.Column('end', sa.Float(), nullable=False),
@@ -160,6 +171,8 @@ def upgrade() -> None:
     sa.Column('source_run_id', sa.Integer(), nullable=True),
     sa.Column('flagged', sa.Boolean(), nullable=False),
     sa.Column('flag_note', sa.Text(), nullable=True),
+    sa.Column('edited_at', sa.DateTime(), nullable=True),
+    sa.Column('meta', sa.JSON(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['audio_file_id'], ['audio_file.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['source_run_id'], ['run.id'], ondelete='SET NULL'),
@@ -167,47 +180,22 @@ def upgrade() -> None:
     )
     with op.batch_alter_table('segment', schema=None) as batch_op:
         batch_op.create_index('ix_segment_file', ['audio_file_id', 'start'], unique=False)
-
-    op.create_table('result',
-    sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('score_id', sa.Integer(), nullable=False),
-    sa.Column('audio_file_id', sa.Integer(), nullable=False),
-    sa.Column('utterance_key', sa.String(length=200), nullable=False),
-    sa.Column('segment_id', sa.Integer(), nullable=True),
-    sa.Column('start', sa.Float(), nullable=False),
-    sa.Column('end', sa.Float(), nullable=False),
-    sa.Column('speaker', sa.String(length=100), nullable=True),
-    sa.Column('ref_text', sa.Text(), nullable=True),
-    sa.Column('hyp_text', sa.Text(), nullable=True),
-    sa.Column('wer', sa.Float(), nullable=True),
-    sa.Column('errors', sa.Integer(), nullable=True),
-    sa.Column('metrics', sa.JSON(), nullable=False),
-    sa.Column('alignment', sa.JSON(), nullable=False),
-    sa.ForeignKeyConstraint(['audio_file_id'], ['audio_file.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['score_id'], ['score.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['segment_id'], ['segment.id'], ondelete='SET NULL'),
-    sa.PrimaryKeyConstraint('id')
-    )
-    with op.batch_alter_table('result', schema=None) as batch_op:
-        batch_op.create_index('ix_result_score', ['score_id'], unique=False)
+        batch_op.create_index('ix_segment_uid', ['uid'], unique=False)
 
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
-    with op.batch_alter_table('result', schema=None) as batch_op:
-        batch_op.drop_index('ix_result_score')
-
-    op.drop_table('result')
     with op.batch_alter_table('segment', schema=None) as batch_op:
+        batch_op.drop_index('ix_segment_uid')
         batch_op.drop_index('ix_segment_file')
 
     op.drop_table('segment')
-    op.drop_table('score')
     op.drop_table('keyword_event')
+    op.drop_table('sync_package')
     op.drop_table('run')
-    op.drop_table('pipeline')
+    op.drop_table('offline_export')
     with op.batch_alter_table('audio_file', schema=None) as batch_op:
         batch_op.drop_index('ix_audio_sha')
 

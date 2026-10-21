@@ -1,11 +1,14 @@
-"""SQLite schema (PLAN §4). Inference outputs (`model_output`) are kept apart from scores (`score`,
-`result`), so a new normaliser or collar rescores without re-running any model.
+"""Concord Label's SQLite schema (PLAN §4, SPLIT_PLAN.md §2.1).
 
-KWS hooks (Q6): `kws` is in every task enum and `keyword_event` exists, but nothing writes them yet.
+The tables Concord Bench also has (dataset, audio_file, segment, keyword_event, model, model_output, job,
+offline_export) started identical to Bench's and may change separately; only CONTRACTS.md must stay
+compatible. Label's own: `run` (label runs only) and `sync_package`.
 
-Phase 2 (Label) writes the same `segment` table: pseudo-labels carry `source_run_id` (a `label` run) and
-a status from confidence triage; a person's edits set `edited_at`. Improve can later read segments
-without Label importing it.
+Pseudo-labels carry `source_run_id` (a `label` run) and a status from confidence triage; a person's edits
+set `edited_at`. Improve can later read segments without Label importing it.
+
+KWS hooks (Q6): `kws` is in the label-type and capability enums and `keyword_event` exists, but nothing
+writes them yet.
 """
 
 from __future__ import annotations
@@ -51,11 +54,7 @@ class TimingLevel(enum.StrEnum):
 
 
 class RunTask(enum.StrEnum):
-    asr = "asr"
-    seg = "seg"
-    pipeline = "pipeline"
-    kws = "kws"
-    label = "label"  # Phase 2 ensemble pseudo-labelling
+    label = "label"  # ensemble pseudo-labelling; Concord Bench's asr / seg / pipeline runs live in Bench
 
 
 class FileStatus(enum.StrEnum):
@@ -200,45 +199,30 @@ class Model(Base):
         return Capability.diar in self.capabilities
 
 
-class Pipeline(Base):
-    __tablename__ = "pipeline"
-    __table_args__ = (UniqueConstraint("seg_model_id", "asr_model_id"),)
-    id: Mapped[int] = mapped_column(primary_key=True)
-    seg_model_id: Mapped[int | None] = mapped_column(ForeignKey("model.id", ondelete="CASCADE"))  # None = oracle
-    asr_model_id: Mapped[int] = mapped_column(ForeignKey("model.id", ondelete="CASCADE"))
-
-    seg_model: Mapped[Model | None] = relationship(foreign_keys=[seg_model_id])
-    asr_model: Mapped[Model] = relationship(foreign_keys=[asr_model_id])
-
-
 class Run(Base):
-    """One inference job: a model (asr / seg) or a pipeline on a dataset."""
+    """One label run (pseudo-labelling a dataset). The models it uses are named in `params`."""
 
     __tablename__ = "run"
     id: Mapped[int] = mapped_column(primary_key=True)
-    task: Mapped[str] = mapped_column(String(16))
-    model_id: Mapped[int | None] = mapped_column(ForeignKey("model.id", ondelete="CASCADE"))
-    pipeline_id: Mapped[int | None] = mapped_column(ForeignKey("pipeline.id", ondelete="CASCADE"))
+    task: Mapped[str] = mapped_column(String(16), default=RunTask.label)
     dataset_id: Mapped[int] = mapped_column(ForeignKey("dataset.id", ondelete="CASCADE"))
     status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | running | done | failed | blocked
     error: Mapped[str | None] = mapped_column(Text)
     image_tags: Mapped[dict[str, Any]] = mapped_column(default=dict)  # service -> {image, labels}
     params: Mapped[dict[str, Any]] = mapped_column(default=dict)
-    # Per-file inference outputs gathered by the run, consumed by scoring (keys are audio_file ids).
+    # Per-file cuts and the cache rows of each member, plus the run's summary (label/pseudo.py).
     outputs: Mapped[dict[str, Any]] = mapped_column(default=dict)
     rtf_by_stage: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
 
-    model: Mapped[Model | None] = relationship()
-    pipeline: Mapped[Pipeline | None] = relationship()
     dataset: Mapped[Dataset] = relationship()
 
 
 class ModelOutput(Base):
-    """The inference cache, keyed on (model, audio, span, params). Shared by runs, pipelines and
-    Phase 2 pseudo-labelling."""
+    """The inference cache, keyed on (model, audio, span, params). Label runs read and fill it, and live
+    evaluation reads it."""
 
     __tablename__ = "model_output"
     __table_args__ = (UniqueConstraint("model_name", "audio_sha256", "span_start", "span_end", "params_hash"),)
@@ -254,47 +238,10 @@ class ModelOutput(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
-class Score(Base):
-    __tablename__ = "score"
-    __table_args__ = (UniqueConstraint("run_id", "normaliser", "collar"),)
-    id: Mapped[int] = mapped_column(primary_key=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("run.id", ondelete="CASCADE"))
-    normaliser: Mapped[str] = mapped_column(String(100))  # id@version
-    collar: Mapped[float] = mapped_column(Float)
-    aggregates: Mapped[dict[str, Any]] = mapped_column(default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-    run: Mapped[Run] = relationship()
-
-
-class Result(Base):
-    """Per-utterance (ASR) or per-file (seg, pipeline) rows; every drill-down sorts and filters these."""
-
-    __tablename__ = "result"
-    __table_args__ = (Index("ix_result_score", "score_id"),)
-    id: Mapped[int] = mapped_column(primary_key=True)
-    score_id: Mapped[int] = mapped_column(ForeignKey("score.id", ondelete="CASCADE"))
-    audio_file_id: Mapped[int] = mapped_column(ForeignKey("audio_file.id", ondelete="CASCADE"))
-    utterance_key: Mapped[str] = mapped_column(String(200))
-    segment_id: Mapped[int | None] = mapped_column(ForeignKey("segment.id", ondelete="SET NULL"))
-    start: Mapped[float] = mapped_column(Float, default=0.0)
-    end: Mapped[float] = mapped_column(Float, default=0.0)
-    speaker: Mapped[str | None] = mapped_column(String(100))
-    ref_text: Mapped[str | None] = mapped_column(Text)
-    hyp_text: Mapped[str | None] = mapped_column(Text)
-    # Sort keys pulled out of `metrics` so SQL can order on them.
-    wer: Mapped[float | None] = mapped_column(Float)
-    errors: Mapped[int | None] = mapped_column(Integer)
-    metrics: Mapped[dict[str, Any]] = mapped_column(default=dict)
-    alignment: Mapped[dict[str, Any]] = mapped_column(default=dict)
-
-    audio_file: Mapped[AudioFile] = relationship()
-
-
 class Job(Base):
     __tablename__ = "job"
     id: Mapped[int] = mapped_column(primary_key=True)
-    type: Mapped[str] = mapped_column(String(32))  # ingest | check | run | score | label | export
+    type: Mapped[str] = mapped_column(String(32))  # ingest | check | label | export
     payload: Mapped[dict[str, Any]] = mapped_column(default=dict)
     status: Mapped[str] = mapped_column(String(16), default=JobStatus.queued)
     required_services: Mapped[list[str]] = mapped_column(default=list)

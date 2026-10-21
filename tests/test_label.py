@@ -1,29 +1,50 @@
-"""Phase 2 Label on recorded responses: pseudo-labelling an audio-only copy of the fixture set, the
-console, annotation edits, live evaluation and promotion (HTTP API, no GPU)."""
+"""Label on recorded responses: registering models, pseudo-labelling an audio-only copy of the fixture set,
+the console, annotation edits and live evaluation (HTTP API, no GPU)."""
 
 from __future__ import annotations
 
 import pytest
 from sqlalchemy import select
 
-from concord_label.core.models import Run, Score, Segment
-from label_helpers import _ok, label
+from concord_label.core.models import Segment
+from label_helpers import ASR_MODELS, SEG_MODELS, _ok, label
 
 
-def test_preview_reuses_pipeline_outputs(label_flow, client):
-    flow = label_flow
+def test_registration_needs_no_typed_fields(label_flow):
+    assert set(label_flow["models"]) == set(ASR_MODELS + SEG_MODELS)
+    caps = {n: (m["capabilities"], m["timing_level"]) for n, m in label_flow["models"].items()}
+    assert caps["faster-whisper-large-v3"] == (["asr"], "word")
+    assert caps["whisper-large-v3"] == (["asr"], "segment")
+    assert caps["silero-vad"] == (["vad"], "segment")
+    assert caps["pyannote-diarization"] == (["diar"], "segment")
+    assert caps["nemotron-3-diarization"] == (["diar"], "segment")
+
+
+def _preview(client, flow):
     ids = flow["ids"]
     asr = f"{ids['whisper-large-v3']},{ids['faster-whisper-large-v3']}"
-    pv = _ok(client.get(f"/api/label/datasets/{flow['unlabelled']}/preview?seg_model_id={ids['pyannote-diarization']}"
-                        f"&asr_model_ids={asr}"))
-    # the acceptance flow ran pyannote -> both ASR pipelines on the same audio: everything is saved
-    assert pv["seg"]["state"] == "saved" and pv["files"] == 6
+    return _ok(client.get(f"/api/label/datasets/{flow['unlabelled']}/preview?seg_model_id={ids['pyannote-diarization']}"
+                          f"&asr_model_ids={asr}"))
+
+
+def test_preview_counts_saved_outputs(label_flow, client):
+    pv = _preview(client, label_flow)
+    # nothing is in the cache yet: the segmenter and both members need inference
+    assert pv["seg"]["state"] == "new" and pv["files"] == 6
+    assert [m["state"] for m in pv["members"]] == ["new", "new"]
+    assert pv["saved_members"] == 0 and pv["new_members"] == 2
+    started, _ = label(client, label_flow)
+    assert started["job"]["required_services"] == sorted(["pyannote-diarization", *ASR_MODELS])
+    # the run saved every output it used, so the same choice again costs nothing
+    pv = _preview(client, label_flow)
+    assert pv["seg"]["state"] == "saved"
     assert [m["state"] for m in pv["members"]] == ["saved", "saved"]
     assert pv["saved_members"] == 2 and pv["new_members"] == 0
 
 
-def test_label_run_needs_no_services_when_saved(labelled):
-    assert labelled["started"]["job"]["required_services"] == []
+def test_refuse_needs_no_services(labelled, client):
+    started, _ = label(client, labelled, strategy="rover")
+    assert started["job"]["required_services"] == []
 
 
 def test_label_run_writes_triaged_segments(labelled, session):
@@ -107,11 +128,10 @@ def test_annotate_edits(labelled, client):
     assert not any(x["status"] == "auto" for x in v2["segments"])
 
 
-def test_live_eval_and_promote(labelled, client, session):
+def test_live_eval(labelled, client):
     ds = labelled["unlabelled"]
     lv = _ok(client.get(f"/api/label/datasets/{ds}/live"))
     assert lv["asr"]["confirmed"] == 0 and lv["asr"]["models"] == [] and lv["kws"] == {"available": False}
-    _ok(client.post(f"/api/label/datasets/{ds}/promote", json={"name": "x"}), 422)  # nothing confirmed yet
     # confirm every segment of every file
     for f in _ok(client.get(f"/api/label/datasets/{ds}/files")):
         ids = [x["id"] for x in _ok(client.get(f"/api/label/files/{f['id']}"))["segments"]]
@@ -134,20 +154,10 @@ def test_live_eval_and_promote(labelled, client, session):
     # the references are pyannote's own turns after cut merging, so it is best and nearly perfect
     assert lv["der"]["models"][0]["name"] == "pyannote-diarization" and lv["der"]["models"][0]["der"] < 0.1
     assert lv["feed"] and lv["feed"][0]["confirmed_at"]
-    new = _ok(client.post(f"/api/label/datasets/{ds}/promote", json={"name": "Promoted calls"}), 201)
-    assert new["label_types"] == ["asr", "diar"] and new["mode"] == "annotated" and new["files"] == 6
-    assert new["has_speaker_text"]
-    # the promoted dataset's benchmark score becomes the locked benchmark. (Benchmarking it needs new
-    # inference: references are the unpadded turns, which have no recorded responses, so seed the score.)
-    asr_id = labelled["ids"]["faster-whisper-large-v3"]
-    run = Run(task="asr", model_id=asr_id, dataset_id=new["id"], status="done")
-    session.add(run)
-    session.flush()
-    session.add(Score(run_id=run.id, normaliser="basic@1", collar=0.0, aggregates={"wer": 0.123}))
-    session.commit()
-    lv = _ok(client.get(f"/api/label/datasets/{ds}/live"))
-    fw = next(m for m in lv["asr"]["models"] if m["model_id"] == asr_id)
-    assert fw["locked"]["promoted"] and fw["locked"]["dataset_id"] == new["id"] and fw["locked"]["wer"] == 0.123
+    # the locked benchmark score comes from Concord Bench once the apps are linked (S5); until then none
+    assert all(m["locked"] is None for m in a["models"])
+    # Promote is gone: Send to Bench replaces it (S4)
+    assert client.post(f"/api/label/datasets/{ds}/promote", json={"name": "x"}).status_code in (404, 405)
 
 
 def test_label_run_validation(label_flow, client):

@@ -1,5 +1,8 @@
-"""`python -m concord_label.cli <command>`: migrate, revision, record, and the offline kit commands
-export-offline, verify-kit and add-kit (OFFLINE_EXPORT_PLAN.md)."""
+"""`python -m concord_label.cli <command>`: migrate, revision, and the offline kit commands
+export-offline, verify-kit and add-kit (OFFLINE_EXPORT_PLAN.md).
+
+Recording model responses (`record`) is Concord Bench's: Bench re-records `fixtures/recorded` and Label
+copies it (README.md)."""
 
 from __future__ import annotations
 
@@ -13,17 +16,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("migrate", help="create data folders and bring the database to the latest schema")
     rv = sub.add_parser("revision", help="autogenerate an Alembic revision from model changes")
     rv.add_argument("message")
-    rec = sub.add_parser("record", help="re-record adapter responses on the fixture set against live services")
-    rec.add_argument("--out", default="fixtures/recorded")
-    rec.add_argument("--services", nargs="*", default=None, help="limit to these benchmark models")
-    rec.add_argument("--extra-checks", nargs="*", default=None, help="also record compatibility checks of these")
     ex = sub.add_parser("export-offline", help="write an offline kit of these platform services into a folder")
     ex.add_argument("names", nargs="+", help="platform service names or aliases")
     ex.add_argument("--kind", choices=["full", "models"], default="full",
-                    help="full: Concord + platform + models (sets up a machine); models: models only (default full)")
+                    help="full: Concord Label + platform + models (sets up a machine); models: models only (default full)")
     ex.add_argument("--out", help="folder the kit is written into (default: CONCORD_DATA/offline)")
     ex.add_argument("--name", help="kit name (default: from the services)")
-    ex.add_argument("--concord-image", help="Concord image for a full kit (default: CONCORD_IMAGE, concord-lite)")
+    ex.add_argument("--concord-image", help="Concord image for a full kit (default: CONCORD_IMAGE, concord-label:0.2.0)")
     vk = sub.add_parser("verify-kit", help="check an offline kit's files against its manifest.json")
     vk.add_argument("kit")
     ak = sub.add_parser("add-kit", help="merge a model kit into an offline install (run by install.sh --add)")
@@ -46,10 +45,6 @@ def main(argv: list[str] | None = None) -> int:
 
         db.migrate()
         command.revision(db.alembic_config(), message=args.message, autogenerate=True)
-    elif args.cmd == "record":
-        from .recording import record
-
-        return record(args.out, args.services, args.extra_checks)
     return 0
 
 

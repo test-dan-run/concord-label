@@ -3,8 +3,6 @@
 Job types:
 - ingest  {dataset_id, source, cleanup}         copy, decode, derive, parse references
 - check   {service}                             compatibility check on the check clip
-- run     {run_id, normalisers?}                inference, then scoring with the default normaliser / collar
-- score   {run_id, normaliser, collar}          rescoring that needs a platform service (text.transform)
 - label   {run_id}                              ensemble pseudo-labelling (Phase 2), writes segments
 - export  {export_id, services, kind, dest, ...}  an offline kit (OFFLINE_EXPORT_PLAN.md); needs no service
 
@@ -30,7 +28,6 @@ from ..core import paths
 from ..core.db import SessionLocal
 from ..core.models import Dataset, Job, JobStatus, Model, OfflineExport, Run, utcnow
 from ..platform import services
-from . import executor, scoring
 
 
 class JobContext:
@@ -141,11 +138,6 @@ def _handle_ingest(session: Session, job: Job, ctx: JobContext) -> dict[str, Any
     if p.get("cleanup") and source.is_relative_to(paths.data_root() / "uploads"):
         shutil.rmtree(source, ignore_errors=True)
     ctx.log(f"ingested {report['files']} files ({report['hours'] * 60:.1f} min), {report['usable_files']} usable")
-    if p.get("plan"):
-        from ..api.benchmarks import enqueue_plan
-
-        jobs = enqueue_plan(session, p["dataset_id"], p["plan"])
-        ctx.log(f"benchmark plan: queued {len(jobs)} run(s)")
     return {"dataset_id": p["dataset_id"]}
 
 
@@ -161,33 +153,6 @@ def _handle_check(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]
     if m is not None and job.payload.get("update_model"):
         m.check_report, m.capabilities, m.timing_level = report, rep.capabilities, rep.timing_level
     return {"report": report}
-
-
-def _handle_run(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
-    run = session.get(Run, job.payload["run_id"])
-    if run is None:
-        raise ValueError(f"run {job.payload['run_id']} not found")
-    try:
-        executor.execute(session, run, ctx.log, lambda p, m: ctx.progress(0.9 * p, m))
-        run.status = "done"
-        session.commit()
-    except Exception as exc:
-        session.rollback()
-        run = session.get(Run, job.payload["run_id"])
-        run.status, run.error = "failed", str(exc)[:2000]
-        session.commit()
-        raise
-    ctx.progress(0.92, "scoring")
-    score_ids = []
-    for n in job.payload.get("normalisers") or [None]:
-        try:
-            sc = scoring.score_run(session, run, n, job.payload.get("collar"))
-            score_ids.append(sc.id)
-            session.commit()
-        except Exception as exc:  # noqa: BLE001 - keep the inference even if one normaliser fails
-            session.rollback()
-            ctx.log(f"scoring with {n or 'default'} failed: {exc}")
-    return {"run_id": run.id, "score_ids": score_ids}
 
 
 def _handle_label(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
@@ -207,13 +172,6 @@ def _handle_label(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]
         session.commit()
         raise
     return {"run_id": run.id, "summary": {k: v for k, v in run.outputs["summary"].items() if k != "agreement"}}
-
-
-def _handle_score(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
-    run = session.get(Run, job.payload["run_id"])
-    sc = scoring.score_run(session, run, job.payload.get("normaliser"), job.payload.get("collar"))
-    session.commit()
-    return {"run_id": run.id, "score_id": sc.id}
 
 
 def _handle_export(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
@@ -239,9 +197,8 @@ def _handle_export(session: Session, job: Job, ctx: JobContext) -> dict[str, Any
     return {"export_id": rec.id, "path": out["path"], "bytes": out["bytes"]}
 
 
-HANDLERS = {"ingest": _handle_ingest, "check": _handle_check, "run": _handle_run, "score": _handle_score,
-            "label": _handle_label, "export": _handle_export}
-RUN_JOBS = ("run", "label")  # job types whose payload names a `run` that mirrors the job's state
+HANDLERS = {"ingest": _handle_ingest, "check": _handle_check, "label": _handle_label, "export": _handle_export}
+RUN_JOBS = ("label",)  # job types whose payload names a `run` that mirrors the job's state
 
 
 def run_job(job_id: int, batch: list[str] | None = None) -> None:

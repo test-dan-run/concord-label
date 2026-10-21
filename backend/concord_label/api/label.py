@@ -1,4 +1,4 @@
-"""Label (Phase 2): review console, ensemble pseudo-labelling, annotation, live evaluation, promotion."""
+"""Label (Phase 2): review console, ensemble pseudo-labelling, annotation, live evaluation."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from sqlalchemy.orm import Session
 
 from ..core.db import get_session
 from ..core.models import AudioFile, Job, Model, Run, RunTask, Segment, SegmentStatus
-from ..label import console, edit, fusion, live, promote, pseudo
+from ..label import console, edit, fusion, live, pseudo
 from ..runs import jobs
-from .datasets import _clean_tags, dataset_json, get_dataset, job_brief
-from .runs import ACTIVE, run_json
+from .datasets import dataset_json, get_dataset, job_brief
+from .jobs import ACTIVE, run_json
 
 router = APIRouter(prefix="/label", tags=["label"])
 
@@ -254,7 +254,7 @@ def confirm_auto(file_id: int, session: Session = Depends(get_session)) -> dict[
     return {"confirmed": _commit_or_400(session, lambda: edit.confirm_auto(session, f))}
 
 
-# ---------------------------------------------------------------- live evaluation, promotion
+# ---------------------------------------------------------------- live evaluation
 
 @router.get("/datasets/{dataset_id}/live")
 def live_eval(dataset_id: int, normaliser: str | None = None, collar: float | None = None,
@@ -264,22 +264,3 @@ def live_eval(dataset_id: int, normaliser: str | None = None, collar: float | No
         return live.live(session, ds, normaliser, collar)
     except KeyError as exc:
         raise HTTPException(400, str(exc)) from None
-
-
-class PromoteIn(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
-    scope: str = "complete"
-    tags: list[str] | None = None
-
-
-@router.post("/datasets/{dataset_id}/promote", status_code=201)
-def promote_dataset(dataset_id: int, body: PromoteIn, session: Session = Depends(get_session)) -> dict[str, Any]:
-    ds = get_dataset(session, dataset_id)
-    try:
-        new = promote.promote(session, ds, body.name, body.scope,
-                              _clean_tags(body.tags) if body.tags is not None else None)
-    except promote.PromoteError as exc:
-        session.rollback()
-        raise HTTPException(422, str(exc)) from None
-    session.commit()
-    return dataset_json(session, new)

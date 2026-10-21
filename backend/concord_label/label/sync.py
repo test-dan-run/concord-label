@@ -50,6 +50,7 @@ from ..core.models import (
     SyncPackage,
     utcnow,
 )
+from ..core.settings import VERSION as APP_VERSION
 from ..core.settings import get_settings
 
 FORMAT = "concord-label-package"
@@ -172,7 +173,7 @@ def export(session: Session, ds: Dataset, mode: str = "changed", file_ids: list[
         counts = {"files": len(files), "segments": len(rows), "by_status": by_status,
                   "reviewed": sum(1 for r in rows if r["reviewed"]), "model_outputs": n_outputs, "audio_files": n_audio}
         manifest = {"format": FORMAT, "version": VERSION, "created_at": utcnow().isoformat(),
-                    "concord_version": "0.1.0", "install_id": install_id(),
+                    "concord_version": APP_VERSION, "install_id": install_id(),
                     "dataset": {"name": ds.name, "language": ds.language, "tags": ds.tags,
                                 "description": ds.description, "label_types": ds.label_types, "mode": ds.mode},
                     "scope": {"mode": mode, "since": _iso(since), "file_ids": file_ids if mode == "files" else None},

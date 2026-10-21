@@ -4,7 +4,7 @@
 #   ./install.sh [--internal] [--skip-verify]
 #       Full kit: this folder becomes the install. Loads the images, writes platform/.env and
 #       concord/.env, creates the platform's Docker network (--internal: no outside access) and
-#       starts Concord. CONCORD_PORT (8600) and CONCORD_PROJECT (concord) can be set in the environment.
+#       starts Concord. CONCORD_PORT (8610) and CONCORD_PROJECT (concord) can be set in the environment.
 #   ./install.sh --add INSTALL [--replace] [--skip-verify]
 #       Model kit: merges these models into INSTALL, the folder a full kit was installed from.
 #       A service INSTALL already has with a different image is refused unless --replace is given.
@@ -70,7 +70,7 @@ install_full() {
   [ "$KIT_KIND" = full ] || die "$KIT_NAME is a model kit: run ./install.sh --add /path/to/install"
   local net port project
   net="$(config_value "$KIT/platform/config.yaml" network)"
-  port="${CONCORD_PORT:-8600}"
+  port="${CONCORD_PORT:-8610}"
   project="${CONCORD_PROJECT:-concord}"
   if [ -f "$KIT/concord/.env" ]; then
     say "already installed here: skipping checksums and docker load"

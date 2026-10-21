@@ -186,7 +186,6 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.38" },
     { name = "whisper-normalizer", specifier = ">=0.1.12" },
 ]
-provides-extras = ["full"]
 
 [package.metadata.requires-dev]
 dev = [
