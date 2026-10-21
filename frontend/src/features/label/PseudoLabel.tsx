@@ -205,7 +205,7 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
                 </label>
                 <span className="text-xs text-muted">below: rejected</span>
               </span>
-              <span className="text-xs text-muted">Auto-accepted labels can feed training later, but never become a benchmark reference unless you confirm them.</span>
+              <span className="text-xs text-muted">Auto-accepted labels never become references unless you confirm them.</span>
             </fieldset>
           )}
           {problems.length > 0 && <ul className="m-0 pl-4 text-xs text-warn">{problems.map((p) => <li key={p}>{p}</li>)}</ul>}

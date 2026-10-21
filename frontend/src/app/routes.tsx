@@ -1,12 +1,5 @@
-import { lazy, Suspense } from "react";
 import { createBrowserRouter, Navigate, Outlet, useRouteError } from "react-router-dom";
 import { Nav } from "./Nav";
-import { Spinner } from "../components/ui";
-import { BenchmarksPage } from "../features/benchmarks/BenchmarksPage";
-import { AsrErrors } from "../features/errors/AsrErrors";
-import { DiarErrors } from "../features/errors/DiarErrors";
-import { ErrorsIndex } from "../features/errors/ErrorsIndex";
-import { PipelineErrors } from "../features/errors/PipelineErrors";
 import { DatasetDetail } from "../features/datasets/DatasetDetail";
 import { DatasetsPage } from "../features/datasets/DatasetsPage";
 import { UploadDataset } from "../features/datasets/UploadDataset";
@@ -20,10 +13,8 @@ import { PseudoLabelPage } from "../features/label/PseudoLabel";
 import { ReviewConsole } from "../features/label/ReviewConsole";
 import { SyncPage } from "../features/label/SyncPage";
 import { ExportOffline } from "../features/offline/ExportOffline";
-import { useFeature } from "../lib/config";
 
-// Improve (Phase 3) is a separate chunk; a lite build (VITE_FEATURE_IMPROVE=0) never references it.
-const TrainingPage = __FEATURE_IMPROVE__ ? lazy(() => import("../features/improve/TrainingPage")) : null;
+// Improve (Phase 3) is on hold and in no image, so there is no Training route (SPLIT_PLAN.md §3.2).
 
 function Layout() {
   return (
@@ -46,29 +37,13 @@ function RouteError() {
   );
 }
 
-function Training() {
-  const on = useFeature("improve");
-  if (!on || !TrainingPage) return <Navigate to="/benchmarks" replace />;
-  return (
-    <Suspense fallback={<Spinner />}>
-      <TrainingPage />
-    </Suspense>
-  );
-}
-
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <Layout />,
     errorElement: <RouteError />,
     children: [
-      { index: true, element: <Navigate to="/benchmarks" replace /> },
-      { path: "benchmarks", element: <BenchmarksPage /> },
-      { path: "benchmarks/:tab", element: <BenchmarksPage /> },
-      { path: "errors", element: <ErrorsIndex /> },
-      { path: "errors/asr/:runId", element: <AsrErrors /> },
-      { path: "errors/diar/:runId", element: <DiarErrors /> },
-      { path: "errors/pipeline/:runId", element: <PipelineErrors /> },
+      { index: true, element: <Navigate to="/label" replace /> },
       { path: "label", element: <ReviewConsole /> },
       { path: "label/pseudo", element: <PseudoLabelPage /> },
       { path: "label/pseudo/:datasetId", element: <PseudoLabelPage /> },
@@ -86,8 +61,7 @@ export const router = createBrowserRouter([
       { path: "contract", element: <ContractPage /> },
       { path: "offline", element: <ExportOffline /> },
       { path: "jobs", element: <JobsPage /> },
-      { path: "training", element: <Training /> },
-      { path: "*", element: <Navigate to="/benchmarks" replace /> },
+      { path: "*", element: <Navigate to="/label" replace /> },
     ],
   },
 ]);

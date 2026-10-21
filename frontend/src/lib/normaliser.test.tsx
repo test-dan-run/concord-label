@@ -22,29 +22,29 @@ describe("useNormaliser", () => {
   beforeEach(() => resetNormaliserChoice());
 
   it("defaults to the server default", () => {
-    const { result } = renderHook(() => useNormaliser(), { wrapper: wrapper("/benchmarks/asr") });
+    const { result } = renderHook(() => useNormaliser(), { wrapper: wrapper("/label/live/1") });
     expect(result.current[0]).toBe("basic");
   });
 
   it("a choice made on one page holds on another page without a query string", () => {
-    const a = renderHook(() => useNormaliser(), { wrapper: wrapper("/benchmarks/asr") });
+    const a = renderHook(() => useNormaliser(), { wrapper: wrapper("/label/live/1") });
     act(() => a.result.current[1]("whisper_en"));
     expect(a.result.current[0]).toBe("whisper_en");
-    const b = renderHook(() => useNormaliser(), { wrapper: wrapper("/errors/asr/3") });
+    const b = renderHook(() => useNormaliser(), { wrapper: wrapper("/label/live/2") });
     expect(b.result.current[0]).toBe("whisper_en");
   });
 
   it("the URL wins, versioned keys included, and becomes the choice", () => {
-    const a = renderHook(() => useNormaliser(), { wrapper: wrapper("/errors/asr/3?normaliser=none@1") });
+    const a = renderHook(() => useNormaliser(), { wrapper: wrapper("/label/live/2?normaliser=none@1") });
     expect(a.result.current[0]).toBe("none");
-    const b = renderHook(() => useNormaliser(), { wrapper: wrapper("/benchmarks/asr") });
+    const b = renderHook(() => useNormaliser(), { wrapper: wrapper("/label/live/1") });
     expect(b.result.current[0]).toBe("none");
   });
 
   it("a remembered normaliser the server no longer offers falls back to the default", () => {
-    const a = renderHook(() => useNormaliser(), { wrapper: wrapper("/benchmarks/asr") });
+    const a = renderHook(() => useNormaliser(), { wrapper: wrapper("/label/live/1") });
     act(() => a.result.current[1]("platform:gone"));
-    const b = renderHook(() => useNormaliser(), { wrapper: wrapper("/errors/asr/3") });
+    const b = renderHook(() => useNormaliser(), { wrapper: wrapper("/label/live/2") });
     expect(b.result.current[0]).toBe("basic");
   });
 });

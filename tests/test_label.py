@@ -47,8 +47,10 @@ def test_refuse_needs_no_services(labelled, client):
     assert started["job"]["required_services"] == []
 
 
-def test_label_run_writes_triaged_segments(labelled, session):
+def test_label_run_writes_triaged_segments(labelled, client, session):
     res = labelled["results"]
+    runs = _ok(client.get(f"/api/label/datasets/{labelled['unlabelled']}/runs"))
+    assert [r["id"] for r in runs] == [res["run"]["id"]] and runs[0]["status"] == "done"
     s = res["summary"]
     assert s["segments"] > 0 and s["files"] == 6 and s["kept_reviewed"] == 0
     assert sum(s["triage"].values()) == s["segments"]

@@ -1,5 +1,5 @@
 // Thin fetch wrapper + the response shapes the pages use. The backend is the source of truth for
-// field names (backend/concord/api/*.py).
+// field names (backend/concord_label/api/*.py).
 
 export class ApiError extends Error {
   constructor(
@@ -50,19 +50,12 @@ export function qs(params: Record<string, string | number | boolean | null | und
 
 // ---------------------------------------------------------------- shapes
 
-export interface TaskDef {
-  id: string;
-  label: string;
-  label_type: string;
-  metric: string;
-  enabled: boolean;
-}
-
+/** GET /api/config (CONTRACTS.md §1). `peer` is Concord Bench; it is filled in once the apps are linked (S5). */
 export interface AppConfig {
+  app: "concord-label";
   version: string;
-  features: { improve: boolean };
-  variant: "lite" | "full";
-  tasks: TaskDef[];
+  contract_version: number;
+  peer: { url: string | null; reachable: boolean; contract_version: number | null };
   default_normaliser: string;
   default_collar: number;
   collars: number[];
@@ -210,107 +203,11 @@ export interface Normaliser {
   service: string | null;
 }
 
-export interface Breakdown {
-  parts: { key: string; label: string; count?: number; seconds?: number; pct: number | null }[];
-  facts: Record<string, number | null>;
-}
-
-export interface BenchCell {
-  model_id: number;
-  dataset_id: number;
-  status: string | null;
-  run_id: number | null;
-  value: number | null;
-  prev: number | null;
-  delta: number | null;
-  metric?: string;
-  score_id?: number;
-  breakdown?: Breakdown;
-  rtf?: number | null;
-  finished_at?: string | null;
-  image?: string | null;
-  error?: string | null;
-  rerunning?: boolean;
-  pending_score_job?: number;
-}
-
-export interface BenchDataset {
-  id: number;
-  name: string;
-  tags: string[];
-  label_types: string[];
-  hours: number | null;
-  files: number | null;
-  has_labels: boolean;
-  status: string;
-  has_speaker_text: boolean;
-  language: string | null;
-}
-
-export interface BenchTable {
-  tab: string;
-  normaliser: string;
-  collar: number;
-  datasets: BenchDataset[];
-  models: { id: number; display_name: string; registry_name: string; tags: string[]; capabilities: string[]; timing_level: string | null; kind: string }[];
-  cells: BenchCell[];
-  recent_runs: { id: number; label: string; dataset: string; status: string; finished_at: string | null }[];
-}
-
-export interface Attribution {
-  n: number;
-  a_errors: number;
-  b_errors: number;
-  c_errors: number;
-  asr: number | null;
-  segmentation: number | null;
-  speaker: number | null;
-  cpwer: number | null;
-  with_reference_segments: number | null;
-  asr_errors: number;
-  segmentation_errors: number;
-  speaker_errors: number;
-}
-
-export interface PipeCell {
-  seg_model_id: number | null;
-  asr_model_id: number;
-  pipeline_id: number | null;
-  status: string | null;
-  run_id: number | null;
-  has_speakers: boolean;
-  oracle: boolean;
-  score_id?: number;
-  wer?: number | null;
-  cpwer?: number | null;
-  der?: number | null;
-  rtf?: number | null;
-  rtf_by_stage?: Record<string, number | null>;
-  attribution?: Attribution | null;
-  wrong_speaker_pairs?: { word: string; move: string; n: number }[];
-  label?: string;
-  prev_cpwer?: number;
-  error?: string | null;
-}
-
-export interface PipeGrid {
-  normaliser: string;
-  collar: number;
-  dataset_id: number | null;
-  dataset?: BenchDataset;
-  datasets: BenchDataset[];
-  rows: { seg_model_id: number | null; name: string; oracle: boolean; has_speakers: boolean; available: boolean }[];
-  cols: { asr_model_id: number; name: string; timing_level: string | null }[];
-  cells: PipeCell[];
-  runs: PipeCell[];
-}
-
+/** A label run (pseudo-labelling a dataset); the models it used are in `params`. */
 export interface Run {
   id: number;
   task: string;
   label: string;
-  model_id: number | null;
-  pipeline_id: number | null;
   dataset_id: number;
   dataset: string;
   status: string;
@@ -321,56 +218,7 @@ export interface Run {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
-  seg_model_id?: number | null;
-  asr_model_id?: number;
 }
-
-export interface AlignOp {
-  op: "eq" | "sub" | "del" | "ins";
-  ref: string | null;
-  hyp: string | null;
-  ri: number | null;
-  hi: number | null;
-  t0?: number;
-  t1?: number;
-}
-
-export interface Utterance {
-  id: number;
-  key: string;
-  file_id: number;
-  segment_id: number | null;
-  start: number;
-  end: number;
-  duration: number;
-  speaker: string | null;
-  ref: string;
-  hyp: string;
-  ops: AlignOp[];
-  n: number;
-  s: number;
-  d: number;
-  i: number;
-  errors: number;
-  wer: number | null;
-  cer: number | null;
-  flagged: boolean | null;
-}
-
-export interface UtteranceDetail extends Utterance {
-  timed: boolean;
-  segments: { start: number; end: number; text: string }[] | null;
-  flag_note: string | null;
-  others: { run_id: number; model: string; hyp: string; wer: number | null; ops: AlignOp[] }[];
-}
-
-export interface Page<T> {
-  total: number;
-  offset: number;
-  rows: T[];
-}
-
-export type Lane = [number, number, string, string?];
 
 export interface ErrorRegion {
   type: "missed" | "false_alarm" | "confusion";
@@ -521,7 +369,8 @@ export interface LiveModel {
   wer: number | null;
   ci: [number, number] | null;
   curve: { confirmed: number; wer: number | null }[];
-  locked: { wer: number | null; dataset_id: number; run_id: number; normaliser: string; promoted: boolean } | null;
+  /** The model's locked benchmark score from Concord Bench; always null until the apps are linked (S5). */
+  locked: { wer: number | null; run_id: number; normaliser: string } | null;
   rank: number | null;
 }
 

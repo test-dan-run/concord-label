@@ -22,18 +22,6 @@ export const C = {
 export const SPEAKERS = ["#14B8A6", "#F97316", "#A855F7", "#FACC15", "#38BDF8", "#EC4899", "#84CC16", "#8B5CF6"];
 
 export const ERROR_COLORS: Record<string, string> = { missed: C.bad, false_alarm: C.warn, confusion: C.confusion };
-export const ERROR_LABELS: Record<string, string> = {
-  missed: "Missed speech",
-  false_alarm: "False alarm",
-  confusion: "Speaker confusion",
-};
-
-export const STAGE_COLORS: Record<string, string> = { asr: "#38BDF8", segmentation: "#10B981", speaker: "#A855F7" };
-export const STAGE_LABELS: Record<string, string> = {
-  asr: "ASR",
-  segmentation: "Segmentation",
-  speaker: "Speaker attribution",
-};
 
 /** Model series on charts (live evaluation), in fixed order. Validated for the dark panel surface
  * (lightness band, chroma, CVD and contrast; dataviz validate_palette.js). Never cycled: a fifth

@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { api, type Job } from "../lib/api";
-import { IfFeature, useConfig } from "../lib/config";
 import * as I from "../components/icons";
 import { cx } from "../components/ui";
 
@@ -64,7 +63,6 @@ function Jobs() {
 }
 
 export function Nav() {
-  const { data: cfg } = useConfig();
   const [open, setOpen] = useState(false);
   const loc = useLocation();
   useEffect(() => setOpen(false), [loc.pathname]);
@@ -77,8 +75,8 @@ export function Nav() {
           <I.Logo size={22} />
         </span>
         <div className="flex flex-col">
-          <span className="font-semibold text-[15px] tracking-tight">Concord</span>
-          <span className="text-[11px] text-muted">Speech evaluation + labelling{cfg?.variant === "full" ? " · full" : ""}</span>
+          <span className="font-semibold text-[15px] tracking-tight">Concord Label</span>
+          <span className="text-[11px] text-muted">Pseudo-labelling + review</span>
         </div>
         <button
           type="button"
@@ -91,29 +89,21 @@ export function Nav() {
         </button>
       </div>
       <div id="nav-groups" className={cx("flex-col gap-6 flex-1", open ? "flex" : "hidden lg:flex")}>
-      <Group title="Evaluate">
-        <Item to="/benchmarks" icon={<I.Chart />}>Benchmarks</Item>
-        <Item to="/errors" icon={<I.Bug />}>Error analysis</Item>
-      </Group>
       <Group title="Label">
-        <Item to="/label" icon={<I.List />}>Review console</Item>
+        <Item to="/label" icon={<I.Chart />}>Console</Item>
         <Item to="/label/pseudo" icon={<I.Wand />} prefix>Pseudo-label</Item>
         <Item to="/label/annotate" icon={<I.Pen />} prefix>Annotate</Item>
         <Item to="/label/live" icon={<I.Pulse />} prefix>Live evaluation</Item>
-        <Item to="/label/sync" icon={<I.Refresh />}>Import / export</Item>
       </Group>
-      <IfFeature name="improve">
-        <Group title="Improve">
-          <Item to="/training" icon={<I.Flask />}>Training</Item>
-        </Group>
-      </IfFeature>
-      <Group title="Bring your own">
-        <Item to="/datasets/upload" icon={<I.Upload />}>Upload dataset</Item>
-        <Item to="/datasets" icon={<I.Database />}>Datasets</Item>
-        <Item to="/models/add" icon={<I.Plus />}>Add model</Item>
-        <Item to="/models" icon={<I.Cpu />}>Models</Item>
-        <Item to="/contract" icon={<I.Doc />}>Model contract</Item>
-        <Item to="/offline" icon={<I.Download />}>Export for offline</Item>
+      <Group title="Data">
+        <Item to="/datasets" icon={<I.Database />} prefix>Datasets</Item>
+        <Item to="/label/sync" icon={<I.Refresh />}>Sync</Item>
+      </Group>
+      {/* Improve (Phase 3) is on hold and in no image: no Training group (SPLIT_PLAN.md §3.2). */}
+      <Group title="Setup">
+        <Item to="/models" icon={<I.Cpu />} prefix>Models</Item>
+        <Item to="/jobs" icon={<I.List />}>Jobs</Item>
+        <Item to="/offline" icon={<I.Download />}>Offline export</Item>
       </Group>
       <Jobs />
       </div>

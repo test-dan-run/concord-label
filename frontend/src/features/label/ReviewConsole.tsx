@@ -48,7 +48,7 @@ export function ReviewConsole() {
       <PageHeader
         crumbs="Label"
         title="Review console"
-        subtitle="Labelling progress per dataset, in audio time. Auto-accepted labels never become benchmark references until you confirm them."
+        subtitle="Labelling progress per dataset, in audio time. Auto-accepted labels never become references until you confirm them."
         actions={
           <>
             <LinkButton to="/label/sync">

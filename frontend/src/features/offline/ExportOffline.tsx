@@ -12,7 +12,7 @@ const KINDS = [
   { value: "models", label: "Model kit" },
 ];
 const KIND_NOTE: Record<string, string> = {
-  full: "Concord image, platform and the chosen models. Used once, to set up the offline machine.",
+  full: "Concord Label image, platform and the chosen models. Used once, to set up the offline machine.",
   models: "The chosen models only. Added with install.sh --add to an offline machine that already has a full kit.",
 };
 
@@ -77,7 +77,7 @@ export function ExportOffline() {
       <PageHeader
         crumbs="Bring your own"
         title="Export for offline"
-        subtitle="Write a kit for a machine without internet access: the models' images and weights, the platform files that start them, and for a full kit Concord itself. Registrations, scores and datasets stay here; labels come back as label packages."
+        subtitle="Write a kit for a machine without internet access: the models' images and weights, the platform files that start them, and for a full kit Concord Label itself. Registrations, scores and datasets stay here; labels come back as label packages."
       />
       <div className="flex flex-col xl:flex-row gap-5 items-start">
         <Panel className="flex-1 w-full" title="Platform registry" subtitle="Every service in the platform, registered in Concord or not. Nothing is added automatically, not even the other half of a pipeline.">

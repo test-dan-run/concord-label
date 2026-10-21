@@ -8,7 +8,6 @@ import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-r
 import { api, type AnnotateView, type LabelFile, type SegStatus, type Segment } from "../../lib/api";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { IfFeature } from "../../lib/config";
 import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, selectRange, STATUS_LABELS } from "../../lib/label";
 import { AudioPlayer, PlayFrom, useAudio } from "../../components/AudioPlayer";
 import { Timeline, type LaneGroup } from "../../components/Timeline";
@@ -546,11 +545,6 @@ function SidePanel({ s, ctl, onUse, onFlag, onSplit, onDelete, onLive }: { s: Se
       </span>
       <div className="flex flex-wrap gap-2 pt-2 border-t border-track">
         <Button size="sm" variant="ghost" onClick={onLive}><I.Pulse size={12} /> Live evaluation</Button>
-        <IfFeature name="improve">
-          <Button size="sm" disabled title="Training (Phase 3) is not scoped yet">
-            <I.Flask size={12} /> Use for retraining
-          </Button>
-        </IfFeature>
       </div>
     </Panel>
   );

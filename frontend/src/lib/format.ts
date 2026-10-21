@@ -20,11 +20,6 @@ export function num(v: number | null | undefined, digits = 0): string {
   return v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
-export function secs(v: number | null | undefined, digits = 1): string {
-  if (v === null || v === undefined) return DASH;
-  return `${v.toFixed(digits)} s`;
-}
-
 /** mm:ss.mmm */
 export function clock(t: number | null | undefined, ms = true): string {
   if (t === null || t === undefined || Number.isNaN(t)) return DASH;
@@ -55,11 +50,6 @@ export function ago(iso: string | null | undefined): string {
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   return `${Math.floor(s / 86400)} d ago`;
-}
-
-export function rtf(v: number | null | undefined): string {
-  if (v === null || v === undefined) return DASH;
-  return v < 0.01 ? v.toFixed(4) : v.toFixed(3);
 }
 
 export function capLabel(c: string): string {

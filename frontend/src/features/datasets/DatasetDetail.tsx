@@ -5,7 +5,6 @@ import { api, type Dataset, type Run } from "../../lib/api";
 import { ago, clock, hours, num } from "../../lib/format";
 import { TagInput } from "../../components/TagInput";
 import { Button, Chip, Empty, ErrorNote, Fact, JobPill, LinkButton, PageHeader, Panel, Spinner, StatusDot } from "../../components/ui";
-import { PlanPanel, planCount, type PlanValue } from "../benchmarks/PlanPanel";
 
 interface FileRow {
   id: number;
@@ -29,10 +28,8 @@ export function DatasetDetail() {
     refetchInterval: (query) => (query.state.data?.status === "ingesting" ? 1500 : false),
   });
   const files = useQuery({ queryKey: ["dataset-files", id, q.data?.status], queryFn: () => api.get<FileRow[]>(`/datasets/${id}/files`), enabled: q.data?.status === "ready" });
-  const runs = useQuery({ queryKey: ["dataset-runs", id], queryFn: () => api.get<Run[]>(`/runs?dataset_id=${id}`), refetchInterval: 4000, enabled: q.data?.status === "ready" });
-  const [plan, setPlan] = useState<PlanValue>({ seg_model_ids: [], asr_model_ids: [], oracle: false, mode: "grid" });
+  const runs = useQuery({ queryKey: ["dataset-runs", id], queryFn: () => api.get<Run[]>(`/label/datasets/${id}/runs`), refetchInterval: 4000, enabled: q.data?.status === "ready" });
   const [editTags, setEditTags] = useState<string[] | null>(null);
-  const runPlan = useMutation({ mutationFn: () => api.post("/benchmarks/plan", { dataset_id: Number(id), ...plan }), onSuccess: () => qc.invalidateQueries() });
   const saveTags = useMutation({
     mutationFn: (tags: string[]) => api.patch(`/datasets/${id}`, { tags }),
     onSuccess: () => {
@@ -47,7 +44,6 @@ export function DatasetDetail() {
   const d = q.data;
   const rep = d.report;
   const job = d.ingest_job;
-  const n = planCount(plan, d.label_types);
   const maxSr = Math.max(1, ...Object.values(rep?.sample_rates ?? {}));
 
   return (
@@ -89,7 +85,7 @@ export function DatasetDetail() {
                 <Fact k="Files" v={`${num(rep.usable_files)} usable of ${num(rep.files)}`} />
                 <Fact k="Audio" v={`${hours(rep.usable_hours)} usable of ${hours(rep.hours)}`} />
                 <Fact k="Labels" v={d.label_types.length ? d.label_types.map((l) => (l === "asr" ? "ASR" : "Diarisation")).join(" + ") : "audio only"} />
-                <Fact k="cpWER-ready" v={rep.has_speaker_text ? "yes (speaker-attributed transcripts)" : "no"} />
+                <Fact k="Speaker-attributed text" v={rep.has_speaker_text ? "yes" : "no"} />
                 <Fact k="Language" v={d.language ?? "—"} />
                 <div className="flex flex-col gap-1.5 pt-1">
                   <span className="text-[11px] text-muted uppercase tracking-wider">Sample rates</span>
@@ -151,17 +147,16 @@ export function DatasetDetail() {
                 </table>
               </div>
             </Panel>
-            <Panel title="Runs on this dataset">
-              {(runs.data ?? []).length === 0 && <Empty>No runs yet.</Empty>}
+            <Panel title="Pseudo-label runs on this dataset">
+              {(runs.data ?? []).length === 0 && <Empty>No pseudo-label runs yet.</Empty>}
               {(runs.data ?? []).map((r) => (
                 <div key={r.id} className="flex flex-wrap items-center gap-3 text-[13px] border-b border-track last:border-0 py-1.5">
                   <StatusDot state={r.status} />
                   <span className="flex-1">{r.label}</span>
-                  <Chip>{r.task}</Chip>
                   <span className="text-xs text-muted">{r.status} · {ago(r.finished_at ?? r.created_at)}</span>
                   {r.status === "done" && (
-                    <Link className="text-xs" to={r.task === "asr" ? `/errors/asr/${r.id}` : r.task === "seg" ? `/errors/diar/${r.id}` : `/errors/pipeline/${r.id}`}>
-                      Errors
+                    <Link className="text-xs" to={`/label/annotate/${d.id}`}>
+                      Review
                     </Link>
                   )}
                   {r.error && <span className="w-full text-xs text-bad">{r.error}</span>}
@@ -183,15 +178,6 @@ export function DatasetDetail() {
                 </>
               )}
             </Panel>
-            {d.label_types.length > 0 && (
-              <Panel title="Run evaluation" subtitle="Models ranked by tags shared with this dataset">
-                <PlanPanel datasetId={d.id} value={plan} onChange={setPlan} />
-                <ErrorNote error={runPlan.error} />
-                <Button variant="primary" disabled={!n || runPlan.isPending} onClick={() => runPlan.mutate()}>
-                  {runPlan.isSuccess ? "Queued" : `Run ${n} ${plan.mode === "grid" ? `pipeline${n === 1 ? "" : "s"}` : `benchmark${n === 1 ? "" : "s"}`}`}
-                </Button>
-              </Panel>
-            )}
           </aside>
         </div>
       )}

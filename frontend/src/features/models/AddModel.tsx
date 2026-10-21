@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { api, qs, type CheckReport, type Job, type Model, type RegistryEntry } from "../../lib/api";
+import { api, type CheckReport, type Job, type Model, type RegistryEntry } from "../../lib/api";
 import { capLabel, pct, timingLabel } from "../../lib/format";
 import * as I from "../../components/icons";
 import { TagInput } from "../../components/TagInput";
@@ -34,7 +34,7 @@ export function AddModel() {
   return (
     <>
       <PageHeader
-        crumbs={<><Link to="/benchmarks">Benchmarks</Link> / Add model</>}
+        crumbs={<><Link to="/models">Models</Link> / Add model</>}
         title="Add model"
         subtitle={<>Pick a service from the platform registry. Protocol, endpoint and image come from the platform; capabilities are detected by a check. See the <Link to="/contract">model contract</Link>.</>}
       />
@@ -109,7 +109,6 @@ function EntryForm({ entry, state, models, onAdded }: { entry: RegistryEntry; st
   const [displayName, setDisplayName] = useState("");
   const [tags, setTags] = useState<string[]>(entry.tasks ?? []);
   const [parent, setParent] = useState<string>("");
-  const [benchOn, setBenchOn] = useState<number[] | null>(null);
   const start = useMutation({ mutationFn: () => api.post<Job>(`/registry/${entry.name}/check`), onSuccess: (j) => setJobId(j.id) });
   const job = useQuery({
     queryKey: ["job", jobId],
@@ -118,37 +117,18 @@ function EntryForm({ entry, state, models, onAdded }: { entry: RegistryEntry; st
     refetchInterval: (query) => (query.state.data && ["queued", "running"].includes(query.state.data.status) ? 1000 : false),
   });
   const report = (job.data?.status === "done" ? (job.data.result as { report?: CheckReport }).report : undefined) ?? null;
-  const caps = report?.capabilities ?? [];
-  const sugg = useQuery({
-    queryKey: ["suggest-datasets", caps.join(","), tags.join(",")],
-    queryFn: () => api.get<{ dataset_id: number; name: string; shared_tags: string[]; label_types: string[]; preselect: boolean }[]>(`/suggestions/datasets${qs({ capabilities: caps.join(","), tags: tags.join(",") })}`),
-    enabled: caps.length > 0,
-  });
-  useEffect(() => {
-    if (sugg.data && benchOn === null) setBenchOn(sugg.data.filter((d) => d.preselect).map((d) => d.dataset_id));
-  }, [sugg.data, benchOn]);
   const add = useMutation({
-    mutationFn: async () => {
-      const m = await api.post<Model>("/models", {
+    mutationFn: () =>
+      api.post<Model>("/models", {
         registry_name: entry.name,
         check_job_id: jobId,
         display_name: displayName || null,
         tags,
         parent_model_id: parent ? Number(parent) : null,
-      });
-      for (const ds of benchOn ?? []) {
-        if (m.capabilities.includes("asr")) await api.post("/runs", { task: "asr", model_id: m.id, dataset_id: ds });
-        if (m.capabilities.includes("vad") || m.capabilities.includes("diar")) {
-          const d = sugg.data?.find((x) => x.dataset_id === ds);
-          if (d?.label_types.includes("diar")) await api.post("/runs", { task: "seg", model_id: m.id, dataset_id: ds });
-        }
-      }
-      return m;
-    },
+      }),
     onSuccess: onAdded,
   });
   const running = job.data && ["queued", "running"].includes(job.data.status);
-  const nBench = benchOn?.length ?? 0;
 
   return (
     <div className="flex flex-col xl:flex-row gap-5 items-start">
@@ -234,24 +214,13 @@ function EntryForm({ entry, state, models, onAdded }: { entry: RegistryEntry; st
               ))}
             </Select>
           </div>
-          <TagInput value={tags} onChange={setTags} label="Tags · default from the platform's tasks; used to pick matching datasets" />
+          <TagInput value={tags} onChange={setTags} label="Tags · default from the platform's tasks" />
         </Panel>
       </div>
       <aside className="w-full xl:w-[300px] shrink-0 flex flex-col gap-4">
-        <Panel title="Benchmark on" subtitle="Datasets with labels for this model's tasks, ranked by shared tags">
-          {!caps.length && <span className="text-[13px] text-muted">Shown after a successful check.</span>}
-          {caps.length > 0 && (sugg.data ?? []).length === 0 && <span className="text-[13px] text-muted">No datasets with matching labels yet.</span>}
-          {(sugg.data ?? []).map((d) => (
-            <label key={d.dataset_id} className="flex items-center gap-2.5 text-[13px] cursor-pointer">
-              <input type="checkbox" className="accent-[#06B6D4]" checked={benchOn?.includes(d.dataset_id) ?? false} onChange={() => setBenchOn((b) => (b ?? []).includes(d.dataset_id) ? (b ?? []).filter((x) => x !== d.dataset_id) : [...(b ?? []), d.dataset_id])} />
-              <span className="flex-1">{d.name}</span>
-              {d.shared_tags.slice(0, 2).map((t) => <Chip key={t} tone="info">#{t}</Chip>)}
-            </label>
-          ))}
-        </Panel>
         <ErrorNote error={add.error} />
         <Button variant="primary" disabled={!report?.ok || add.isPending || !!entry.model_id} onClick={() => add.mutate()}>
-          {entry.model_id ? "Already added" : nBench ? `Add model and run ${nBench} benchmark${nBench > 1 ? "s" : ""}` : "Add model"}
+          {entry.model_id ? "Already added" : "Add model"}
         </Button>
         {report && !report.ok && <span className="text-xs text-bad">Nothing usable was detected, so this model can't be added.</span>}
         {!report && <span className="text-[11px] text-subtle">“Add” unlocks once the check detects at least one capability.</span>}

@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// Phase 2 (Label) smoke tests on the replayed fixture set: tests/e2e_server.py adds an audio-only copy of
-// the fixture audio ("Unlabelled calls") pseudo-labelled by pyannote -> both Whispers. Console errors
-// fail the test.
+// Concord Label on the replayed fixture set: tests/e2e_server.py registers the fixture models, uploads the
+// annotated fixture set ("Synth fixtures") and an audio-only copy of its audio ("Unlabelled calls"), and
+// pseudo-labels the copy with pyannote -> both Whispers. Console errors fail the test.
 
 function watchErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -91,7 +91,7 @@ test("annotate: edit, shortcuts, multi-select, bulk confirm, audio", async ({ pa
   expect(errors).toEqual([]);
 });
 
-test("live evaluation loads standings, DER and promotion", async ({ page }) => {
+test("live evaluation loads standings and DER; no promotion, no locked score yet", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/label/live");
   await page.getByRole("main").getByRole("link", { name: /Unlabelled calls/ }).click();
@@ -99,8 +99,10 @@ test("live evaluation loads standings, DER and promotion", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "WER vs confirmed segments" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Standings" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Diarisation (DER)" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Promote to benchmark dataset" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Use for retraining" })).toHaveCount(0); // lite
+  // Promote is gone (Send to Bench replaces it in S4); the locked score is hidden until Bench is linked (S5)
+  await expect(page.getByRole("heading", { name: "Promote to benchmark dataset" })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Locked" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Use for retraining" })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -122,16 +124,5 @@ test("import / export: build a package, import it back, see the merge plan", asy
   await page.getByRole("button", { name: "Apply merge" }).click();
   await expect(page.getByText(/Merged into dataset/)).toBeVisible();
   await expect(page.getByRole("row", { name: /Import.*applied/ }).first()).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
-test("open in annotator from ASR error analysis", async ({ page }) => {
-  const errors = watchErrors(page);
-  await page.goto("/errors");
-  await expect(page).toHaveURL(/\/errors\/asr\/\d+/);
-  await page.locator("tbody tr").first().click();
-  await page.getByRole("link", { name: "Open in annotator" }).click();
-  await expect(page).toHaveURL(/\/label\/annotate\/\d+\?file=\d+/);
-  await expect(page.getByRole("heading", { name: /Segments · \d+/ })).toBeVisible();
   expect(errors).toEqual([]);
 });

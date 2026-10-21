@@ -7,12 +7,11 @@ import { pickedFromDrop, pickedFromInput, uploadFiles, type PickedFile } from ".
 import * as I from "../../components/icons";
 import { TagInput } from "../../components/TagInput";
 import { Button, Chip, cx, ErrorNote, Fact, PageHeader, Panel, Spinner } from "../../components/ui";
-import { PlanPanel, planCount, type PlanValue } from "../benchmarks/PlanPanel";
 
 const TASK_INFO: Record<string, { title: string; feeds: string }> = {
   asr: { title: "ASR transcripts", feeds: "WER" },
   diar: { title: "Speaker labels", feeds: "DER, VAD error" },
-  spk_asr: { title: "Speaker-attributed transcripts", feeds: "WER, DER and cpWER" },
+  spk_asr: { title: "Speaker-attributed transcripts", feeds: "transcripts and speakers" },
 };
 
 const LANGS = ["en", "en-SG", "en-GB", "en-US", "zh", "ms", "ta", "mixed"];
@@ -39,7 +38,6 @@ export function UploadDataset() {
   const [uploadId, setUploadId] = useState<string | null>(null);
   const [progress, setProgress] = useState<[number, number] | null>(null);
   const [inspection, setInspection] = useState<Inspection | null>(null);
-  const [plan, setPlan] = useState<PlanValue>({ seg_model_ids: [], asr_model_ids: [], oracle: false, mode: "grid" });
   const [drag, setDrag] = useState(false);
   const templates = useQuery({ queryKey: ["templates"], queryFn: () => api.get<{ name: string; size: number }[]>("/templates") });
 
@@ -70,7 +68,6 @@ export function UploadDataset() {
         tags,
         upload_id: source === "files" ? uploadId : null,
         local_path: source === "path" ? localPath : null,
-        plan: mode === "annotated" && planCount(plan, labelTypesOf(inspection)) > 0 ? plan : null,
       }),
     onSuccess: (r) => nav(`/datasets/${r.dataset.id}`),
   });
@@ -86,22 +83,21 @@ export function UploadDataset() {
   };
 
   const labels = mode === "annotated" ? labelTypesOf(inspection) : [];
-  const n = planCount(plan, labels);
   const ready = !!inspection && inspection.audio_files > 0 && !!name.trim() && (source === "path" || !!uploadId);
-  const cta = !inspection ? "Upload" : n > 0 ? `Upload and run ${n} ${plan.mode === "grid" ? `pipeline${n === 1 ? "" : "s"}` : `benchmark${n === 1 ? "" : "s"}`}` : "Upload dataset";
+  const cta = !inspection ? "Upload" : "Upload dataset";
 
   return (
     <>
       <PageHeader
-        crumbs={<><Link to="/benchmarks">Benchmarks</Link> / Upload dataset</>}
+        crumbs={<><Link to="/datasets">Datasets</Link> / Upload dataset</>}
         title="Upload dataset"
-        subtitle="Each upload is its own dataset. Labelled data becomes a benchmark straight away."
+        subtitle="Each upload is its own dataset: audio to label, with or without the labels it already has."
       />
       <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Upload mode">
         {(
           [
-            ["annotated", "Audio + annotations", "Transcripts and/or speaker labels: becomes a benchmark dataset."],
-            ["audio_only", "Audio only", "Stored now, then pseudo-labelled with model ensembles and reviewed in Label."],
+            ["annotated", "Audio + annotations", "Transcripts and/or speaker labels, complete or partial: kept as confirmed labels to review and extend."],
+            ["audio_only", "Audio only", "Stored now, then pseudo-labelled with model ensembles and reviewed."],
           ] as const
         ).map(([m, title, body]) => (
           <button
@@ -139,7 +135,7 @@ export function UploadDataset() {
               Description
               <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} className="bg-canvas border border-line rounded-md px-3 py-2 text-[13px] text-fg" />
             </label>
-            <TagInput value={tags} onChange={setTags} label="Tags · matched against model tags to suggest what to benchmark" />
+            <TagInput value={tags} onChange={setTags} label="Tags" />
           </Panel>
           <Panel title="Audio" actions={
             <span role="group" aria-label="Audio source" className="inline-flex border border-line rounded-md overflow-hidden">
@@ -220,7 +216,7 @@ export function UploadDataset() {
             </Panel>
           ) : (
             <Panel title="After upload">
-              <span className="text-[13px] text-muted">Unlabelled audio can't be benchmarked until it has reference labels. After upload, pseudo-label it with a model ensemble, review the result, then promote the confirmed segments to a benchmark dataset.</span>
+              <span className="text-[13px] text-muted">After upload, pseudo-label it with a model ensemble, then review the result in the annotator. Live evaluation scores the models against the segments you confirm.</span>
             </Panel>
           )}
         </div>
@@ -231,17 +227,11 @@ export function UploadDataset() {
             <Fact k="Labels" v={labels.length ? labels.map((l) => (l === "asr" ? "ASR" : "Diarisation")).join(" + ") : mode === "audio_only" ? "audio only" : "—"} />
             {tags.length > 0 && <span className="flex flex-wrap gap-1">{tags.map((t) => <Chip key={t}>#{t}</Chip>)}</span>}
           </Panel>
-          {mode === "annotated" && (
-            <Panel title="Benchmark plan" subtitle="Ranked by tags shared with this dataset">
-              {inspection ? <PlanPanel tags={tags} labelTypes={labels} language={language} value={plan} onChange={setPlan} /> : <span className="text-[13px] text-muted">Shown once annotations are matched.</span>}
-              <Link to="/models/add" className="text-xs">Add another model</Link>
-            </Panel>
-          )}
           <ErrorNote error={create.error} />
           <Button variant="primary" disabled={!ready || create.isPending} onClick={() => create.mutate()}>
             {create.isPending ? "Starting…" : cta}
           </Button>
-          <span className="text-[11px] text-subtle">Ingest runs as a job: originals are copied, 16 kHz mono and waveform peaks are derived, and the services the plan needs are started.</span>
+          <span className="text-[11px] text-subtle">Ingest runs as a job: originals are copied, and 16 kHz mono and waveform peaks are derived.</span>
         </aside>
       </div>
     </>

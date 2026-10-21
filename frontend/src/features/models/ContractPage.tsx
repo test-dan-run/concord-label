@@ -40,7 +40,7 @@ language=<dataset language, e.g. en>`}</pre>
    {"type": "text", "text": "Transcribe … transcript only."},
    {"type": "input_audio",
     "input_audio": {"data": "<base64 WAV>", "format": "wav"}}]}]}`}</pre>
-          <span className="text-xs text-muted">Scored on text only. In pipelines the VAD / diarisation stage provides timing.</span>
+          <span className="text-xs text-muted">Compared on text only. In pseudo-labelling the VAD / diarisation stage provides timing.</span>
         </Panel>
         <Panel title="VAD / diarisation · oip-v2 / infer">
           <pre className="m-0 text-[11px] num bg-canvas border border-track rounded-md p-2.5 whitespace-pre-wrap">{`POST /v2/models/<service>/infer
@@ -48,7 +48,7 @@ inputs:  AUDIO        FP32  [-1]   16 kHz mono
          SAMPLE_RATE  INT32 [1]    16000
 outputs: SEGMENTS     FP32  [-1,2] start, end (s)
          SPEAKERS     INT32 [-1]   diarisers only`}</pre>
-          <span className="text-xs text-muted">A model that returns <span className="num">SPEAKERS</span> is a diariser (DER, cpWER); without it, a VAD (missed / false-alarm speech, WER).</span>
+          <span className="text-xs text-muted">A model that returns <span className="num">SPEAKERS</span> is a diariser (speaker labels, DER); without it, a VAD (speech segments only).</span>
         </Panel>
       </div>
       <Panel title="How capabilities and timing are detected" subtitle="The compatibility check runs on a 10 s synthesised two-speaker clip with a known transcript and turns.">

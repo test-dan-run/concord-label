@@ -55,6 +55,15 @@ def label_preview(dataset_id: int, seg_model_id: int, asr_model_ids: str = "",
     return pseudo.preview(session, ds, seg, asr)
 
 
+@router.get("/datasets/{dataset_id}/runs")
+def list_label_runs(dataset_id: int, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    """The dataset's label runs, newest first."""
+    get_dataset(session, dataset_id)
+    runs = session.scalars(select(Run).where(Run.task == RunTask.label, Run.dataset_id == dataset_id)
+                           .order_by(Run.id.desc()))
+    return [run_json(r) for r in runs]
+
+
 class LabelRunIn(BaseModel):
     tasks: list[str] = Field(default_factory=lambda: ["asr", "diar"])
     seg_model_id: int

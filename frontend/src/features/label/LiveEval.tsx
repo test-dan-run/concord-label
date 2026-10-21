@@ -1,12 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, qs, type Dataset, type LiveEval, type LiveModel } from "../../lib/api";
+import { Link, useParams } from "react-router-dom";
+import { api, qs, type LiveEval, type LiveModel } from "../../lib/api";
 import { C, MODEL_SERIES } from "../../lib/colors";
-import { IfFeature, useNormaliser, useNormalisers } from "../../lib/config";
+import { useNormaliser, useNormalisers } from "../../lib/config";
 import { ago, clock, deltaPts, num, pct } from "../../lib/format";
-import * as I from "../../components/icons";
-import { Button, Empty, ErrorNote, Fact, PageHeader, Panel, Select, Spinner } from "../../components/ui";
+import { Empty, ErrorNote, Fact, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 import { Crumbs, DatasetChooser, LabelTabs } from "./common";
 
 export function LiveEvalPage() {
@@ -62,7 +61,7 @@ function Live({ datasetId }: { datasetId: number }) {
                   {d.asr.confirmed === 0 ? (
                     <>No confirmed segments yet. <Link to={`/label/annotate/${datasetId}`}>Start annotating</Link>.</>
                   ) : (
-                    "No model has saved outputs for the confirmed segments. Pseudo-label or benchmark the dataset first."
+                    "No model has saved outputs for the confirmed segments. Pseudo-label the dataset first."
                   )}
                 </Empty>
               ) : (
@@ -71,7 +70,7 @@ function Live({ datasetId }: { datasetId: number }) {
             </Panel>
             <Standings d={d} colors={colors} />
           </div>
-          <div className="grid gap-5 lg:grid-cols-3">
+          <div className="grid gap-5 lg:grid-cols-2">
             <Panel title="Diarisation (DER)" subtitle={`${num(d.der.files)} of ${num(d.der.of)} files fully reviewed · collar ${d.der.collar} s`}>
               {d.der.files === 0 && <span className="text-[13px] text-muted">DER needs files where every segment is reviewed, so missing labels never count as misses.</span>}
               {d.der.files > 0 && d.der.models.length === 0 && <span className="text-[13px] text-muted">No diariser has saved outputs for these files.</span>}
@@ -82,7 +81,6 @@ function Live({ datasetId }: { datasetId: number }) {
             <Panel title="Keyword spotting">
               <span className="text-[13px] text-muted">Not built yet (Q6). Package files keep an empty keywords.jsonl so progress stays forward-compatible.</span>
             </Panel>
-            <Promote datasetId={datasetId} confirmed={d.asr.confirmed} />
           </div>
           <Panel title="Latest confirmations">
             {d.feed.length === 0 && <span className="text-[13px] text-muted">Nothing confirmed by hand yet.</span>}
@@ -105,6 +103,8 @@ function Live({ datasetId }: { datasetId: number }) {
 }
 
 function Standings({ d, colors }: { d: LiveEval; colors: Map<number, string> }) {
+  // The locked benchmark score comes from Concord Bench once the apps are linked (S5); hidden until then.
+  const showLocked = d.asr.models.some((m) => m.locked !== null);
   return (
     <Panel title="Standings" subtitle={d.asr.ranked ? "95% intervals: bootstrap over segments." : `Too few to rank: ${d.asr.min_rank} confirmed segments needed.`}>
       {d.asr.models.length === 0 && <span className="text-[13px] text-muted">No models to compare yet.</span>}
@@ -117,7 +117,7 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<number, string> }) 
                 <th scope="col" className="font-medium px-2 py-2 border-b border-line">Model</th>
                 <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right">WER</th>
                 <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right">95% CI</th>
-                <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right" title="Benchmark score on the promoted (locked) dataset">Locked</th>
+                {showLocked && <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right" title="Benchmark score in Concord Bench (locked references)">Locked</th>}
               </tr>
             </thead>
             <tbody>
@@ -133,16 +133,18 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<number, string> }) 
                   </td>
                   <td className="px-2 py-2 text-right num">{pct(m.wer)}</td>
                   <td className="px-2 py-2 text-right num text-muted">{m.ci ? `${pct(m.ci[0])}–${pct(m.ci[1])}` : "—"}</td>
-                  <td className="px-2 py-2 text-right num">
-                    {m.locked ? (
-                      <span title={`${m.locked.promoted ? "Promoted dataset" : "This dataset"} · run ${m.locked.run_id} · ${m.locked.normaliser}`}>
-                        {pct(m.locked.wer)}
-                        {m.wer !== null && m.locked.wer !== null && <span className="text-[11px] text-muted"> ({deltaPts(m.wer - m.locked.wer)})</span>}
-                      </span>
-                    ) : (
-                      <span className="text-subtle">—</span>
-                    )}
-                  </td>
+                  {showLocked && (
+                    <td className="px-2 py-2 text-right num">
+                      {m.locked ? (
+                        <span title={`Concord Bench · run ${m.locked.run_id} · ${m.locked.normaliser}`}>
+                          {pct(m.locked.wer)}
+                          {m.wer !== null && m.locked.wer !== null && <span className="text-[11px] text-muted"> ({deltaPts(m.wer - m.locked.wer)})</span>}
+                        </span>
+                      ) : (
+                        <span className="text-subtle">—</span>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -259,43 +261,5 @@ function WerCurve({ models, colors, total, minRank }: { models: LiveModel[]; col
         </table>
       </details>
     </div>
-  );
-}
-
-function Promote({ datasetId, confirmed }: { datasetId: number; confirmed: number }) {
-  const qc = useQueryClient();
-  const navigate = useNavigate();
-  const [name, setName] = useState("");
-  const [scope, setScope] = useState("complete");
-  const go = useMutation({
-    mutationFn: () => api.post<Dataset>(`/label/datasets/${datasetId}/promote`, { name: name.trim(), scope }),
-    onSuccess: (d) => {
-      void qc.invalidateQueries({ queryKey: ["datasets"] });
-      void qc.invalidateQueries({ queryKey: ["label-console"] });
-      navigate(`/datasets/${d.id}`);
-    },
-  });
-  return (
-    <Panel title="Promote to benchmark dataset" subtitle="Copies confirmed segments only into a new dataset you can benchmark.">
-      <label className="flex flex-col gap-1 text-xs text-muted">
-        Name
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Calls · reviewed" className="bg-canvas border border-line rounded px-2 min-h-9 text-fg text-[13px]" />
-      </label>
-      <Select label="Files" value={scope} onChange={(e) => setScope(e.target.value)}>
-        <option value="complete">Fully reviewed files (ASR + DER)</option>
-        <option value="any">Any file with confirmed segments (ASR only)</option>
-      </Select>
-      <ErrorNote error={go.error} />
-      <div className="flex flex-wrap gap-2">
-        <Button variant="primary" disabled={!name.trim() || !confirmed || go.isPending} onClick={() => go.mutate()}>
-          <I.Database size={14} /> Promote
-        </Button>
-        <IfFeature name="improve">
-          <Button disabled title="Training (Phase 3) is not scoped yet">
-            <I.Flask size={14} /> Use for retraining
-          </Button>
-        </IfFeature>
-      </div>
-    </Panel>
   );
 }

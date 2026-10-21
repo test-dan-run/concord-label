@@ -1,36 +1,6 @@
-import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { AlignOp } from "../lib/api";
 import { deltaPts, pct } from "../lib/format";
-import { DiffText, diffTokens } from "./DiffText";
-import { deltaInfo } from "./MetricTile";
 import { clipSegments, lanesBySpeaker, niceTicks, peakColumns, tToX, viewAround, xToT } from "./timelineMath";
-
-const OPS: AlignOp[] = [
-  { op: "eq", ref: "the", hyp: "the", ri: 0, hi: 0 },
-  { op: "sub", ref: "cat", hyp: "hat", ri: 1, hi: 1 },
-  { op: "del", ref: "sat", hyp: null, ri: 2, hi: null },
-  { op: "ins", ref: null, hyp: "down", ri: null, hi: 2 },
-];
-
-describe("diffTokens", () => {
-  it("inline shows every edit with its marker", () => {
-    expect(diffTokens(OPS, "inline").map((t) => t.text)).toEqual(["the", "cat → hat", "−sat", "+down"]);
-  });
-  it("ref side drops insertions, hyp side drops deletions", () => {
-    expect(diffTokens(OPS, "ref").map((t) => `${t.kind}:${t.text}`)).toEqual(["eq:the", "sub:cat", "del:sat"]);
-    expect(diffTokens(OPS, "hyp").map((t) => `${t.kind}:${t.text}`)).toEqual(["eq:the", "sub:hat", "ins:down"]);
-  });
-  it("renders with titles for screen readers and hover", () => {
-    const { container } = render(<DiffText ops={OPS} />);
-    expect(container.querySelectorAll('[title="substitution"]').length).toBe(1);
-    expect(container.textContent).toContain("+down");
-  });
-  it("shows a placeholder for an empty alignment", () => {
-    const { container } = render(<DiffText ops={[]} />);
-    expect(container.textContent).toBe("(empty)");
-  });
-});
 
 describe("timeline maths", () => {
   const v = { t0: 10, t1: 20, width: 500 };
@@ -69,17 +39,11 @@ describe("timeline maths", () => {
   });
 });
 
-describe("formatting and deltas", () => {
+describe("formatting", () => {
   it("formats percentages and signed points", () => {
     expect(pct(0.1234)).toBe("12.3%");
     expect(pct(null)).toBe("—");
     expect(deltaPts(0.012)).toBe("+1.2");
     expect(deltaPts(-0.004)).toBe("−0.4");
-  });
-  it("lower error is better", () => {
-    expect(deltaInfo(0.1, 0.2)?.better).toBe(true);
-    expect(deltaInfo(0.3, 0.2)?.better).toBe(false);
-    expect(deltaInfo(0.9, 0.8, false)?.better).toBe(true);
-    expect(deltaInfo(null, 0.2)).toBeNull();
   });
 });

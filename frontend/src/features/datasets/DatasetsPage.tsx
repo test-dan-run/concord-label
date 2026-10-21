@@ -52,7 +52,7 @@ export function DatasetsPage() {
                       <span className="flex gap-1">
                         {d.label_types.includes("asr") && <Chip>ASR</Chip>}
                         {d.label_types.includes("diar") && <Chip>Diarisation</Chip>}
-                        {d.has_speaker_text && <Chip tone="info">cpWER</Chip>}
+                        {d.has_speaker_text && <Chip tone="info">speaker text</Chip>}
                         {!d.label_types.length && d.status === "ready" && <Chip>audio only</Chip>}
                       </span>
                     </td>
