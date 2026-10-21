@@ -136,7 +136,7 @@ services:
     image: ${CONCORD_IMAGE:?install.sh writes CONCORD_IMAGE into concord/.env}
     restart: unless-stopped
     networks: [platform]
-    ports: ["127.0.0.1:${CONCORD_PORT:-8610}:8610"]
+    ports: ["127.0.0.1:${CONCORD_PORT:-8620}:8620"]
     environment:
       PLATFORM_DIR: ${KIT_DIR}/platform
       AICORE_ENDPOINTS: ${KIT_DIR}/platform/clients/aicore/src/aicore/endpoints.generated.yaml
@@ -221,8 +221,8 @@ def readme(manifest: dict[str, Any]) -> str:
             "2. `./install.sh` checks every file against `SHA256SUMS`, loads `images/concord.tar` and "
             "`images/platform.tar`, writes `platform/.env` (`AI_ASSETS=<this folder>/assets`, `HF_HUB_OFFLINE=1`) "
             "and `concord/.env`, creates the platform's Docker network and starts Concord from `concord/compose.yml`. "
-            "`--internal` creates the network with no outside access; `CONCORD_PORT` (default 8610) picks the port.",
-            "3. Open http://127.0.0.1:8610 and register each model with **Add model**: the compatibility check "
+            "`--internal` creates the network with no outside access; `CONCORD_PORT` (default 8620) picks the port.",
+            "3. Open http://127.0.0.1:8620 and register each model with **Add model**: the compatibility check "
             "runs on this machine's hardware and images. No registrations, scores or datasets come with the kit.",
             "",
             "Concord mounts `platform/` and `assets/` at the same absolute path as on the host, because the "

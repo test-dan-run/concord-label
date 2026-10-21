@@ -21,7 +21,7 @@ dev:
     set -euo pipefail
     trap 'kill 0' EXIT INT TERM
     {{py}} -m concord_label.cli migrate
-    uv run uvicorn concord_label.api.app:app --reload --reload-dir backend --port ${CONCORD_PORT:-8610} &
+    uv run uvicorn concord_label.api.app:app --reload --reload-dir backend --port ${CONCORD_PORT:-8620} &
     {{py}} -m concord_label.runs.worker &
     (cd frontend && npm run dev -- --port ${CONCORD_WEB_PORT:-5174}) &
     wait
@@ -29,7 +29,7 @@ dev:
 # API only (serves the built frontend from frontend/dist when present)
 api:
     {{py}} -m concord_label.cli migrate
-    uv run uvicorn concord_label.api.app:app --port ${CONCORD_PORT:-8610}
+    uv run uvicorn concord_label.api.app:app --port ${CONCORD_PORT:-8620}
 
 # job worker only
 worker:
@@ -95,6 +95,6 @@ verify-kit dir:
 build-web:
     cd frontend && npm run build
 
-# concord-label image (API + worker on 8610); the platform's aicore client comes in as a named build context
+# concord-label image (API + worker on 8620); the platform's aicore client comes in as a named build context
 build:
     docker build --build-context platform=${PLATFORM_DIR:-../../platform} --target label -t {{image}} .

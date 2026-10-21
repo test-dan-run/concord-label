@@ -5,10 +5,10 @@ import { defineConfig, loadEnv } from "vite";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const api = `http://127.0.0.1:${env.CONCORD_PORT || process.env.CONCORD_PORT || 8610}`;
+  const api = `http://127.0.0.1:${env.CONCORD_PORT || process.env.CONCORD_PORT || 8620}`;
   return {
     plugins: [react(), tailwindcss()],
-    // Concord Label: Vite on 5174 (Concord Bench uses 5173), API on 8610 (Bench: 8600).
+    // Concord Label: Vite on 5174 (Concord Bench uses 5173), API on 8620 (Bench: 8600).
     server: { port: 5174, proxy: { "/api": { target: api, changeOrigin: false } } },
     preview: { proxy: { "/api": { target: api } } },
     build: { outDir: "dist", sourcemap: true, chunkSizeWarningLimit: 900 },

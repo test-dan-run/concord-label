@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Concord Label: just build  ->  concord-label:0.2.0 (API + worker on port 8610)
+# Concord Label: just build  ->  concord-label:0.2.0 (API + worker on port 8620)
 #
 # Improve (Phase 3, concord_improve) is on hold and installed in no image; a concord-label-full target comes
 # back when Phase 3 is scoped (SPLIT_PLAN.md §3.2).
@@ -63,5 +63,5 @@ ENV CONCORD_HOME=/srv/apps/concord-label CONCORD_DATA=/data PLATFORM_DIR=/platfo
     AI_HOST={name} AICORE_ENDPOINTS=/platform/clients/aicore/src/aicore/endpoints.generated.yaml UV_OFFLINE=1
 VOLUME /data
 COPY --from=web-base /web/dist /srv/apps/concord-label/frontend/dist
-EXPOSE 8610
-CMD ["sh", "-c", "python -m concord_label.cli migrate && (python -m concord_label.runs.worker &) && exec uvicorn concord_label.api.app:app --host 0.0.0.0 --port 8610"]
+EXPOSE 8620
+CMD ["sh", "-c", "python -m concord_label.cli migrate && (python -m concord_label.runs.worker &) && exec uvicorn concord_label.api.app:app --host 0.0.0.0 --port 8620"]

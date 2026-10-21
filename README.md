@@ -6,7 +6,7 @@ by hand, and turn them into references. Labels cover transcripts (ASR) and speak
 Concord Label is one of two apps that came from Concord (SPLIT_PLAN.md):
 
 - **Concord Bench** benchmarks models on reference datasets and analyses their errors (port 8600).
-- **Concord Label** (this repository) produces those references (port 8610).
+- **Concord Label** (this repository) produces those references (port 8620).
 
 The two apps share no code. They agree only on the formats and endpoints in [CONTRACTS.md](CONTRACTS.md),
 which is kept identical in both repositories (`just check-contracts`). Each app has its own data directory
@@ -21,7 +21,7 @@ services a job needs with the platform's own `tools/stack.py`, and calls them ov
 ```bash
 # prerequisites: uv, just, Node 22+, ffmpeg; the platform repo at ../../platform (rendered)
 just setup            # uv sync + npm install
-just dev              # API :8610 + worker + Vite :5174 -> open http://localhost:5174
+just dev              # API :8620 + worker + Vite :5174 -> open http://localhost:5174
 just test             # backend + frontend unit tests, no GPU or platform needed
 just lint             # ruff, import-linter (concord_label must not import concord_improve), tsc
 just e2e              # Playwright on replayed fixtures (Docker; needs the concord-label image, `just build`)
@@ -120,7 +120,7 @@ one of these modules is checked against Concord Bench in the same sitting:
 ## Settings
 
 Environment variables (or `.env`, see [.env.example](.env.example)): `CONCORD_DATA` (default `data/` in
-this repository), `CONCORD_PORT` (8610), `CONCORD_WEB_PORT` (5174), `PLATFORM_DIR`, `AICORE_ENDPOINTS`,
+this repository), `CONCORD_PORT` (8620), `CONCORD_WEB_PORT` (5174), `PLATFORM_DIR`, `AICORE_ENDPOINTS`,
 `AI_HOST`, `NO_EVICT`, `REPLAY_DIR`, `RECORD_DIR`, `CONCORD_HOME`, `CONCORD_IMAGE`.
 
 ## Fixtures and recordings
@@ -132,11 +132,11 @@ from recorded compatibility checks and pseudo-label the fixture audio on recorde
 
 ## Image
 
-`just build` builds `concord-label:0.2.0` (API and worker on port 8610). Improve is not in it. To run it
+`just build` builds `concord-label:0.2.0` (API and worker on port 8620). Improve is not in it. To run it
 next to the platform:
 
 ```bash
-docker run -d --name concord-label --network ai-net -p 127.0.0.1:8610:8610 \
+docker run -d --name concord-label --network ai-net -p 127.0.0.1:8620:8620 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$(realpath ../../platform)":/platform -v concord-label-data:/data concord-label:0.2.0
 ```
@@ -160,7 +160,7 @@ just verify-kit /mnt/usb/concord-offline-...                                  # 
 ```
 
 - A full kit carries the `concord-label:0.2.0` image (`images/concord.tar`); `./install.sh` starts it from
-  `concord/compose.yml` on `127.0.0.1:8610`. Kits with both apps are milestone S7.
+  `concord/compose.yml` on `127.0.0.1:8620`. Kits with both apps are milestone S7.
 - `./install.sh --add <install>` merges a model kit into an install. Register models there with Add
   model: no registrations or datasets travel; labels come back as label packages.
 - The air-gap test of a kit (`just test-offline`) lives in Concord Bench.

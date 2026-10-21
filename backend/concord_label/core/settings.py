@@ -21,6 +21,8 @@ REPO_ROOT = Path(os.environ.get("CONCORD_HOME") or Path(__file__).resolve().pare
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=REPO_ROOT / ".env", extra="ignore")
 
+    # API port of `just dev` / `just api` (the image always listens on 8620 inside the container).
+    concord_port: int = 8620
     # Audio, derived files and the database (Q2: local disk only).
     concord_data: Path = Field(default=REPO_ROOT / "data")
     # Phase 3 (Improve) is on hold and installed in no image, so there is no FEATURE_IMPROVE flag. A

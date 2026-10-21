@@ -34,6 +34,12 @@ def test_config_names_the_app(client):
     assert "features" not in cfg and "variant" not in cfg
 
 
+def test_default_port_is_8620():
+    from concord_label.core.settings import Settings
+
+    assert Settings(_env_file=None).concord_port == 8620
+
+
 def test_no_benchmark_or_improve_routes(client):
     for path in ("/api/improve/status", "/api/benchmarks/asr", "/api/runs", "/api/errors/asr/utterances"):
         assert client.get(path).status_code == 404, path
