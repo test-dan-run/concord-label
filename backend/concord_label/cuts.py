@@ -20,10 +20,10 @@ MERGE_MAX_GAP = 2.0  # ...when it is at most this far away
 PAD = 0.1
 
 
-def usable_files(session: Session, dataset_id: int, include_long: bool = False) -> list[AudioFile]:
+def usable_files(session: Session, dataset_id: int) -> list[AudioFile]:
     files = session.scalars(select(AudioFile).where(AudioFile.dataset_id == dataset_id)
                             .options(selectinload(AudioFile.segments)).order_by(AudioFile.rel_path)).all()
-    return [f for f in files if f.usable or (include_long and f.status == "too_long")]
+    return [f for f in files if f.usable]
 
 
 @dataclass

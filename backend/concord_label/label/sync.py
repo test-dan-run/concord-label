@@ -51,7 +51,6 @@ from ..core.models import (
     utcnow,
 )
 from ..core.settings import VERSION as APP_VERSION
-from ..core.settings import get_settings
 
 FORMAT = "concord-label-package"
 VERSION = 1
@@ -449,7 +448,7 @@ def _add_file(session: Session, ds: Dataset, f: dict[str, Any], root: Path) -> A
         src = root / "audio" / f["path"]
         if not src.is_file():
             return None
-        _process_audio(af, src, get_settings().max_duration_s)
+        _process_audio(af, src)
     session.add(af)
     session.flush()
     return af
@@ -552,7 +551,7 @@ def _refresh_report(session: Session, ds: Dataset) -> None:
             srs[str(f.orig_sr)] = srs.get(str(f.orig_sr), 0) + 1
     rep.update({"files": len(fs), "usable_files": len(usable), "hours": sum(f.duration or 0 for f in fs) / 3600,
                 "usable_hours": sum(f.duration or 0 for f in usable) / 3600, "sample_rates": srs})
-    rep.setdefault("flagged", {"clipped": [], "undecodable": [], "too_long": []})
+    rep.setdefault("flagged", {"clipped": [], "undecodable": []})
     rep.setdefault("tasks", {})
     ds.report = rep
 

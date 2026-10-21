@@ -110,7 +110,9 @@ one of these modules is checked against Concord Bench in the same sitting:
 
 - **Datasets.** Upload a folder or zip (chunked), or point at a local folder: audio alone, or audio with
   complete or partial annotations. Originals are copied to `CONCORD_DATA/originals/<sha256>`; models and
-  playback use a derived 16 kHz mono FLAC. Files over 5 minutes are flagged and kept out of label runs.
+  playback use a derived 16 kHz mono FLAC. There is no length limit, but each file (or cut) goes to a model
+  in one request, so a very long file works only if the model takes it: VAD and diarisation receive the
+  audio as JSON numbers, about 1.25 GB per hour of audio.
   Annotations are matched to audio by file stem and become confirmed segments: ASR (JSONL / NeMo
   manifest / CSV / `.txt`), diarisation (RTTM / JSON segments / NeMo diarisation manifest plus its RTTMs),
   speaker-attributed transcripts (JSON/JSONL segments, STM, SegLST, NeMo diarisation output JSON).

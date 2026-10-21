@@ -18,7 +18,7 @@ def truth() -> dict:
 
 def dialogue_files() -> dict:
     """The six usable dialogues (no corrupt / long file)."""
-    return {k: v for k, v in truth().items() if k.startswith("d0") and k not in ("d07_corrupt", "d08_long")}
+    return {k: v for k, v in truth().items() if k.startswith("d0") and k != "d07_corrupt"}
 
 
 @pytest.fixture(autouse=True)

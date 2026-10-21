@@ -64,7 +64,6 @@ class FileStatus(enum.StrEnum):
     ok = "ok"
     clipped = "clipped"
     undecodable = "undecodable"
-    too_long = "too_long"
 
 
 class SegmentStatus(enum.StrEnum):

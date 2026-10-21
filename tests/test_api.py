@@ -49,7 +49,7 @@ def test_no_benchmark_or_improve_routes(client):
 def test_upload_inspect_create_ingest(client, data_dir):
     uid = upload_fixture(client)
     ins = client.get(f"/api/uploads/{uid}/inspect").json()
-    assert ins["audio_files"] == 8 and ins["tasks"]["spk_asr"]["files"] == 8
+    assert ins["audio_files"] == 7 and ins["tasks"]["spk_asr"]["files"] == 7
     r = client.post("/api/datasets", json={"name": "Calls", "tags": ["#call-centre", "en", "en"], "language": "en-SG",
                                            "upload_id": uid})
     assert r.status_code == 201, r.text
@@ -59,9 +59,9 @@ def test_upload_inspect_create_ingest(client, data_dir):
     d = client.get(f"/api/datasets/{ds['id']}").json()
     assert d["status"] == "ready" and d["usable_files"] == 6 and d["has_speaker_text"]
     assert d["ingest_job"]["status"] == "done"
-    assert d["flagged"] == {"clipped": 1, "undecodable": 1, "too_long": 1}
+    assert d["flagged"] == {"clipped": 1, "undecodable": 1}
     files = client.get(f"/api/datasets/{ds['id']}/files").json()
-    assert {f["status"] for f in files} == {"ok", "clipped", "undecodable", "too_long"}
+    assert {f["status"] for f in files} == {"ok", "clipped", "undecodable"}
     ok = next(f for f in files if f["status"] == "ok")
     a = client.get(f"/api/audio/{ok['id']}", headers={"Range": "bytes=0-99"})
     assert a.status_code == 206 and len(a.content) == 100

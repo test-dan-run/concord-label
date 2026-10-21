@@ -42,7 +42,7 @@ def test_package_layout(labelled, client, tmp_path):
                 "runs/label_runs.jsonl"} <= names
         assert not any(n.startswith("audio/") for n in names)
         m = json.loads(z.read("manifest.json"))
-        assert m["format"] == "concord-label-package" and m["counts"]["files"] == 7
+        assert m["format"] == "concord-label-package" and m["counts"]["files"] == 6
         seg = json.loads(z.read("segments.jsonl").decode().splitlines()[0])
         assert {"file_sha256", "start", "end", "speaker", "text", "status", "confidence", "source",
                 "updated_at", "uid"} <= set(seg)
@@ -64,9 +64,9 @@ def test_conflict_resolve_and_undo(labelled, client, tmp_path):
     # meanwhile this install reviews the same segment differently
     _ok(client.patch(f"/api/label/segments/{a['id']}", json={"text": "Fixed on desktop."}))
     staged = stage(client, tmp_path, blob)
-    assert staged["suggestions"][0]["dataset_id"] == ds and staged["suggestions"][0]["matched_files"] == 7
+    assert staged["suggestions"][0]["dataset_id"] == ds and staged["suggestions"][0]["matched_files"] == 6
     pl = _ok(client.get(f"/api/sync/imports/{staged['id']}/plan?target_dataset_id={ds}"))
-    assert pl["file_counts"] == {"matched": 7}
+    assert pl["file_counts"] == {"matched": 6}
     assert pl["counts"]["conflict"] == 1 and pl["counts"]["unchanged"] == len(segments_of(client, ds)) - 1
     c = pl["conflicts"][0]
     assert c["local"]["text"] == "Fixed on desktop." and c["incoming"]["text"] == "Fixed on laptop."
@@ -116,7 +116,7 @@ def test_import_as_new_dataset_reuses_known_audio(labelled, client, tmp_path):
     _, blob = export(client, labelled["unlabelled"])
     staged = stage(client, tmp_path, blob)
     pl = _ok(client.get(f"/api/sync/imports/{staged['id']}/plan"))
-    assert pl["file_counts"] == {"add": 7} and set(pl["counts"]) == {"add"}
+    assert pl["file_counts"] == {"add": 6} and set(pl["counts"]) == {"add"}
     out = _ok(client.post(f"/api/sync/imports/{staged['id']}/apply", json={"new_name": "From laptop"}))
     d = _ok(client.get(f"/api/datasets/{out['dataset_id']}"))
     assert d["name"] == "From laptop" and d["usable_files"] == 6
@@ -126,7 +126,7 @@ def test_import_as_new_dataset_reuses_known_audio(labelled, client, tmp_path):
 def test_fresh_install_from_package_with_audio(labelled, client, tmp_path, monkeypatch):
     _, blob = export(client, labelled["unlabelled"], include_audio=True, include_outputs=True)
     with zipfile.ZipFile(__import__("io").BytesIO(blob)) as z:
-        assert sum(1 for n in z.namelist() if n.startswith("audio/")) == 7
+        assert sum(1 for n in z.namelist() if n.startswith("audio/")) == 6
     # a second install: empty data folder
     monkeypatch.setenv("CONCORD_DATA", str(tmp_path / "other-install"))
     reset_settings()
@@ -134,9 +134,9 @@ def test_fresh_install_from_package_with_audio(labelled, client, tmp_path, monke
     db.migrate()
     assert _ok(client.get("/api/datasets")) == []
     staged = stage(client, tmp_path, blob)
-    assert staged["suggestions"] == [] and staged["counts"]["audio_files"] == 7
+    assert staged["suggestions"] == [] and staged["counts"]["audio_files"] == 6
     out = _ok(client.post(f"/api/sync/imports/{staged['id']}/apply", json={}))
-    assert out["counts"]["model_outputs_added"] > 0 and len(out["counts"]["added_file_ids"]) == 7
+    assert out["counts"]["model_outputs_added"] > 0 and len(out["counts"]["added_file_ids"]) == 6
     d = _ok(client.get(f"/api/datasets/{out['dataset_id']}"))
     assert d["usable_files"] == 6 and d["status"] == "ready"
     f = _ok(client.get(f"/api/label/datasets/{d['id']}/files"))[0]
