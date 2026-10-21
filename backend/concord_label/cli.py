@@ -1,5 +1,5 @@
 """`python -m concord_label.cli <command>`: migrate, revision, and the offline kit commands
-export-offline, verify-kit and add-kit (OFFLINE_EXPORT_PLAN.md).
+export-offline, verify-kit and add-kit.
 
 Recording model responses (`record`) is Concord Bench's: Bench re-records `fixtures/recorded` and Label
 copies it (README.md)."""

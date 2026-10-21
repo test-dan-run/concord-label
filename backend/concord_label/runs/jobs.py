@@ -4,7 +4,7 @@ Job types:
 - ingest  {dataset_id, source, cleanup}         copy, decode, derive, parse references
 - check   {service}                             compatibility check on the check clip
 - label   {run_id}                              ensemble pseudo-labelling (Phase 2), writes segments
-- export  {export_id, services, kind, dest, ...}  an offline kit (OFFLINE_EXPORT_PLAN.md); needs no service
+- export  {export_id, services, kind, dest, ...}  an offline kit; needs no service
 - reference {export_id, dataset_id}             Send to Bench: write a reference package, push it if asked
 
 Before a job needs services, the worker starts them with the platform's `stack.py`. It batches: the

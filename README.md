@@ -86,7 +86,7 @@ backend/concord_label/
   label/       ensemble fusion, pseudo-label runs, console, annotate edits, live evaluation,
                label packages (sync), reference packages for Bench (refpkg), flags from Bench (flags)
   peer.py      Concord Bench: /api/config probe (cached), locked scores
-  offline/     offline kits (OFFLINE_EXPORT_PLAN.md)
+  offline/     offline kits
   api/         FastAPI routers
   migrations/  Alembic (0001 initial schema, 0002 dataset uid + reference_export)
 backend/concord_improve/   Phase 3 placeholder router; on hold, installed in no image
@@ -198,7 +198,7 @@ development, run Concord Label on the host instead.
 ## Offline kits
 
 Concord Label, Concord Bench or both, and chosen models, can go to a machine with no internet access
-([OFFLINE_EXPORT_PLAN.md](OFFLINE_EXPORT_PLAN.md), CONTRACTS.md §6). **Offline export** lists every
+(CONTRACTS.md §6). **Offline export** lists every
 platform service with its image and weight sizes; tick the models, pick a kit kind, tick the apps a full
 kit carries ("Include Concord Label" is ticked; "Include Concord Bench" shows Bench's local image tag, or
 says to run `just build` in that repository) and a destination folder, and the worker writes the kit there
