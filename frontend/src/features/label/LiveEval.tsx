@@ -32,7 +32,8 @@ function Live({ datasetId }: { datasetId: number }) {
     refetchInterval: 10_000,
   });
   const d = q.data;
-  const colors = useMemo(() => seriesColors(d?.asr.models ?? []), [d]);
+  // A model listed only for its locked score in Bench has no curve here, so no colour either.
+  const colors = useMemo(() => seriesColors((d?.asr.models ?? []).filter((m) => m.coverage > 0)), [d]);
   return (
     <>
       <PageHeader
@@ -57,7 +58,7 @@ function Live({ datasetId }: { datasetId: number }) {
               title="WER vs confirmed segments"
               subtitle={`${num(d.asr.confirmed)} confirmed${d.asr.ranked ? "" : ` · too few to rank below ${d.asr.min_rank}`}`}
             >
-              {d.asr.models.length === 0 ? (
+              {d.asr.models.every((m) => m.coverage === 0) ? (
                 <Empty>
                   {d.asr.confirmed === 0 ? (
                     <>No confirmed segments yet. <Link to={`/label/annotate/${datasetId}`}>Start annotating</Link>.</>

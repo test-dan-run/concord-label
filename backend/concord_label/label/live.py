@@ -9,6 +9,8 @@
 - The locked benchmark score comes from Concord Bench (SPLIT_PLAN.md §5.3, CONTRACTS.md §4): one request
   per page load, for the newest version Bench holds of this dataset, matched to models by registry name.
   Without a reachable Bench (or with no package of this dataset there) it is None and the page hides it.
+  A model with a locked score but no outputs here for the confirmed segments (a dataset uploaded with its
+  references) is listed with the locked score alone.
 """
 
 from __future__ import annotations
@@ -91,6 +93,11 @@ def asr_standings(session: Session, ds: Dataset, files: list[AudioFile], normali
             hyps.append(row.output.get("text", "") if row else None)
         covered = [k for k, h in enumerate(hyps) if h is not None]
         if not covered:
+            if locked.get(m.registry_name):
+                # No outputs here for the confirmed segments (references uploaded with the dataset, say), but
+                # Bench has benchmarked the model on a package of this dataset: list it with that score alone.
+                models.append({"model_id": m.id, "name": m.display_name, "service": m.registry_name, "coverage": 0,
+                               "words": 0, "wer": None, "ci": None, "curve": [], "locked": locked[m.registry_name]})
             continue
         hn = norm.many([hyps[k] or "" for k in covered])
         err = np.zeros(len(segs), dtype=float)

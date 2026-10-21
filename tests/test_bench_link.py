@@ -401,6 +401,20 @@ def test_locked_score_from_bench(labelled, client, bench, session):
     assert all(m["locked"] is None for m in live["asr"]["models"])
 
 
+def test_locked_score_of_a_model_with_no_outputs_here(label_flow, client, bench):
+    """An annotated dataset: its references were uploaded, so no model has outputs for them in Label. A model
+    Bench has a locked score for is still listed, with that score alone; one it has none for is not."""
+    ds = label_flow["dataset"]["id"]
+    live = _ok(client.get(f"/api/label/datasets/{ds}/live"))
+    assert live["asr"]["confirmed"] > 0
+    (m,) = live["asr"]["models"]
+    assert m["service"] == "whisper-large-v3" and m["locked"]["wer"] == 0.052 and m["locked"]["export_version"] == 2
+    assert (m["coverage"], m["wer"], m["curve"], m["rank"]) == (0, None, [], None)
+    bench.down = True
+    peer.forget()
+    assert _ok(client.get(f"/api/label/datasets/{ds}/live"))["asr"]["models"] == []
+
+
 def test_no_bench_no_locked_score(labelled, client, no_bench):
     live = _ok(client.get(f"/api/label/datasets/{labelled['unlabelled']}/live"))
     assert all(m["locked"] is None for m in live["asr"]["models"])
