@@ -103,6 +103,23 @@ export function nextLowConfidence(segs: Segment[], fromId: number | null, high =
   return null;
 }
 
+/** The segment at time `t` (a link from Concord Bench): one that contains `t` (not rejected first, then the
+ * latest start), else the nearest one. */
+export function segmentAt(segs: Segment[], t: number): number | null {
+  const inside = segs.filter((s) => s.start <= t && t <= s.end);
+  if (inside.length) {
+    const ranked = [...inside].sort((a, b) => Number(a.status === "rejected") - Number(b.status === "rejected") || b.start - a.start);
+    return ranked[0].id;
+  }
+  let best: Segment | null = null;
+  let gap = Infinity;
+  for (const s of segs) {
+    const d = Math.min(Math.abs(s.start - t), Math.abs(s.end - t));
+    if (d < gap) [best, gap] = [s, d];
+  }
+  return best?.id ?? null;
+}
+
 /** The pseudo-label button: re-fuse saved outputs, or run the members that are not saved first. */
 export function labelButton(saved: number, fresh: number): string {
   const total = saved + fresh;

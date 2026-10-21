@@ -7,7 +7,7 @@ import { AddModel } from "../features/models/AddModel";
 import { ContractPage } from "../features/models/ContractPage";
 import { ModelsPage } from "../features/models/ModelsPage";
 import { JobsPage } from "../features/jobs/JobsPage";
-import { AnnotatePage, OpenFile } from "../features/label/Annotate";
+import { AnnotatePage, OpenFile, OpenFileBySha } from "../features/label/Annotate";
 import { LiveEvalPage } from "../features/label/LiveEval";
 import { PseudoLabelPage } from "../features/label/PseudoLabel";
 import { ReviewConsole } from "../features/label/ReviewConsole";
@@ -49,6 +49,7 @@ export const router = createBrowserRouter([
       { path: "label/pseudo/:datasetId", element: <PseudoLabelPage /> },
       { path: "label/annotate", element: <AnnotatePage /> },
       { path: "label/annotate/:datasetId", element: <AnnotatePage /> },
+      { path: "label/file/by-sha/:sha256", element: <OpenFileBySha /> },
       { path: "label/file/:fileId", element: <OpenFile /> },
       { path: "label/live", element: <LiveEvalPage /> },
       { path: "label/live/:datasetId", element: <LiveEvalPage /> },

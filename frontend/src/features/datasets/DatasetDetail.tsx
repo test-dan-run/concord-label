@@ -5,6 +5,7 @@ import { api, type Dataset, type Run } from "../../lib/api";
 import { ago, clock, hours, num } from "../../lib/format";
 import { TagInput } from "../../components/TagInput";
 import { Button, Chip, Empty, ErrorNote, Fact, JobPill, LinkButton, PageHeader, Panel, Spinner, StatusDot } from "../../components/ui";
+import { ImportFlags, SendHistory, SendToBench } from "../label/SendToBench";
 
 interface FileRow {
   id: number;
@@ -163,6 +164,7 @@ export function DatasetDetail() {
                 </div>
               ))}
             </Panel>
+            <SendHistory datasetId={d.id} />
           </div>
           <aside className="w-full xl:w-[360px] shrink-0 flex flex-col gap-4">
             <Panel title="Tags" actions={editTags === null ? <Button size="sm" onClick={() => setEditTags(d.tags)}>Edit</Button> : undefined}>
@@ -178,6 +180,8 @@ export function DatasetDetail() {
                 </>
               )}
             </Panel>
+            <SendToBench datasetId={d.id} />
+            <ImportFlags datasetId={d.id} />
           </aside>
         </div>
       )}

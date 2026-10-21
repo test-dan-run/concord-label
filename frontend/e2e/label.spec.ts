@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 
 // Concord Label on the replayed fixture set: tests/e2e_server.py registers the fixture models, uploads the
@@ -91,7 +92,7 @@ test("annotate: edit, shortcuts, multi-select, bulk confirm, audio", async ({ pa
   expect(errors).toEqual([]);
 });
 
-test("live evaluation loads standings and DER; no promotion, no locked score yet", async ({ page }) => {
+test("live evaluation loads standings and DER; Send to Bench, no locked score without Bench", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/label/live");
   await page.getByRole("main").getByRole("link", { name: /Unlabelled calls/ }).click();
@@ -99,8 +100,10 @@ test("live evaluation loads standings and DER; no promotion, no locked score yet
   await expect(page.getByRole("heading", { name: "WER vs confirmed segments" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Standings" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Diarisation (DER)" })).toBeVisible();
-  // Promote is gone (Send to Bench replaces it in S4); the locked score is hidden until Bench is linked (S5)
+  // Send to Bench replaces Promote; without BENCH_URL the package is a download and the locked score is hidden
   await expect(page.getByRole("heading", { name: "Promote to benchmark dataset" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Send to Bench" })).toBeVisible();
+  await expect(page.getByText("Download (zip)")).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Locked" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Use for retraining" })).toHaveCount(0);
   expect(errors).toEqual([]);
@@ -125,4 +128,45 @@ test("import / export: build a package, import it back, see the merge plan", asy
   await expect(page.getByText(/Merged into dataset/)).toBeVisible();
   await expect(page.getByRole("row", { name: /Import.*applied/ }).first()).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("send to Bench without Bench: download a reference package, listed in the history", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/datasets");
+  await page.getByRole("link", { name: "Synth fixtures" }).click();
+  const panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "Send to Bench" }) });
+  await expect(panel.getByLabel("Package name")).toHaveValue("Synth fixtures");
+  await expect(panel.getByText("Download (zip)")).toBeVisible();
+  await expect(panel.getByText("speaker + text (SegLST)")).toBeVisible();
+  await panel.getByLabel("Package name").fill("Synth refs");
+  await panel.getByRole("button", { name: "Send to Bench" }).click();
+  const link = panel.getByRole("link", { name: /^Download synth-refs-refs-v\d+\.zip/ });
+  await expect(link).toBeVisible({ timeout: 30_000 });
+  const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
+  expect(download.suggestedFilename()).toMatch(/^synth-refs-refs-v\d+\.zip$/);
+  const file = await download.path();
+  expect(fs.statSync(file!).size).toBeGreaterThan(1000);
+  expect(fs.readFileSync(file!).subarray(0, 2).toString()).toBe("PK");
+  const history = page.locator("section").filter({ has: page.getByRole("heading", { name: "Sent to Bench" }) });
+  await expect(history.getByRole("row", { name: /v\d+ complete .*download done/ }).first()).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("open in Label by sha256: the annotator opens on the file at t", async ({ page, request }) => {
+  const errors = watchErrors(page);
+  const datasets = (await (await request.get("/api/datasets")).json()) as { id: number; uid: string; name: string }[];
+  const ds = datasets.find((d) => d.name === "Synth fixtures")!;
+  const files = (await (await request.get(`/api/datasets/${ds.id}/files`)).json()) as { id: number; sha256: string; status: string; stem: string }[];
+  const f = files.find((x) => x.status === "ok")!;
+  const view = (await (await request.get(`/api/label/files/${f.id}`)).json()) as { segments: { start: number; end: number; text: string | null }[] };
+  const seg = view.segments[1];
+  const t = Math.round(((seg.start + seg.end) / 2) * 100) / 100;
+  await page.goto(`/label/file/by-sha/${f.sha256}?dataset_uid=${ds.uid}&t=${t}`);
+  await expect(page).toHaveURL(new RegExp(`/label/annotate/${ds.id}\\?file=${f.id}&t=`));
+  await expect(page.getByRole("heading", { name: f.stem, exact: true })).toBeVisible();
+  await expect(page.locator('tbody tr[aria-current="true"]').getByLabel(/^Transcript at /)).toHaveValue(seg.text ?? "");
+  // an unknown fingerprint says so
+  await page.goto(`/label/file/by-sha/${"0".repeat(64)}?dataset_uid=${ds.uid}`);
+  await expect(page.getByText(/This audio is not in Concord Label/)).toBeVisible();
+  expect(errors.filter((e) => !e.includes("404"))).toEqual([]);
 });

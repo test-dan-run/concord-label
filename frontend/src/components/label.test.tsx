@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Segment } from "../lib/api";
-import { confidenceColor, cycleSpeaker, labelButton, nextLowConfidence, overlapRegions, selectRange } from "../lib/label";
+import { confidenceColor, cycleSpeaker, labelButton, nextLowConfidence, overlapRegions, segmentAt, selectRange } from "../lib/label";
 import { C } from "../lib/colors";
 
 function seg(id: number, over: Partial<Segment> = {}): Segment {
@@ -74,5 +74,18 @@ describe("labels and colours", () => {
     expect(confidenceColor(0.6)).toBe(C.warn);
     expect(confidenceColor(0.2)).toBe(C.bad);
     expect(confidenceColor(null)).toBe(C.subtle);
+  });
+});
+
+describe("segmentAt", () => {
+  const segs = [seg(1, { start: 0, end: 3 }), seg(2, { start: 2, end: 5, status: "rejected" }), seg(3, { start: 2.5, end: 4 }), seg(4, { start: 8, end: 9 })];
+  it("picks a segment containing t, not a rejected one, latest start first", () => {
+    expect(segmentAt(segs, 1)).toBe(1);
+    expect(segmentAt(segs, 2.7)).toBe(3);
+    expect(segmentAt(segs, 4.5)).toBe(2);
+  });
+  it("falls back to the nearest segment", () => {
+    expect(segmentAt(segs, 7)).toBe(4);
+    expect(segmentAt([], 1)).toBeNull();
   });
 });

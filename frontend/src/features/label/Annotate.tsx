@@ -5,10 +5,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, type AnnotateView, type LabelFile, type SegStatus, type Segment } from "../../lib/api";
+import { api, qs, type AnnotateView, type LabelFile, type SegStatus, type Segment } from "../../lib/api";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, selectRange, STATUS_LABELS } from "../../lib/label";
+import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, segmentAt, selectRange, STATUS_LABELS } from "../../lib/label";
 import { AudioPlayer, PlayFrom, useAudio } from "../../components/AudioPlayer";
 import { Timeline, type LaneGroup } from "../../components/Timeline";
 import * as I from "../../components/icons";
@@ -34,6 +34,30 @@ export function OpenFile() {
   if (!q.data) return <Spinner />;
   const seg = params.get("segment");
   return <Navigate replace to={`/label/annotate/${q.data.dataset_id}?file=${fileId}${seg ? `&segment=${seg}` : ""}`} />;
+}
+
+/** `/label/file/by-sha/:sha256?dataset_uid=&t=` (Concord Bench's "Open in Label", CONTRACTS.md §5): find the
+ * file by its audio fingerprint within the source dataset, then open the annotator on it at `t`. */
+export function OpenFileBySha() {
+  const { sha256 } = useParams();
+  const [params] = useSearchParams();
+  const datasetUid = params.get("dataset_uid");
+  const q = useQuery({
+    queryKey: ["file-by-sha", sha256, datasetUid],
+    queryFn: () => api.get<{ file_id: number; dataset_id: number }>(`/files/by-sha/${sha256}${qs({ dataset_uid: datasetUid })}`),
+    retry: false,
+  });
+  if (q.error) {
+    return (
+      <>
+        <PageHeader title="Open in Label" />
+        <ErrorNote error={`This audio is not in Concord Label${datasetUid ? " in the dataset it was sent from" : ""}: ${(q.error as Error).message}`} />
+      </>
+    );
+  }
+  if (!q.data) return <Spinner />;
+  const t = params.get("t");
+  return <Navigate replace to={`/label/annotate/${q.data.dataset_id}?file=${q.data.file_id}${t ? `&t=${encodeURIComponent(t)}` : ""}`} />;
 }
 
 export function AnnotatePage() {
@@ -73,7 +97,9 @@ function AnnotateDataset({ datasetId }: { datasetId: number }) {
       </>
     );
   }
-  return <Annotator key={fileId} datasetId={datasetId} fileId={fileId} files={files.data ?? []} onFile={go} initialSegment={Number(params.get("segment")) || null} initialShow={status ?? "all"} />;
+  const t = params.get("t");
+  const initialTime = t !== null && t !== "" && Number.isFinite(Number(t)) ? Number(t) : null;
+  return <Annotator key={fileId} datasetId={datasetId} fileId={fileId} files={files.data ?? []} onFile={go} initialSegment={Number(params.get("segment")) || null} initialTime={initialTime} initialShow={status ?? "all"} />;
 }
 
 function useLabelMutations(fileId: number, datasetId: number) {
@@ -106,6 +132,7 @@ function Annotator({
   files,
   onFile,
   initialSegment,
+  initialTime,
   initialShow,
 }: {
   datasetId: number;
@@ -113,6 +140,7 @@ function Annotator({
   files: LabelFile[];
   onFile: (id: number) => void;
   initialSegment: number | null;
+  initialTime: number | null;
   initialShow: Show;
 }) {
   const navigate = useNavigate();
@@ -133,11 +161,19 @@ function Annotator({
   const high = v?.thresholds.high ?? 0.85;
   const current = segs.find((s) => s.id === cur) ?? null;
 
-  // Pick a starting segment once loaded: the requested one, else the first low-confidence one.
+  // Pick a starting segment once loaded: the requested one, else the one at the requested time (and the
+  // playhead goes there), else the first low-confidence one.
+  const seeked = useRef(false);
   useEffect(() => {
     if (!v || (cur !== null && segs.some((s) => s.id === cur))) return;
-    setCur(nextLowConfidence(segs, null, high) ?? segs[0]?.id ?? null);
-  }, [v, segs, cur, high]);
+    const atTime = initialTime !== null && !seeked.current ? segmentAt(segs, initialTime) : null;
+    setCur(atTime ?? nextLowConfidence(segs, null, high) ?? segs[0]?.id ?? null);
+  }, [v, segs, cur, high, initialTime]);
+  useEffect(() => {
+    if (!v || initialTime === null || seeked.current) return;
+    seeked.current = true;
+    ctl.seek(Math.max(0, Math.min(initialTime, v.file.duration)));
+  }, [v, initialTime, ctl]);
   useEffect(() => {
     if (cur !== null) rowRefs.current.get(cur)?.scrollIntoView({ block: "nearest" });
   }, [cur]);

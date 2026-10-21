@@ -50,7 +50,7 @@ export function qs(params: Record<string, string | number | boolean | null | und
 
 // ---------------------------------------------------------------- shapes
 
-/** GET /api/config (CONTRACTS.md §1). `peer` is Concord Bench; it is filled in once the apps are linked (S5). */
+/** GET /api/config (CONTRACTS.md §1). `peer` is Concord Bench (BENCH_URL), and whether it answered. */
 export interface AppConfig {
   app: "concord-label";
   version: string;
@@ -83,6 +83,7 @@ export interface Job {
 
 export interface Dataset {
   id: number;
+  uid: string;
   name: string;
   language: string | null;
   description: string | null;
@@ -369,8 +370,8 @@ export interface LiveModel {
   wer: number | null;
   ci: [number, number] | null;
   curve: { confirmed: number; wer: number | null }[];
-  /** The model's locked benchmark score from Concord Bench; always null until the apps are linked (S5). */
-  locked: { wer: number | null; run_id: number; normaliser: string } | null;
+  /** The model's locked benchmark score in Concord Bench (newest version of this dataset there); null without Bench. */
+  locked: { wer: number | null; run_id: number; normaliser: string; dataset: string | null; export_version: number | null } | null;
   rank: number | null;
 }
 
@@ -505,4 +506,59 @@ export interface OfflineExport {
   job: Job | null;
   created_at: string;
   finished_at: string | null;
+}
+
+// ---------------------------------------------------------------- Send to Bench (CONTRACTS.md §2, §4)
+
+export type Peer = AppConfig["peer"];
+
+export interface ReferencePreview {
+  scope: "complete" | "any";
+  files: number;
+  segments: number;
+  hours: number;
+  left_out: number;
+  label_types: string[];
+  refs_file: string | null;
+  problem: string | null;
+  review: Record<string, number>;
+  next_version: number;
+  models: string[];
+  dataset: { id: number; name: string; uid: string; tags: string[] };
+  peer: Peer;
+  destination: "push" | "download";
+  push_refused: string | null;
+}
+
+export interface ReferenceExport {
+  id: number;
+  dataset_id: number;
+  version: number | null;
+  name: string;
+  scope: "complete" | "any";
+  tags: string[];
+  include_audio: "auto" | "always" | "never";
+  include_outputs: boolean;
+  destination: "push" | "download";
+  status: "queued" | "running" | "done" | "failed";
+  counts: { files?: number; segments?: number; hours?: number; audio_files?: number; outputs?: number; left_out?: number; bytes?: number };
+  label_types: string[] | null;
+  audio_included: "all" | "partial" | "none" | null;
+  file: string | null;
+  download: string | null;
+  bench_url: string | null;
+  bench_import_id: number | null;
+  bench_dataset_id: number | null;
+  bench_preview: Record<string, unknown>;
+  error: string | null;
+  job_id: number | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface FlagsImport {
+  matched: number;
+  unmatched: number;
+  dataset_id: number;
+  dataset: string;
 }

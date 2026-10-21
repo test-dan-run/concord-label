@@ -79,9 +79,9 @@ lint:
     uv run lint-imports
     cd frontend && npm run lint --silent
 
-# check contracts/samples (CONTRACTS.md) and compare with the other app's repository next to this one
-check-contracts:
-    {{py}} contracts/check.py
+# check contracts/samples (CONTRACTS.md) and compare with the other app's repository: just check-contracts [--peer PATH]
+check-contracts *args:
+    {{py}} contracts/check.py {{args}}
 
 # offline kit of platform services: just export-offline NAME... [--kind full|models] [--out DIR] [--concord-image IMG]
 export-offline +args:

@@ -10,8 +10,9 @@ Concord Label is one of two apps that came from Concord (SPLIT_PLAN.md):
 
 The two apps share no code. They agree only on the formats and endpoints in [CONTRACTS.md](CONTRACTS.md),
 which is kept identical in both repositories (`just check-contracts`). Each app has its own data directory
-and database. Sending finished references to Bench ("Send to Bench") and the links between the apps come
-in later milestones (SPLIT_PLAN.md §9, S4 and S5). Until then Label works on its own.
+and database. Finished references go to Bench with "Send to Bench" (a reference package, pushed when
+`BENCH_URL` answers, else downloaded); Bench links back to files in Label and sends flags back. Every link
+is optional: without Bench, Label works on its own.
 
 Concord Label does not run models. It reads the platform's endpoint map through `aicore`, starts the
 services a job needs with the platform's own `tools/stack.py`, and calls them over their contracts.
@@ -48,16 +49,17 @@ backend/concord_label/
   core/        settings, paths (the only module that knows where files live), SQLite models, db
   datasets/    audio (ffmpeg probe/decode, clipping, 16 kHz derive, peaks), annotation parsers, ingest
   registry/    platform registry reader, compatibility check
-  platform/    health, image tags, ensure_services() -> stack.py up
+  platform/    health, image tags, ensure_services() -> stack.py up --holder, leases (renew, release)
   adapters/    openai_asr, openai_chat_audio, oip_segmenter; record / replay transport
   runs/        job queue + worker (ingest, check, label, export), output cache
   cuts.py      a dataset's usable files; segmenter output -> merged, padded ASR cuts
   metrics/     normalisers, wer (jiwer), der/jer (pyannote.metrics), vad (used by the compatibility check)
   label/       ensemble fusion, pseudo-label runs, console, annotate edits, live evaluation,
-               label packages (sync)
+               label packages (sync), reference packages for Bench (refpkg), flags from Bench (flags)
+  peer.py      Concord Bench: /api/config probe (cached), locked scores
   offline/     offline kits (OFFLINE_EXPORT_PLAN.md)
   api/         FastAPI routers
-  migrations/  Alembic (one initial revision)
+  migrations/  Alembic (0001 initial schema, 0002 dataset uid + reference_export)
 backend/concord_improve/   Phase 3 placeholder router; on hold, installed in no image
 frontend/src/  React + TanStack Query + Tailwind (AeroAudio tokens in index.css)
 contracts/     the contract samples and their checker (CONTRACTS.md); identical in Concord Bench
@@ -88,9 +90,12 @@ one of these modules is checked against Concord Bench in the same sitting:
   clip and detects capabilities (ASR / VAD / diarisation) and timing (word / segment / text). Nothing has
   to be typed.
 - **Jobs.** One worker process works through the `job` table: ingest, compatibility check, label run,
-  offline kit. Before a job it asks the platform for the job's services (plus those of queued jobs that
-  fit next to them under `util_limit`). If the platform can't start one, the job is `blocked` with the
-  platform's message. Every model call goes through the output cache (model, audio, span, params incl.
+  offline kit, Send to Bench. Before a job it asks the platform for the job's services (plus those of
+  queued jobs that fit next to them under `util_limit`) with `stack.py up NAME... --holder label:job-<id>`,
+  even when they are already up: that leases them, so Concord Bench's worker never stops them mid-run.
+  The lease is renewed every minute (`stack.py lease`) and released when the job ends (`stack.py
+  release`). If the platform can't start a service (or it does not fit next to services Bench has
+  leased), the job is `blocked` with the platform's message. Every model call goes through the output cache (model, audio, span, params incl.
   image tag).
 - **Console** (`/label`): label progress per dataset in audio time (confirmed / auto-accepted / needs
   review / rejected / running / not labelled) and the next action.
@@ -108,20 +113,35 @@ one of these modules is checked against Concord Bench in the same sitting:
   to rank" below 30, bootstrap 95% intervals, DER on fully reviewed files, the latest confirmations.
   Metrics: WER via jiwer after a normaliser (`basic` default, `whisper_en`, `none`, or any platform
   `text.transform` service followed by `basic`); DER/JER via pyannote.metrics with a collar (default
-  0.25 s each side). The locked benchmark score from Concord Bench is hidden until the apps are linked.
+  0.25 s each side). With Concord Bench reachable, each model's locked score there (newest version of
+  this dataset, CONTRACTS.md §4) shows next to its live WER; otherwise the column is hidden.
+- **Send to Bench** (live evaluation and dataset pages; replaces the single-app Promote): a reference
+  package (CONTRACTS.md §2) of confirmed segments only. Scope `complete` takes fully reviewed files (ASR +
+  DER), `any` every file with a confirmed segment (ASR only). The references file follows what the
+  segments carry (SegLST, JSONL or RTTM), with segment uids so flags can come back; audio auto / always /
+  never; optionally the segmenter's whole-file outputs with their full params and image. With `BENCH_URL`
+  reachable on the same contract version the package is pushed (Bench is asked which audio it lacks, the
+  zip goes up in 8 MB chunks, Bench stages it as a reference import to accept there); otherwise it is a
+  zip to download. Every send is a new `export_version`, listed on the dataset page.
+- **Links from Bench**: `/label/file/by-sha/<sha256>?dataset_uid=<uid>&t=<s>` opens the annotator on that
+  file at `t`; `POST /api/flags/import` (or a flags file uploaded on the dataset page) flags segments,
+  matched by uid or by overlap, and they show in the annotator's flags lane.
 - **Sync**: label packages between Label installs (`manifest.json`, `files.csv`, `segments.jsonl`,
   `keywords.jsonl`, optional `runs/` and `audio/`). Import is staged and previewed; files match by
   SHA-256, segments by `uid` or time overlap. Reviewed work is never overwritten by pseudo-labels,
   reviewed-on-both-sides differences become conflicts to resolve, and a snapshot taken before the merge
   makes it undoable.
 - **`GET /api/config`** reports `app` (`concord-label`), `version`, `contract_version` and `peer`
-  (CONTRACTS.md §1). `peer` stays empty until the link to Bench is built.
+  (CONTRACTS.md §1): `BENCH_URL`, whether Bench answered `/api/config` (1 s timeout, cached 30 s) and its
+  contract version.
 
 ## Settings
 
 Environment variables (or `.env`, see [.env.example](.env.example)): `CONCORD_DATA` (default `data/` in
 this repository), `CONCORD_PORT` (8620), `CONCORD_WEB_PORT` (5174), `PLATFORM_DIR`, `AICORE_ENDPOINTS`,
-`AI_HOST`, `NO_EVICT`, `REPLAY_DIR`, `RECORD_DIR`, `CONCORD_HOME`, `CONCORD_IMAGE`.
+`AI_HOST`, `NO_EVICT`, `REPLAY_DIR`, `RECORD_DIR`, `CONCORD_HOME`, `CONCORD_IMAGE`, `BENCH_URL` (Concord
+Bench, unset by default; e.g. `http://localhost:8600`, or `http://concord-bench:8600` on a shared Docker
+network).
 
 ## Fixtures and recordings
 
@@ -167,13 +187,10 @@ just verify-kit /mnt/usb/concord-offline-...                                  # 
 
 ## Status
 
-Milestone S2 of SPLIT_PLAN.md: Label runs on its own. Still to come:
+Milestones S2, S4, S5 and S6 of SPLIT_PLAN.md (Label side): Label runs on its own, sends references to
+Bench, links with it, and leases its services. Still to come:
 
-- S4: "Send to Bench" (reference package, CONTRACTS.md §2) replaces the single-app Promote.
-- S5: `BENCH_URL`, the locked benchmark score in live evaluation, flags back from Bench, and
-  `/label/file/by-sha/<sha256>` links from Bench.
-- S6: service leases in the platform, so Label's and Bench's workers do not evict each other's services.
-- S7: kits with either or both apps.
+- S7: kits with either or both apps; the round-trip e2e test with the `concord-bench` image (§10).
 
 Known limits:
 - KWS is not built (Q6). Only its hooks exist: the enums, the `keyword_event` table, the disabled

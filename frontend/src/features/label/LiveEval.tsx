@@ -7,6 +7,7 @@ import { useNormaliser, useNormalisers } from "../../lib/config";
 import { ago, clock, deltaPts, num, pct } from "../../lib/format";
 import { Empty, ErrorNote, Fact, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 import { Crumbs, DatasetChooser, LabelTabs } from "./common";
+import { SendToBench } from "./SendToBench";
 
 export function LiveEvalPage() {
   const { datasetId } = useParams();
@@ -70,7 +71,7 @@ function Live({ datasetId }: { datasetId: number }) {
             </Panel>
             <Standings d={d} colors={colors} />
           </div>
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid gap-5 lg:grid-cols-3">
             <Panel title="Diarisation (DER)" subtitle={`${num(d.der.files)} of ${num(d.der.of)} files fully reviewed · collar ${d.der.collar} s`}>
               {d.der.files === 0 && <span className="text-[13px] text-muted">DER needs files where every segment is reviewed, so missing labels never count as misses.</span>}
               {d.der.files > 0 && d.der.models.length === 0 && <span className="text-[13px] text-muted">No diariser has saved outputs for these files.</span>}
@@ -81,6 +82,7 @@ function Live({ datasetId }: { datasetId: number }) {
             <Panel title="Keyword spotting">
               <span className="text-[13px] text-muted">Not built yet (Q6). Package files keep an empty keywords.jsonl so progress stays forward-compatible.</span>
             </Panel>
+            <SendToBench datasetId={datasetId} />
           </div>
           <Panel title="Latest confirmations">
             {d.feed.length === 0 && <span className="text-[13px] text-muted">Nothing confirmed by hand yet.</span>}
@@ -103,7 +105,8 @@ function Live({ datasetId }: { datasetId: number }) {
 }
 
 function Standings({ d, colors }: { d: LiveEval; colors: Map<number, string> }) {
-  // The locked benchmark score comes from Concord Bench once the apps are linked (S5); hidden until then.
+  // The locked benchmark score comes from Concord Bench (BENCH_URL); hidden when Bench is not reachable or has no
+  // package of this dataset.
   const showLocked = d.asr.models.some((m) => m.locked !== null);
   return (
     <Panel title="Standings" subtitle={d.asr.ranked ? "95% intervals: bootstrap over segments." : `Too few to rank: ${d.asr.min_rank} confirmed segments needed.`}>
@@ -136,7 +139,7 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<number, string> }) 
                   {showLocked && (
                     <td className="px-2 py-2 text-right num">
                       {m.locked ? (
-                        <span title={`Concord Bench · run ${m.locked.run_id} · ${m.locked.normaliser}`}>
+                        <span title={`Concord Bench · ${m.locked.dataset ?? "dataset"}${m.locked.export_version ? ` (v${m.locked.export_version})` : ""} · run ${m.locked.run_id} · ${m.locked.normaliser}`}>
                           {pct(m.locked.wer)}
                           {m.wer !== null && m.locked.wer !== null && <span className="text-[11px] text-muted"> ({deltaPts(m.wer - m.locked.wer)})</span>}
                         </span>
