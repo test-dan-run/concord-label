@@ -83,7 +83,7 @@ lint:
 check-contracts *args:
     {{py}} contracts/check.py {{args}}
 
-# offline kit of platform services: just export-offline NAME... [--kind full|models] [--out DIR] [--concord-image IMG]
+# offline kit of platform services: just export-offline NAME... [--kind full|models] [--out DIR] [--app APP[=IMAGE]]...
 export-offline +args:
     {{py}} -m concord_label.cli export-offline {{args}}
 
