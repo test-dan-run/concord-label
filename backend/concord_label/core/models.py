@@ -2,7 +2,10 @@
 
 The tables Concord Bench also has (dataset, audio_file, segment, keyword_event, model, model_output, job,
 offline_export) started identical to Bench's and may change separately; only CONTRACTS.md must stay
-compatible. Label's own: `run` (label runs only) and `sync_package`.
+compatible. Label's own: `run` (label runs only), `sync_package` and `reference_export`.
+
+`dataset.uid` names a dataset across apps: it is `source.dataset_uid` in the reference packages sent to
+Concord Bench (CONTRACTS.md §2) and in the flags that come back (§3).
 
 Pseudo-labels carry `source_run_id` (a `label` run) and a status from confidence triage; a person's edits
 set `edited_at`. Improve can later read segments without Label importing it.
@@ -82,6 +85,7 @@ class JobStatus(enum.StrEnum):
 class Dataset(Base):
     __tablename__ = "dataset"
     id: Mapped[int] = mapped_column(primary_key=True)
+    uid: Mapped[str] = mapped_column(String(32), default=new_uid, unique=True)
     name: Mapped[str] = mapped_column(String(200))
     language: Mapped[str | None] = mapped_column(String(32))
     description: Mapped[str | None] = mapped_column(Text)
@@ -276,6 +280,35 @@ class SyncPackage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime)
     undone_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ReferenceExport(Base):
+    """One reference package sent to Concord Bench, pushed or downloaded (SPLIT_PLAN.md §4.2,
+    CONTRACTS.md §2). `version` is the package's `export_version`, given when the package is written."""
+
+    __tablename__ = "reference_export"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("dataset.id", ondelete="CASCADE"))
+    version: Mapped[int | None] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(200))
+    scope: Mapped[str] = mapped_column(String(16))  # complete | any
+    tags: Mapped[list[str]] = mapped_column(default=list)
+    include_audio: Mapped[str] = mapped_column(String(8), default="auto")  # auto | always | never
+    include_outputs: Mapped[bool] = mapped_column(Boolean, default=False)
+    destination: Mapped[str] = mapped_column(String(8))  # download | push
+    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | running | done | failed
+    # files, segments, hours, audio_files, outputs, left_out (not fully reviewed), bytes
+    counts: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    manifest: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    path: Mapped[str | None] = mapped_column(String(1000))  # the zip
+    bench_url: Mapped[str | None] = mapped_column(String(500))
+    bench_import_id: Mapped[int | None] = mapped_column(Integer)  # Bench's staged reference import
+    bench_dataset_id: Mapped[int | None] = mapped_column(Integer)  # set if Bench ever reports it
+    bench_preview: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    error: Mapped[str | None] = mapped_column(Text)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("job.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class OfflineExport(Base):

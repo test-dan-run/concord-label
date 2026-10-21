@@ -36,6 +36,11 @@ def exports() -> Path:
     return data_root() / "exports"
 
 
+def reference_packages() -> Path:
+    """Reference packages written for Concord Bench (downloaded or pushed)."""
+    return data_root() / "exports" / "reference"
+
+
 def offline_kits() -> Path:
     """Default destination of offline kits (the export form can name any folder)."""
     return data_root() / "offline"
