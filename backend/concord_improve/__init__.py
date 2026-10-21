@@ -1,8 +1,9 @@
-"""Phase 3 (Improve): retraining / fine-tuning. Only installed in concord-full (FEATURE_IMPROVE=1).
+"""Phase 3 (Improve): retraining / fine-tuning. On hold, and installed in no image (SPLIT_PLAN.md §3.2).
 
-On hold (PLAN §7, Q5): scope and launch mechanism are not confirmed, so this package only carries
-the router the variant plumbing mounts. It may read `segment`, `dataset` and `model`, and will own
-`training_run`; nothing in `concord` imports it (import-linter enforces this).
+On hold (PLAN §7, Q5): scope and launch mechanism are not confirmed, so this package only carries a
+placeholder router. When Phase 3 is scoped, a concord-label-full image installs it and a feature flag
+mounts the router at /api/improve. It may read `segment`, `dataset` and `model`, and will own
+`training_run`; nothing in `concord_label` imports it (import-linter enforces this).
 """
 
 from fastapi import APIRouter

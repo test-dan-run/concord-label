@@ -1,10 +1,19 @@
-# Concord
+# Concord Label
 
-Evaluate and label speech models (ASR, VAD / speaker diarisation) served by the personal AI platform,
-on datasets you upload. Phase 1 (Evaluate + Bring your own) and Phase 2 (Label) are built; Improve
-(Phase 3) is not. [HANDOFF.md](HANDOFF.md) says what to build, [PLAN.md](PLAN.md) how.
+Pseudo-label speech audio with ensembles of models served by the personal AI platform, review the labels
+by hand, and turn them into references. Labels cover transcripts (ASR) and speaker turns (diarisation).
 
-Concord does not run models. It reads the platform's endpoint map through `aicore`, starts the
+Concord Label is one of two apps that came from Concord (SPLIT_PLAN.md):
+
+- **Concord Bench** benchmarks models on reference datasets and analyses their errors (port 8600).
+- **Concord Label** (this repository) produces those references (port 8610).
+
+The two apps share no code. They agree only on the formats and endpoints in [CONTRACTS.md](CONTRACTS.md),
+which is kept identical in both repositories (`just check-contracts`). Each app has its own data directory
+and database. Sending finished references to Bench ("Send to Bench") and the links between the apps come
+in later milestones (SPLIT_PLAN.md §9, S4 and S5). Until then Label works on its own.
+
+Concord Label does not run models. It reads the platform's endpoint map through `aicore`, starts the
 services a job needs with the platform's own `tools/stack.py`, and calls them over their contracts.
 
 ## Quickstart
@@ -12,159 +21,164 @@ services a job needs with the platform's own `tools/stack.py`, and calls them ov
 ```bash
 # prerequisites: uv, just, Node 22+, ffmpeg; the platform repo at ../../platform (rendered)
 just setup            # uv sync + npm install
-just dev              # API :8600 + worker + Vite :5173 -> open http://localhost:5173
+just dev              # API :8610 + worker + Vite :5174 -> open http://localhost:5174
 just test             # backend + frontend unit tests, no GPU or platform needed
-just lint             # ruff, import-linter (Evaluate must not import Improve), tsc
+just lint             # ruff, import-linter (concord_label must not import concord_improve), tsc
+just e2e              # Playwright on replayed fixtures (Docker; needs the concord-label image, `just build`)
+just check-contracts  # check contracts/samples and compare with Concord Bench next to this repository
 ```
+
+`CONCORD_PORT` and `CONCORD_WEB_PORT` change the ports. `just api` serves the built frontend
+(`just build-web`) from the API port, without Vite.
 
 Without a GPU, `REPLAY_DIR=fixtures/recorded AICORE_ENDPOINTS=fixtures/recorded/endpoints.generated.yaml just dev`
 serves recorded model responses for the fixture set, so the whole UI works offline.
 
-To try it on the fixture set: Upload dataset → Local path → `<repo>/fixtures/generated` (or drop the
-`dataset/audio` folder plus one file from `refs/stm`), then Add model for each speech model in the
-registry, then Run evaluation.
+To try it on the fixture set: Models → Add model for `pyannote-diarization`, `whisper-large-v3` and
+`faster-whisper-large-v3`; Datasets → Upload dataset → Audio only → Local path →
+`<repo>/fixtures/generated/dataset/audio`; then Pseudo-label that dataset and review it in Annotate.
+
+The database starts empty (SPLIT_PLAN.md §8). Nothing is migrated from the single-app Concord. Labelling
+work in progress moves over as a label package (Sync).
 
 ## Layout
 
 ```
-backend/concord/
+backend/concord_label/
   core/        settings, paths (the only module that knows where files live), SQLite models, db
   datasets/    audio (ffmpeg probe/decode, clipping, 16 kHz derive, peaks), annotation parsers, ingest
   registry/    platform registry reader, compatibility check
   platform/    health, image tags, ensure_services() -> stack.py up
   adapters/    openai_asr, openai_chat_audio, oip_segmenter; record / replay transport
-  runs/        job queue + worker, executor (ASR, seg, pipelines), output cache, scoring
-  metrics/     normalisers, wer (jiwer), der/jer + vad (pyannote.metrics), cpwer (meeteval), rtf, attribution
-  analysis/    top words, substitution pairs, slices, diarisation cards, tag-overlap suggestions
-  label/       Phase 2: ensemble fusion, pseudo-label runs, console, annotate edits, live evaluation,
-               promotion, label packages (import / export)
+  runs/        job queue + worker (ingest, check, label, export), output cache
+  cuts.py      a dataset's usable files; segmenter output -> merged, padded ASR cuts
+  metrics/     normalisers, wer (jiwer), der/jer (pyannote.metrics), vad (used by the compatibility check)
+  label/       ensemble fusion, pseudo-label runs, console, annotate edits, live evaluation,
+               label packages (sync)
+  offline/     offline kits (OFFLINE_EXPORT_PLAN.md)
   api/         FastAPI routers
-  migrations/  Alembic
-backend/concord_improve/   Phase 3 placeholder router; only in concord-full
-frontend/src/  React + TanStack Query/Table/Virtual + Tailwind (AeroAudio tokens in index.css)
-fixtures/      synth/ (kokoro-tts dialogue specs + committed turns), generated/ (audio, refs, templates),
-               recorded/ (model responses for replay)
+  migrations/  Alembic (one initial revision)
+backend/concord_improve/   Phase 3 placeholder router; on hold, installed in no image
+frontend/src/  React + TanStack Query + Tailwind (AeroAudio tokens in index.css)
+contracts/     the contract samples and their checker (CONTRACTS.md); identical in Concord Bench
+fixtures/      generated/ (audio, refs, templates, check clip) and recorded/ (model responses for replay),
+               both copied from Concord Bench
 tests/         pytest; `-m live` for tests against running services
 ```
 
+### Code copied from Concord Bench
+
+Both apps started from the same code, and each keeps its own copy (SPLIT_PLAN.md §2.2, §11). A fix in
+one of these modules is checked against Concord Bench in the same sitting:
+`core/`, `datasets/`, `registry/`, `platform/`, `adapters/`, `runs/cache.py`, `runs/jobs.py`,
+`runs/worker.py`, `cuts.py` (`prepare_cuts`, `usable_files`), `metrics/` (`wer`, `der`, `normalisers`,
+`vad`), `offline/`; in the frontend `components/` (`AudioPlayer`, `Timeline`, `timelineMath`, `TagInput`,
+`icons`, `ui`), `lib/` and the Models, Add model, Contract, Jobs, Upload and Offline export pages.
+
 ## How it works
 
-- **Datasets.** Upload a folder or zip (chunked), or point at a local folder. Originals are copied to
-  `CONCORD_DATA/originals/<sha256>`; models and playback use a derived 16 kHz mono FLAC. Files over
-  5 minutes are flagged and kept out of runs. Annotations are matched to audio by file stem: ASR
-  (JSONL / NeMo manifest / CSV / `.txt`), diarisation (RTTM / JSON segments / NeMo diarisation
-  manifest plus its RTTMs), speaker-attributed transcripts for cpWER (JSON/JSONL segments, STM, SegLST,
-  NeMo diarisation output JSON). Templates are under `fixtures/generated/templates`.
-- **Models.** Pick a registry entry; the compatibility check runs it on a synthesised 10 s
-  two-speaker clip and detects capabilities (ASR / VAD / diarisation) and timing (word / segment /
-  text). Nothing has to be typed.
-- **Runs.** One worker process works through the `job` table. Before a job it asks the platform
-  for the job's services (plus those of queued jobs that fit next to them under `util_limit`). If the
-  platform can't start one, the job is `blocked` with the platform's message. Every model call goes
-  through the output cache (model, audio, span, params incl. image tag), so pipelines reuse stage
-  outputs and rescoring with another normaliser or collar needs no inference.
-- **Pipelines.** Seg stage (or the dataset's own segments, "oracle") → merge short segments, pad
-  0.1 s → transcribe each cut → speaker-attributed hypothesis. cpWER error attribution:
-  ASR = A, segmentation = B − A, speaker = C − B (PLAN §5 M4).
-- **Metrics.** WER/CER via jiwer after a normaliser (`basic` default, `whisper_en`, `none`, or any
-  platform `text.transform` service followed by `basic`). DER/JER/VAD via pyannote.metrics with a
-  NIST-style collar (seconds each side, default 0.25 s). cpWER via meeteval.
-
-## Label (Phase 2)
-
-- **Review console** (`/label`): label progress per dataset in audio time (confirmed / auto-accepted /
-  needs review / rejected / running / not labelled) and the next action.
-- **Pseudo-label**: segments come from one VAD / diarisation model, cut exactly like a pipeline's, and
-  every ASR member transcribes each cut. Outputs saved by earlier runs (benchmarks, pipelines, other
-  label runs) are reused, so re-fusing needs no service at all. Fusion: best-aligned hypothesis
-  (default), ROVER over word-timed members, or one model. Confidence = member agreement; triage
-  >= 0.85 auto-accept, 0.50–0.84 review, below rejected. Pseudo-labels go into `segment` with the
-  label run as `source_run_id`.
+- **Datasets.** Upload a folder or zip (chunked), or point at a local folder: audio alone, or audio with
+  complete or partial annotations. Originals are copied to `CONCORD_DATA/originals/<sha256>`; models and
+  playback use a derived 16 kHz mono FLAC. Files over 5 minutes are flagged and kept out of label runs.
+  Annotations are matched to audio by file stem and become confirmed segments: ASR (JSONL / NeMo
+  manifest / CSV / `.txt`), diarisation (RTTM / JSON segments / NeMo diarisation manifest plus its RTTMs),
+  speaker-attributed transcripts (JSON/JSONL segments, STM, SegLST, NeMo diarisation output JSON).
+  Templates are under `fixtures/generated/templates`.
+- **Models.** Pick a registry entry; the compatibility check runs it on a synthesised 10 s two-speaker
+  clip and detects capabilities (ASR / VAD / diarisation) and timing (word / segment / text). Nothing has
+  to be typed.
+- **Jobs.** One worker process works through the `job` table: ingest, compatibility check, label run,
+  offline kit. Before a job it asks the platform for the job's services (plus those of queued jobs that
+  fit next to them under `util_limit`). If the platform can't start one, the job is `blocked` with the
+  platform's message. Every model call goes through the output cache (model, audio, span, params incl.
+  image tag).
+- **Console** (`/label`): label progress per dataset in audio time (confirmed / auto-accepted / needs
+  review / rejected / running / not labelled) and the next action.
+- **Pseudo-label**: segments come from one VAD / diarisation model; close or short same-speaker segments
+  are merged and each cut is padded by 0.1 s (`cuts.prepare_cuts`, the same cuts Concord Bench's
+  pipelines use); every ASR member transcribes each cut. Outputs saved by earlier label runs are reused,
+  so re-fusing needs no service at all. Fusion: best-aligned hypothesis (default), ROVER over word-timed
+  members, or one model. Confidence = member agreement; triage >= 0.85 auto-accept, 0.50–0.84 review,
+  below rejected. Pseudo-labels go into `segment` with the label run as `source_run_id`.
 - **Annotate**: whole-file timeline (one lane per speaker, overlap hatch, flags lane), segment grid with
-  shift-click multi-select and a bulk bar, inline transcript editing with autosave, speaker pill
-  cycling, merge / split / add. Shortcuts: Space, Tab, 1–8, V, M, Enter. Any edit marks the segment
-  as touched by a person; pseudo-labelling never replaces it afterwards.
-- **Live evaluation**: WER of each model against confirmed segments (from saved outputs only),
-  "too few to rank" below 30, bootstrap 95% intervals, the locked benchmark score, DER on fully
-  reviewed files, the latest confirmations. **Promote** copies confirmed segments into a new,
-  benchmarkable dataset; auto-accepted labels never become references.
-- **Import / export**: label packages (`manifest.json`, `files.csv`, `segments.jsonl`,
+  shift-click multi-select and a bulk bar, inline transcript editing with autosave, speaker pill cycling,
+  merge / split / add. Shortcuts: Space, Tab, 1–8, V, M, Enter. Any edit marks the segment as touched by
+  a person; pseudo-labelling never replaces it afterwards.
+- **Live evaluation**: WER of each model against confirmed segments (from saved outputs only), "too few
+  to rank" below 30, bootstrap 95% intervals, DER on fully reviewed files, the latest confirmations.
+  Metrics: WER via jiwer after a normaliser (`basic` default, `whisper_en`, `none`, or any platform
+  `text.transform` service followed by `basic`); DER/JER via pyannote.metrics with a collar (default
+  0.25 s each side). The locked benchmark score from Concord Bench is hidden until the apps are linked.
+- **Sync**: label packages between Label installs (`manifest.json`, `files.csv`, `segments.jsonl`,
   `keywords.jsonl`, optional `runs/` and `audio/`). Import is staged and previewed; files match by
   SHA-256, segments by `uid` or time overlap. Reviewed work is never overwritten by pseudo-labels,
-  reviewed-on-both-sides differences become conflicts to resolve, and a snapshot taken before the
-  merge makes it undoable.
+  reviewed-on-both-sides differences become conflicts to resolve, and a snapshot taken before the merge
+  makes it undoable.
+- **`GET /api/config`** reports `app` (`concord-label`), `version`, `contract_version` and `peer`
+  (CONTRACTS.md §1). `peer` stays empty until the link to Bench is built.
 
 ## Settings
 
-Environment variables (or `.env`, see [.env.example](.env.example)): `CONCORD_DATA`,
-`PLATFORM_DIR`, `AICORE_ENDPOINTS`, `AI_HOST`, `NO_EVICT`, `FEATURE_IMPROVE`, `REPLAY_DIR`,
-`RECORD_DIR`, `CONCORD_HOME`.
+Environment variables (or `.env`, see [.env.example](.env.example)): `CONCORD_DATA` (default `data/` in
+this repository), `CONCORD_PORT` (8610), `CONCORD_WEB_PORT` (5174), `PLATFORM_DIR`, `AICORE_ENDPOINTS`,
+`AI_HOST`, `NO_EVICT`, `REPLAY_DIR`, `RECORD_DIR`, `CONCORD_HOME`, `CONCORD_IMAGE`.
 
 ## Fixtures and recordings
 
-- `just fixtures` rebuilds `fixtures/generated` from `fixtures/synth/dialogues.yaml`. Turns already
-  in `fixtures/synth/turns/` are reused (kokoro on a GPU is not bit-exact), so the output is
-  identical; delete a turn file to re-synthesise it (needs `kokoro-tts` up).
-- `just record` runs the acceptance flow against live services from whatever state the platform is
-  in, starting what it needs, and rewrites `fixtures/recorded/` (responses, the endpoint map they
-  were taken with, and `summary.json`).
+Concord Bench owns the fixture sources. It regenerates `fixtures/generated` (`just fixtures`) and
+re-records `fixtures/recorded` against live services (`just record`). When either changes there, copy the
+folder into this repository. Label's tests and the e2e server use both: they register the fixture models
+from recorded compatibility checks and pseudo-label the fixture audio on recorded responses.
 
-## Images
+## Image
 
-`just build-lite` / `just build-full` build `concord-lite` and `concord-full` from one Dockerfile.
-Lite has no `concord_improve`, no Training nav, button or route. To run one next to the platform:
+`just build` builds `concord-label:0.2.0` (API and worker on port 8610). Improve is not in it. To run it
+next to the platform:
 
 ```bash
-docker run -d --name concord --network ai-net -p 127.0.0.1:8600:8600 \
+docker run -d --name concord-label --network ai-net -p 127.0.0.1:8610:8610 \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$(realpath ../../platform)":/platform -v concord-data:/data concord-lite:0.1.0
+  -v "$(realpath ../../platform)":/platform -v concord-label-data:/data concord-label:0.2.0
 ```
 
 `AI_HOST={name}` is set in the image, so `aicore` calls services by name on `ai-net`. stack.py runs
-compose against the host's Docker daemon with paths from the mounted platform directory, so mount
-the platform at the same absolute path it has on the host if your compose file uses relative bind
-mounts. In development, run Concord on the host instead.
+compose against the host's Docker daemon with paths from the mounted platform directory, so mount the
+platform at the same absolute path it has on the host if your compose file uses relative bind mounts. In
+development, run Concord Label on the host instead.
 
 ## Offline kits
 
-Concord and chosen models can go to a machine with no internet access ([OFFLINE_EXPORT_PLAN.md](OFFLINE_EXPORT_PLAN.md)).
-**Export for offline** (Bring your own) lists every platform service with its image and weight sizes;
-tick the models, pick a kit kind and a destination folder, and the worker writes the kit there
-(progress on the Jobs page). From the command line:
+Concord Label and chosen models can go to a machine with no internet access
+([OFFLINE_EXPORT_PLAN.md](OFFLINE_EXPORT_PLAN.md)). **Offline export** lists every platform service with its
+image and weight sizes; tick the models, pick a kit kind and a destination folder, and the worker writes
+the kit there (progress on the Jobs page). From the command line:
 
 ```bash
-just export-offline silero-vad whisper-large-v3 --kind full --out /mnt/usb   # Concord + platform + models
+just export-offline silero-vad whisper-large-v3 --kind full --out /mnt/usb   # Concord Label + platform + models
 just export-offline whisper-large-v3-turbo --kind models --out /mnt/usb       # models only, for an existing install
 just verify-kit /mnt/usb/concord-offline-...                                  # checksums against manifest.json
 ```
 
-- A kit is a folder: `images/` (one `docker save` of the models' images, plus `concord.tar` in a full
-  kit), `assets/` (weights in `AI_ASSETS` layout; Hugging Face models as a fresh cache entry with real
-  files), `platform/` (a runnable platform tree holding only the chosen services), `install.sh`,
-  `README.md`, `manifest.json` and `SHA256SUMS`. The platform's `tools/bundle.py` writes the first three.
-- Missing images or weights stop the export (`just build NAME`, `docker pull`, `just fetch-weights NAME`,
-  or start an engine model once so it downloads). Not fitting under `util_limit` together is only a warning.
-- On the offline machine, `./install.sh` (full kit) verifies the checksums, loads the images, writes
-  `platform/.env` (`AI_ASSETS=<kit>/assets`, `HF_HUB_OFFLINE=1`) and starts Concord from
-  `concord/compose.yml` with `platform/` and `assets/` mounted at their host paths. `./install.sh --add
-  <install>` (model kit) merges models into it; a service already there with another image is refused
-  unless `--replace`. Register models there with Add model: no registrations, scores or datasets travel.
-- Exporting from a containerised Concord needs the platform and `$AI_ASSETS` mounted read-only at their
-  host paths and the destination folder mounted; on the host none of this applies.
-- `just test-offline` exports a full `silero-vad` kit, installs it on an `--internal` Docker network,
-  benchmarks VAD there and compares with the recorded score, then merges a `text-normalizer` model kit
-  (Docker only, no GPU; about a minute).
+- A full kit carries the `concord-label:0.2.0` image (`images/concord.tar`); `./install.sh` starts it from
+  `concord/compose.yml` on `127.0.0.1:8610`. Kits with both apps are milestone S7.
+- `./install.sh --add <install>` merges a model kit into an install. Register models there with Add
+  model: no registrations or datasets travel; labels come back as label packages.
+- The air-gap test of a kit (`just test-offline`) lives in Concord Bench.
 
 ## Status
 
-Phase 1 milestones M0–M7, Phase 2 (PLAN §6) and the offline export (O1–O3 of OFFLINE_EXPORT_PLAN.md) are implemented; see "Known limits" below and PLAN
-§10 for open questions.
+Milestone S2 of SPLIT_PLAN.md: Label runs on its own. Still to come:
+
+- S4: "Send to Bench" (reference package, CONTRACTS.md §2) replaces the single-app Promote.
+- S5: `BENCH_URL`, the locked benchmark score in live evaluation, flags back from Bench, and
+  `/label/file/by-sha/<sha256>` links from Bench.
+- S6: service leases in the platform, so Label's and Bench's workers do not evict each other's services.
+- S7: kits with either or both apps.
 
 Known limits:
-- KWS is not built (Q6). Only its hooks exist: the enums, the `keyword_event` table, task-keyed
-  registries, a task-driven benchmark tab bar, the disabled Keywords focus in Annotate and an empty
-  `keywords.jsonl` in label packages.
+- KWS is not built (Q6). Only its hooks exist: the enums, the `keyword_event` table, the disabled
+  Keywords focus in Annotate and an empty `keywords.jsonl` in label packages.
 - Label packages do not carry deletions: a segment deleted on one side comes back if the other side
   still has it.
-- "Use for retraining" (full image only) is shown but disabled until Phase 3 is scoped (Q5).
+- Improve (Phase 3) is on hold; `backend/concord_improve` is a placeholder installed in no image.
 - The fixture set is synthesised speech (kokoro-tts): good for correctness, not realism.

@@ -1,9 +1,8 @@
 """Live evaluation while labelling (PLAN §6.4): model scores against the segments confirmed so far.
 
 - References are confirmed segments with text, in the order they were confirmed.
-- A model's hypothesis for a segment is its cached output on exactly that span (an ASR benchmark on a
-  segment-level dataset), else the member output pseudo-labelling stored for it. Nothing is inferred
-  here, so the page is cheap to refresh.
+- A model's hypothesis for a segment is its cached output on exactly that span, else the member output
+  pseudo-labelling stored for it. Nothing is inferred here, so the page is cheap to refresh.
 - Below MIN_RANK confirmed segments the standings say "too few to rank". 95% intervals are a
   percentile bootstrap over segments (corpus WER of each resample).
 - DER uses only fully reviewed files (every segment reviewed), so missing labels never count as misses.
