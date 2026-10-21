@@ -1,7 +1,7 @@
 """Dataset uid and reference_export (SPLIT_PLAN.md §4.2; CONTRACTS.md §2 source.dataset_uid)
 
-Revision ID: 0002
-Revises: 0001
+Revision ID: label_0002
+Revises: label_0001
 Create Date: 2026-10-21 21:30:00
 """
 
@@ -11,8 +11,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0002"
-down_revision: str | None = "0001"
+revision: str = "label_0002"
+down_revision: str | None = "label_0001"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

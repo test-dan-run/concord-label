@@ -1,6 +1,6 @@
 """Concord Label initial schema (SPLIT_PLAN.md §2.1, §8: Label starts with an empty database)
 
-Revision ID: 0001
+Revision ID: label_0001
 Revises:
 Create Date: 2026-10-21 20:39:33.700447
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = '0001'
+revision: str = 'label_0001'
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

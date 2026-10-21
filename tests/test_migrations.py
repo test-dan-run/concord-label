@@ -18,7 +18,7 @@ def test_0002_backfills_dataset_uids(tmp_path, monkeypatch):
     try:
         (tmp_path / "data").mkdir()
         cfg = db.alembic_config()
-        command.upgrade(cfg, "0001")
+        command.upgrade(cfg, "label_0001")
         eng = sa.create_engine(db.db_url())
         with eng.begin() as c:
             for name in ("a", "b"):

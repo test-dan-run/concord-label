@@ -172,6 +172,10 @@ this repository), `CONCORD_PORT` (8620), `CONCORD_WEB_PORT` (5174), `PLATFORM_DI
 Bench, unset by default; e.g. `http://localhost:8600`, or `http://concord-bench:8600` on a shared Docker
 network).
 
+Label's schema versions start with `label_`, and Label refuses to start (the API, the worker and
+`just migrate`) on a database it did not write — Concord Bench's, or one from the single Concord app
+before the split — without changing it. Point `CONCORD_DATA` at an empty folder to start fresh.
+
 ## Fixtures and recordings
 
 Concord Bench owns the fixture sources. It regenerates `fixtures/generated` (`just fixtures`) and
