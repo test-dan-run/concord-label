@@ -5,6 +5,7 @@ Job types:
 - check   {service}                             compatibility check on the check clip
 - label   {run_id}                              ensemble pseudo-labelling (Phase 2), writes segments
 - export  {export_id, services, kind, dest, ...}  an offline kit (OFFLINE_EXPORT_PLAN.md); needs no service
+- reference {export_id, dataset_id}             Send to Bench: write a reference package, push it if asked
 
 Before a job needs services, the worker starts them with the platform's `stack.py`. It batches: the
 services of later queued jobs that fit next to this job's under `util_limit` are started in the
@@ -27,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from ..core import paths
 from ..core.db import SessionLocal
-from ..core.models import Dataset, Job, JobStatus, Model, OfflineExport, Run, utcnow
+from ..core.models import Dataset, Job, JobStatus, Model, OfflineExport, ReferenceExport, Run, utcnow
 from ..platform import services
 
 
@@ -198,7 +199,30 @@ def _handle_export(session: Session, job: Job, ctx: JobContext) -> dict[str, Any
     return {"export_id": rec.id, "path": out["path"], "bytes": out["bytes"]}
 
 
-HANDLERS = {"ingest": _handle_ingest, "check": _handle_check, "label": _handle_label, "export": _handle_export}
+def _handle_reference(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
+    from ..label import refpkg
+
+    p = job.payload
+    rec = session.get(ReferenceExport, p["export_id"])
+    if rec is None:
+        raise ValueError(f"reference export {p['export_id']} not found")
+    rec.status, rec.error = "running", None
+    session.commit()
+    try:
+        refpkg.run(session, rec, ctx.log, ctx.progress)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        rec = session.get(ReferenceExport, p["export_id"])
+        rec.status, rec.error, rec.finished_at = "failed", str(exc)[:2000], utcnow()
+        session.commit()
+        raise
+    return {"export_id": rec.id, "version": rec.version, "destination": rec.destination,
+            "bench_import_id": rec.bench_import_id, "counts": rec.counts}
+
+
+HANDLERS = {"ingest": _handle_ingest, "check": _handle_check, "label": _handle_label, "export": _handle_export,
+            "reference": _handle_reference}
 RUN_JOBS = ("label",)  # job types whose payload names a `run` that mirrors the job's state
 
 
@@ -279,3 +303,7 @@ def retry(session: Session, job: Job) -> None:
         rec = session.get(OfflineExport, job.payload["export_id"])
         if rec is not None:
             rec.status, rec.error, rec.finished_at = "queued", None, None
+    if job.type == "reference":
+        ref = session.get(ReferenceExport, job.payload["export_id"])
+        if ref is not None:
+            ref.status, ref.error, ref.finished_at = "queued", None, None

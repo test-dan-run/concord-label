@@ -6,8 +6,9 @@
 - Below MIN_RANK confirmed segments the standings say "too few to rank". 95% intervals are a
   percentile bootstrap over segments (corpus WER of each resample).
 - DER uses only fully reviewed files (every segment reviewed), so missing labels never count as misses.
-- The locked benchmark score comes from Concord Bench (SPLIT_PLAN.md §5.3). Until the link to Bench is
-  built (milestone S5) it is always None, and the page hides it.
+- The locked benchmark score comes from Concord Bench (SPLIT_PLAN.md §5.3, CONTRACTS.md §4): one request
+  per page load, for the newest version Bench holds of this dataset, matched to models by registry name.
+  Without a reachable Bench (or with no package of this dataset there) it is None and the page hides it.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import adapters
+from .. import adapters, peer
 from ..core.models import AudioFile, Dataset, Model, ModelOutput, Segment, SegmentStatus
 from ..cuts import usable_files
 from ..metrics import der, normalisers
@@ -54,9 +55,11 @@ def _outputs(session: Session, service: str, phash: str, shas: list[str]) -> dic
     return {(r.audio_sha256, r.span_start, r.span_end): r for r in rows}
 
 
-def _locked(session: Session, ds: Dataset, model: Model, nkey: str) -> dict[str, Any] | None:
-    """The model's locked benchmark score: asked of Concord Bench over HTTP once the apps are linked (S5)."""
-    return None
+def _locked(ds: Dataset, nkey: str) -> dict[str, dict[str, Any]]:
+    """Each model's locked benchmark score in Concord Bench, by registry name ({} without Bench)."""
+    from .sync import install_id
+
+    return peer.locked_scores(ds.uid, install_id(), nkey) or {}
 
 
 def asr_standings(session: Session, ds: Dataset, files: list[AudioFile], normaliser: str | None) -> dict[str, Any]:
@@ -68,6 +71,7 @@ def asr_standings(session: Session, ds: Dataset, files: list[AudioFile], normali
     models = []
     member_ids = [i for s in segs for i in ((s.meta or {}).get("members") or {}).values()]
     member_rows = cache.outputs_for(session, member_ids)
+    locked = _locked(ds, norm.key)
     for m in session.scalars(select(Model).order_by(Model.display_name)):
         if not m.is_asr:
             continue
@@ -104,7 +108,7 @@ def asr_standings(session: Session, ds: Dataset, files: list[AudioFile], normali
                        "coverage": len(covered), "words": int(tot_n),
                        "wer": float(err[has].sum() / tot_n) if tot_n else None,
                        "ci": bootstrap_ci(err[has], words[has]) if len(segs) >= MIN_RANK else None,
-                       "curve": curve, "locked": _locked(session, ds, m, norm.key)})
+                       "curve": curve, "locked": locked.get(m.registry_name)})
     ranked = len(segs) >= MIN_RANK
     models.sort(key=lambda r: (r["wer"] is None, r["wer"] if r["wer"] is not None else 0))
     for k, r in enumerate(models):

@@ -1,0 +1,132 @@
+"""Concord Bench links (SPLIT_PLAN.md §4, §5; CONTRACTS.md §2, §3, §5): Send to Bench (reference packages,
+pushed or downloaded), the file lookup by sha256 that Bench's "Open in Label" uses, and flags coming back."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from .. import peer
+from ..core.db import get_session
+from ..core.models import AudioFile, Dataset, ReferenceExport
+from ..label import flags, refpkg
+from ..runs import jobs
+from .datasets import _clean_tags, get_dataset, job_brief
+
+router = APIRouter(tags=["bench"])
+
+
+def _destination(st: dict[str, Any]) -> str:
+    return "push" if peer.usable(st) else "download"
+
+
+@router.get("/datasets/{dataset_id}/reference-preview")
+def reference_preview(dataset_id: int, scope: str = "complete", session: Session = Depends(get_session)) -> dict:
+    """What "Send to Bench" would send: counts, the references file, files left out, and where it would go."""
+    ds = get_dataset(session, dataset_id)
+    try:
+        pv = refpkg.preview(session, ds, scope)
+    except refpkg.RefPkgError as exc:
+        raise HTTPException(400, str(exc)) from None
+    st = peer.status()
+    return {**pv, "dataset": {"id": ds.id, "name": ds.name, "uid": ds.uid, "tags": ds.tags},
+            "peer": st, "destination": _destination(st), "push_refused": peer.refusal(st)}
+
+
+class SendIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    scope: str = "complete"
+    tags: list[str] = Field(default_factory=list)
+    include_audio: str = "auto"  # auto | always | never
+    include_outputs: bool = False
+    destination: str | None = None  # push | download; default: push when Bench is linked
+
+
+@router.post("/datasets/{dataset_id}/reference-exports", status_code=202)
+def send_to_bench(dataset_id: int, body: SendIn, session: Session = Depends(get_session)) -> dict[str, Any]:
+    ds = get_dataset(session, dataset_id)
+    if body.scope not in refpkg.SCOPES:
+        raise HTTPException(422, f"scope must be one of {', '.join(refpkg.SCOPES)}")
+    if body.include_audio not in refpkg.AUDIO_CHOICES:
+        raise HTTPException(422, f"include_audio must be one of {', '.join(refpkg.AUDIO_CHOICES)}")
+    st = peer.status()
+    dest = body.destination or _destination(st)
+    if dest not in ("push", "download"):
+        raise HTTPException(422, "destination must be push or download")
+    if dest == "push" and (why := peer.refusal(st)):
+        raise HTTPException(409, f"cannot push: {why}")
+    sel = refpkg.select_files(session, ds, body.scope)
+    if sel.problem:
+        raise HTTPException(422, sel.problem)
+    rec = ReferenceExport(dataset_id=ds.id, name=body.name.strip(), scope=body.scope, tags=_clean_tags(body.tags),
+                          include_audio=body.include_audio, include_outputs=body.include_outputs, destination=dest,
+                          status="queued", bench_url=st["url"] if dest == "push" else None)
+    session.add(rec)
+    session.flush()
+    job = jobs.enqueue(session, "reference", {"export_id": rec.id, "dataset_id": ds.id})
+    rec.job_id = job.id
+    session.commit()
+    return {"export": refpkg.export_json(rec), "job": job_brief(job)}
+
+
+@router.get("/datasets/{dataset_id}/reference-exports")
+def list_reference_exports(dataset_id: int, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    get_dataset(session, dataset_id)
+    rows = session.scalars(select(ReferenceExport).where(ReferenceExport.dataset_id == dataset_id)
+                           .order_by(ReferenceExport.id.desc()))
+    return [refpkg.export_json(r) for r in rows]
+
+
+def _export(session: Session, export_id: int) -> ReferenceExport:
+    rec = session.get(ReferenceExport, export_id)
+    if rec is None:
+        raise HTTPException(404, "reference export not found")
+    return rec
+
+
+@router.get("/reference-exports/{export_id}")
+def reference_export(export_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    return refpkg.export_json(_export(session, export_id))
+
+
+@router.get("/reference-exports/{export_id}/download")
+def download_reference_export(export_id: int, session: Session = Depends(get_session)) -> FileResponse:
+    rec = _export(session, export_id)
+    if rec.status != "done" or not rec.path or not Path(rec.path).is_file():
+        raise HTTPException(404, "no package file")
+    return FileResponse(rec.path, media_type="application/zip", filename=Path(rec.path).name)
+
+
+# ---------------------------------------------------------------- CONTRACTS.md §5
+
+@router.get("/files/by-sha/{sha256}")
+def file_by_sha(sha256: str, dataset_uid: str | None = None, session: Session = Depends(get_session)) -> dict:
+    """The file with these original bytes, within the dataset `dataset_uid` (any dataset when omitted)."""
+    stmt = select(AudioFile).where(AudioFile.sha256 == sha256.lower()).order_by(AudioFile.id.desc())
+    if dataset_uid:
+        stmt = stmt.join(Dataset).where(Dataset.uid == dataset_uid)
+    f = session.scalars(stmt).first()
+    if f is None:
+        where = f" in dataset {dataset_uid}" if dataset_uid else ""
+        raise HTTPException(404, f"no file with sha256 {sha256[:12]}…{where}")
+    return {"file_id": f.id, "dataset_id": f.dataset_id}
+
+
+@router.post("/flags/import")
+def import_flags(body: dict[str, Any], session: Session = Depends(get_session)) -> dict[str, Any]:
+    try:
+        out = flags.import_flags(session, body)
+    except flags.FlagsError as exc:
+        session.rollback()
+        raise HTTPException(400, str(exc)) from None
+    except flags.UnknownSource as exc:
+        session.rollback()
+        raise HTTPException(404, str(exc)) from None
+    session.commit()
+    return out

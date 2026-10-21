@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     services_timeout_s: int = 20 * 60
     # The Concord image a full offline kit carries unless the export form picks another (Q3).
     concord_image: str = "concord-label:0.2.0"
+    # Concord Bench (SPLIT_PLAN.md §5): where "Send to Bench" pushes reference packages and where the
+    # live evaluation reads locked scores. Unset: packages are downloaded and the Locked column is hidden.
+    bench_url: str | None = None
     # Built frontend served by FastAPI; absent in development (Vite serves it).
     frontend_dist: Path = Field(default=REPO_ROOT / "frontend" / "dist")
 

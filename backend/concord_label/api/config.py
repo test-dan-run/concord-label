@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import peer
 from ..core.db import get_session
 from ..core.models import Dataset, Model
 from ..core.settings import APP, CONTRACT_VERSION, VERSION, get_settings
@@ -23,8 +24,8 @@ def get_config() -> dict[str, Any]:
         "app": APP,
         "version": VERSION,
         "contract_version": CONTRACT_VERSION,
-        # Concord Bench (SPLIT_PLAN.md §5): filled in when BENCH_URL is set and Bench answers (milestone S5).
-        "peer": {"url": None, "reachable": False, "contract_version": None},
+        # Concord Bench (SPLIT_PLAN.md §5): BENCH_URL, and whether it answered /api/config (cached ~30 s).
+        "peer": peer.status(),
         "default_normaliser": normalisers.DEFAULT,
         "default_collar": DEFAULT_COLLAR,
         "collars": [0.0, 0.1, 0.25, 0.5],

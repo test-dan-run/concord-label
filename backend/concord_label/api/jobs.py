@@ -56,6 +56,9 @@ def job_label(session: Session, j: Job) -> str:
     if j.type == "label":
         r = session.get(Run, p.get("run_id"))
         return f"pseudo-label · {r.dataset.name}" if r else "pseudo-label"
+    if j.type == "reference":
+        d = session.get(Dataset, p.get("dataset_id"))
+        return f"send to Bench · {d.name}" if d else "send to Bench"
     if j.type == "export":
         kind = "full kit" if p.get("kind") == "full" else "model kit"
         return f"offline {kind} · {', '.join(p.get('services') or [])}"

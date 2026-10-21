@@ -131,7 +131,7 @@ def _clean_tags(tags: list[str]) -> list[str]:
 def dataset_json(session: Session, ds: Dataset, detail: bool = False) -> dict[str, Any]:
     rep = ds.report or {}
     d: dict[str, Any] = {
-        "id": ds.id, "name": ds.name, "language": ds.language, "description": ds.description, "tags": ds.tags,
+        "id": ds.id, "uid": ds.uid, "name": ds.name, "language": ds.language, "description": ds.description, "tags": ds.tags,
         "label_types": ds.label_types, "mode": ds.mode, "status": ds.status, "created_at": ds.created_at.isoformat(),
         "files": rep.get("files"), "usable_files": rep.get("usable_files"), "hours": rep.get("hours"),
         "usable_hours": rep.get("usable_hours"), "has_speaker_text": bool(rep.get("has_speaker_text")),
