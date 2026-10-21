@@ -46,9 +46,10 @@ aicore = { path = "../../platform/clients/aicore", editable = true }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["backend", "tests"]
-addopts = "--import-mode=importlib -m 'not live'"
+addopts = "--import-mode=importlib -m 'not live and not handoff'"
 markers = [
     "live: needs running platform services (run with `just test-live`)",
+    "handoff: the round trip with Concord Bench's image on a Docker network (run with `just e2e-handoff`)",
 ]
 
 [tool.ruff]

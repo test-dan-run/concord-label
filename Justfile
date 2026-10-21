@@ -73,6 +73,11 @@ e2e: build-web
     docker run --rm --network concord-label-e2e --ipc=host -v "$PWD/frontend":/work -w /work \
       -e E2E_BASE_URL=http://concord-label-e2e-api:8621 mcr.microsoft.com/playwright:v1.64.1-noble npx playwright test
 
+# round trip with Concord Bench (SPLIT_PLAN.md §10): the concord-label and concord-bench images (`just build` in
+# each repository) on one Docker network, replaying fixtures/recorded; push and download, versions, locked score, flags
+e2e-handoff *args:
+    uv run pytest -m handoff -o addopts="--import-mode=importlib" -s tests/test_handoff.py {{args}}
+
 # ruff + import-linter (concord_label must not import Improve) + frontend typecheck
 lint:
     uv run ruff check backend tests
