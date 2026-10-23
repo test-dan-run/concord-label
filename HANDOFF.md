@@ -11,7 +11,7 @@ This file is the brief for building it. The interactive design is the visual ref
 | What | Where | Why |
 |---|---|---|
 | **Personal AI service platform — `README.md`** | The separate platform repository | **Source of truth for model API contracts and how model services are spun up.** Each model's server, protocol, route and launch settings come from that repo's per-model config. Do not re-implement or duplicate any of it here. |
-| Design canvas | https://claude.ai/code/artifact/0e026853-3c35-482e-9cb8-30605607c086 (private to the owner) | Every screen, clickable in Play mode. Sample data only. |
+| Design canvas | https://claude.ai/artifact/TfXxVihKmAF2G2siHR7hsa, "Concord Label UI" (private to the owner; replaces the single-app canvas https://claude.ai/code/artifact/0e026853-3c35-482e-9cb8-30605607c086) | Every Label screen, clickable. Sample data only. |
 | Design system | `speech_recognition_platform_design_system.md` (AeroAudio DS) | Colours, type, track layout, keyboard shortcuts. Summary in §7. |
 
 ### Model registration must be near-zero effort
@@ -161,6 +161,13 @@ Store per-utterance/per-file results, not just aggregates: every drill-down view
 
 Canvas artboards: `Label-Console`, `Pseudo-Label`, `Annotate`, `Live-Eval`, `Sync-Progress`.
 
+> **Updated canvas (2026-10-24, "Concord Label UI"):** adds editing on the speaker lanes in Annotate
+> (move, move to another speaker, trim, draw, add speakers up to 8), **Lexicons** (house spellings applied
+> to every dataset, hints in Annotate, carried in label packages) and a **Docs** page under Help. Offline
+> export left Label: offline kits are the model catalog's. Artboards: `Main`, `PseudoLabelPick`,
+> `PseudoLabel`, `Annotate`, `LiveEval`, `Datasets`, `DatasetDetail`, `UploadDataset`, `Sync`, `Models`,
+> `Jobs`, `Lexicons`, `Docs`, `Sidebar`.
+
 - **Review console**: one table of datasets with label source, tasks, a stacked progress bar (confirmed / auto-accepted / needs review / rejected / running / not labelled) and the next action per row. Status filter and name/#tag search. "Import / export progress" and "Upload dataset" in the header.
 - **Ensemble pseudo-labelling** (no batch selector; the dataset comes from the console):
   - Choose tasks.
@@ -177,7 +184,7 @@ Canvas artboards: `Label-Console`, `Pseudo-Label`, `Annotate`, `Live-Eval`, `Syn
 - **Import / export progress**:
   - Export: dataset; changed-since-last-export / all / picked files; include pseudo-labels, raw model outputs, audio (optional).
   - Import: package summary; merge target suggested by fingerprint match; the segment-level outcome table with rules; the conflict resolver; a snapshot before merge; history.
-  - Package = plain files: `manifest.json`, `files.csv` (path, sha256, duration, sample rate), `segments.jsonl` (file_sha256, start, end, speaker, text, status, confidence, source, updated_at), `keywords.jsonl`, optional `runs/`, optional `audio/`.
+  - Package = plain files: `manifest.json`, `files.csv` (path, sha256, duration, sample rate), `segments.jsonl` (file_sha256, start, end, speaker, text, status, confidence, source, updated_at), `keywords.jsonl`, `lexicons.json`, optional `runs/`, optional `audio/`.
 
 ---
 
