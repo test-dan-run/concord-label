@@ -35,6 +35,11 @@ export const STATUS_BAR: Record<SegStatus, BarKey> = { confirmed: "confirmed", a
 
 export const STATUS_TONE: Record<SegStatus, "good" | "warn" | "bad" | "info"> = { confirmed: "good", auto: "info", pseudo: "warn", rejected: "bad" };
 
+/** A segment's status as shown: a segment drawn by hand and not yet confirmed or rejected is "New · manual". */
+export function statusLabel(s: Pick<Segment, "status" | "created">): string {
+  return s.created && s.status === "pseudo" ? "New · manual" : STATUS_LABELS[s.status];
+}
+
 /** Annotate's keyboard shortcuts: `short` for the strip under the segment table, `does` for the Docs page. */
 export const SHORTCUTS: { key: string; short: string; does: string }[] = [
   { key: "Space", short: "play / pause", does: "Play or pause" },

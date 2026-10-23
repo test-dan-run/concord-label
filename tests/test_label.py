@@ -100,7 +100,9 @@ def test_annotate_edits(labelled, client):
     fid = _ok(client.get(f"/api/label/datasets/{ds}/files"))[0]["id"]
     v = _ok(client.get(f"/api/label/files/{fid}"))
     assert v["position"]["index"] == 1 and v["next_file_id"] and v["keywords"] == []
+    assert v["diariser"] == "pyannote-diarization"  # the run's segmenter (label_helpers.label)
     segs = v["segments"]
+    assert not any(x["created"] for x in segs)
     assert len(segs) >= 3 and all(len(x["alternatives"]) == 2 for x in segs)
     a, b, c = segs[0], segs[1], segs[2]
     # bulk: assign speaker + confirm
@@ -121,7 +123,10 @@ def test_annotate_edits(labelled, client):
     # bad span, create, delete
     _ok(client.patch(f"/api/label/segments/{h1['id']}", json={"end": 9999}), 422)
     new = _ok(client.post(f"/api/label/files/{fid}/segments", json={"start": 0.0, "end": 0.4, "speaker": "agent"}), 201)
-    assert new["status"] == "pseudo" and new["reviewed"]
+    assert new["status"] == "pseudo" and new["reviewed"] and new["created"]
+    # a drag on the speaker lanes: moved, trimmed and given to another speaker in one patch
+    moved = _ok(client.patch(f"/api/label/segments/{new['id']}", json={"start": 0.1234, "end": 0.6, "speaker": "spk7"}))
+    assert (moved["start"], moved["end"], moved["speaker"], moved["created"]) == (0.123, 0.6, "spk7", True)
     _ok(client.delete(f"/api/label/segments/{new['id']}"), 204)
     # confirm all high-confidence
     n = _ok(client.post(f"/api/label/files/{fid}/confirm-auto"))["confirmed"]

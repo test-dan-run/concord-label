@@ -6,7 +6,8 @@ import { Link } from "react-router-dom";
 import * as I from "../../components/icons";
 import { Chip, Empty, PageHeader } from "../../components/ui";
 import type { SegStatus } from "../../lib/api";
-import { SHORTCUTS, STATUS_LABELS, STATUS_TONE } from "../../lib/label";
+import { SHORTCUTS, STATUS_TONE, statusLabel } from "../../lib/label";
+import { MAX_SPEAKERS, MIN_LEN, NUDGE, NUDGE_SHIFT } from "../label/laneDrag";
 
 function B({ children }: { children: ReactNode }) {
   return <strong className="text-fg font-semibold">{children}</strong>;
@@ -20,9 +21,10 @@ const STEPS: { n: number; to: string; title: string; text: string }[] = [
   { n: 5, to: "#bench", title: "Send to Bench", text: "Package confirmed segments as a reference set." },
 ];
 
-const STATUSES: { status: SegStatus; text: string }[] = [
+const STATUSES: { status: SegStatus; created?: boolean; text: string }[] = [
   { status: "pseudo", text: "The models disagree. Check it by ear." },
   { status: "auto", text: "The models agree. Not yet confirmed by a person." },
+  { status: "pseudo", created: true, text: "Drawn by hand on a speaker lane. Needs a transcript." },
   { status: "rejected", text: "Not speech, or not usable. Left out of scoring and packages." },
   { status: "confirmed", text: "Checked by a person. Used for evaluation and sent to Bench." },
 ];
@@ -112,11 +114,17 @@ const SECTIONS: Section[] = [
     title: "Speakers and segments",
     sub: true,
     body: (
-      <ul className="m-0 pl-5 flex flex-col gap-1.5">
-        <li><B>Change a speaker:</B> click the speaker chip in the table to cycle through speakers, or press 1–8.</li>
-        <li><B>Add a segment:</B> use <em>Segment at playhead</em> for a one-second segment where the playhead is.</li>
-        <li><B>Split or merge:</B> press V to split at the playhead, M to merge.</li>
-      </ul>
+      <>
+        <p className="m-0">Most of this happens on the speaker lanes under the waveform:</p>
+        <ul className="m-0 pl-5 flex flex-col gap-1.5">
+          <li><B>Move a segment:</B> drag the bar sideways. Drag it onto another lane to give it to that speaker. Press Escape while dragging to cancel.</li>
+          <li><B>Trim a segment:</B> drag the grip at either end. With a grip focused, the arrow keys nudge it by {NUDGE} s, or {NUDGE_SHIFT} s with Shift.</li>
+          <li><B>Add a segment:</B> drag across empty space in a lane. Segments shorter than {MIN_LEN} s are ignored. <em>Segment at playhead</em> adds a one-second one where the playhead is.</li>
+          <li><B>Add a speaker:</B> use <em>Add speaker</em> when someone speaks who the diarisation model missed, up to {MAX_SPEAKERS} speakers.</li>
+          <li><B>Change a speaker:</B> click the speaker chip in the table to cycle through speakers, or press 1–8.</li>
+          <li><B>Split or merge:</B> press V to split at the playhead, M to merge.</li>
+        </ul>
+      </>
     ),
   },
   {
@@ -192,8 +200,8 @@ const SECTIONS: Section[] = [
     body: (
       <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2.5 items-baseline">
         {STATUSES.map((s) => (
-          <div key={s.status} className="contents">
-            <dt><Chip tone={STATUS_TONE[s.status]}>{STATUS_LABELS[s.status]}</Chip></dt>
+          <div key={statusLabel({ status: s.status, created: !!s.created })} className="contents">
+            <dt><Chip tone={STATUS_TONE[s.status]}>{statusLabel({ status: s.status, created: !!s.created })}</Chip></dt>
             <dd className="m-0">{s.text}</dd>
           </div>
         ))}

@@ -163,10 +163,12 @@ both apps dropped them for the catalog's own UI.
   new, and the catalog's plan (loads and estimated cold-start time). Fusion: best-aligned hypothesis (default), ROVER over word-timed
   members, or one model. Confidence = member agreement; triage >= 0.85 auto-accept, 0.50–0.84 review,
   below rejected. Pseudo-labels go into `segment` with the label run as `source_run_id`.
-- **Annotate**: whole-file timeline (one lane per speaker, overlap hatch, flags lane), segment grid with
-  shift-click multi-select and a bulk bar, inline transcript editing with autosave, speaker pill cycling,
-  merge / split / add. Shortcuts: Space, Tab, 1–8, V, M, Enter. Any edit marks the segment as touched by
-  a person; pseudo-labelling never replaces it afterwards.
+- **Annotate**: whole-file timeline with editable speaker lanes (drag a segment to move it or onto another
+  speaker, drag or arrow-key its grips to trim, drag across a lane to draw one, add speakers up to 8;
+  saved on release), overlap hatch and a flags lane; segment grid with shift-click multi-select and a bulk
+  bar, inline transcript editing with autosave, speaker pill cycling, merge / split / add. Shortcuts:
+  Space, Tab, 1–8, V, M, Enter. Any edit marks the segment as touched by a person; pseudo-labelling never
+  replaces it afterwards. A segment drawn by hand shows as "New · manual" until it is confirmed.
 - **Live evaluation**: WER of each model against confirmed segments (from saved outputs only), "too few
   to rank" below 30, bootstrap 95% intervals, DER on fully reviewed files, the latest confirmations.
   Metrics: WER via jiwer after a normaliser (`basic` default, `whisper_en`, `none`, or any platform

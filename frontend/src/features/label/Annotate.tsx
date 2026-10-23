@@ -1,5 +1,6 @@
-// Annotate (annotation only, no metrics): whole-file timeline, segment grid with multi-select and a
-// bulk bar, inline transcript editing with autosave per segment, and the AeroAudio shortcuts:
+// Annotate (annotation only, no metrics): whole-file timeline with editable speaker lanes (SpeakerLanes),
+// segment grid with multi-select and a bulk bar, inline transcript editing with autosave per segment, and
+// the AeroAudio shortcuts:
 // Space play/pause · Tab next low-confidence · 1–8 assign speaker · V split · M merge · Enter confirm.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,12 +9,14 @@ import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-r
 import { api, qs, type AnnotateView, type LabelFile, type SegStatus, type Segment } from "../../lib/api";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS, STATUS_TONE } from "../../lib/label";
+import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS, STATUS_TONE, statusLabel } from "../../lib/label";
 import { AudioPlayer, PlayFrom, useAudio } from "../../components/AudioPlayer";
-import { Timeline, type LaneGroup } from "../../components/Timeline";
+import { Timeline } from "../../components/Timeline";
 import * as I from "../../components/icons";
 import { Button, Chip, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 import { Crumbs, DatasetChooser, LabelTabs } from "./common";
+import { MAX_SPEAKERS, nextSpeakerName } from "./laneDrag";
+import { SpeakerLanes, type Lane, type LaneEdit } from "./SpeakerLanes";
 
 type Show = "all" | SegStatus;
 const SHOW: { value: Show; label: string }[] = [
@@ -23,6 +26,7 @@ const SHOW: { value: Show; label: string }[] = [
   { value: "rejected", label: "Rejected" },
   { value: "confirmed", label: "Confirmed" },
 ];
+
 /** `/label/file/:fileId` (from error analysis): find the file's dataset, then open the annotator on it. */
 export function OpenFile() {
   const { fileId } = useParams();
@@ -112,11 +116,22 @@ function useLabelMutations(fileId: number, datasetId: number) {
   const bulk = useMutation({ mutationFn: (b: { ids: number[]; action: string; speaker?: string | null }) => api.post(`/label/segments/bulk`, b), onSuccess: done });
   const merge = useMutation({ mutationFn: (ids: number[]) => api.post<Segment>(`/label/segments/merge`, { ids }), onSuccess: done });
   const split = useMutation({ mutationFn: ({ id, t }: { id: number; t: number }) => api.post<Segment[]>(`/label/segments/${id}/split`, { t }), onSuccess: done });
+  // A drag on the speaker lanes: the new span and speaker show at once, and a failed save puts them back.
+  const move = useMutation({
+    mutationFn: ({ id, ...body }: { id: number } & LaneEdit) => api.patch<Segment>(`/label/segments/${id}`, body),
+    onMutate: async ({ id, start, end, speaker }) => {
+      await qc.cancelQueries({ queryKey: ["annotate", fileId] });
+      qc.setQueryData<AnnotateView>(["annotate", fileId], (v) =>
+        v && { ...v, segments: v.segments.map((s) => (s.id === id ? { ...s, start, end, speaker } : s)).sort((a, b) => a.start - b.start || a.end - b.end) },
+      );
+    },
+    onSettled: done,
+  });
   const create = useMutation({ mutationFn: (b: { start: number; end: number; speaker: string | null }) => api.post<Segment>(`/label/files/${fileId}/segments`, b), onSuccess: done });
   const remove = useMutation({ mutationFn: (id: number) => api.del(`/label/segments/${id}`), onSuccess: done });
   const confirmAuto = useMutation({ mutationFn: () => api.post<{ confirmed: number }>(`/label/files/${fileId}/confirm-auto`), onSuccess: done });
-  const error = patch.error ?? bulk.error ?? merge.error ?? split.error ?? create.error ?? remove.error ?? confirmAuto.error;
-  return { patch, bulk, merge, split, create, remove, confirmAuto, error };
+  const error = patch.error ?? move.error ?? bulk.error ?? merge.error ?? split.error ?? create.error ?? remove.error ?? confirmAuto.error;
+  return { patch, move, bulk, merge, split, create, remove, confirmAuto, error };
 }
 
 function isTyping(e: KeyboardEvent): boolean {
@@ -154,7 +169,14 @@ function Annotator({
   const v = q.data;
   const segs = useMemo(() => v?.segments ?? [], [v]);
   const visible = useMemo(() => (show === "all" ? segs : segs.filter((s) => s.status === show)), [segs, show]);
-  const speakers = v?.speakers ?? [];
+  // Speaker lanes: every speaker seen on this file since it opened (a lane stays while you move its last
+  // segment away) plus the ones added by hand, sorted; their order is also the 1–8 keys'.
+  const [seen, setSeen] = useState<string[]>([]);
+  const [added, setAdded] = useState<string[]>([]);
+  useEffect(() => {
+    if (v) setSeen((old) => (v.speakers.every((n) => old.includes(n)) ? old : [...new Set([...old, ...v.speakers])]));
+  }, [v]);
+  const speakers = useMemo(() => [...new Set([...seen, ...(v?.speakers ?? []), ...added])].sort(), [seen, v, added]);
   const colors = useMemo(() => speakerColors(speakers), [speakers]);
   const high = v?.thresholds.high ?? 0.85;
   const current = segs.find((s) => s.id === cur) ?? null;
@@ -244,15 +266,9 @@ function Annotator({
   if (q.isLoading || !v) return <Spinner />;
 
   const live = segs.filter((s) => s.status !== "rejected");
-  const groups: LaneGroup[] = [
-    {
-      title: "Speakers",
-      lanes: [
-        ...speakers.map((name) => ({ name, color: colors[name], segs: live.filter((s) => s.speaker === name).map((s) => [s.start, s.end] as [number, number]) })),
-        ...(live.some((s) => !s.speaker) ? [{ name: "no speaker", color: C.subtle, segs: live.filter((s) => !s.speaker).map((s) => [s.start, s.end] as [number, number]) }] : []),
-      ],
-    },
-    { title: "Review", lanes: [{ name: "Flags", color: C.warn, segs: segs.filter((s) => s.flagged).map((s) => [s.start, s.end] as [number, number]) }] },
+  const lanes: Lane[] = [
+    ...speakers.map((name, k) => ({ key: name, speaker: name, label: name, color: colors[name], added: added.includes(name) && !v.speakers.includes(name), hotkey: k < 8 ? k + 1 : undefined })),
+    ...(live.some((s) => !s.speaker) ? [{ key: "", speaker: null, label: "no speaker", color: C.subtle }] : []),
   ];
   const autoCount = segs.filter((s) => s.status === "auto").length;
   const order = visible.map((s) => s.id);
@@ -302,8 +318,6 @@ function Annotator({
           fileId={fileId}
           t0={0}
           t1={v.file.duration || 1}
-          groups={groups}
-          overlaps={overlapRegions(segs)}
           time={ctl.time}
           markers={current ? [{ t0: current.start, t1: current.end, color: C.focus }] : []}
           onSeek={(t) => {
@@ -311,6 +325,26 @@ function Annotator({
             const hit = segs.find((s) => s.start <= t && t <= s.end && s.status !== "rejected");
             if (hit) setCur(hit.id);
           }}
+        />
+        <SpeakerLanes
+          duration={v.file.duration || 1}
+          lanes={lanes}
+          segs={live}
+          currentId={cur}
+          time={ctl.time}
+          overlaps={overlapRegions(segs)}
+          flags={segs.filter((s) => s.flagged)}
+          note={speakerNote(segs, speakers, v.diariser)}
+          canAdd={speakers.length < MAX_SPEAKERS}
+          onAddSpeaker={() => setAdded((a) => [...a, nextSpeakerName(speakers)])}
+          onSelect={setCur}
+          onSeek={(t, id) => {
+            ctl.seek(t);
+            const hit = id ?? segs.find((s) => s.start <= t && t <= s.end && s.status !== "rejected")?.id;
+            if (hit !== undefined) setCur(hit);
+          }}
+          onCommit={(id, edit) => m.move.mutateAsync({ id, ...edit })}
+          onCreate={(edit) => m.create.mutate(edit, { onSuccess: (s) => setCur(s.id) })}
         />
       </Panel>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -409,6 +443,20 @@ function Annotator({
       </div>
     </>
   );
+}
+
+/** Under the lanes: where the speakers came from, e.g. "2 detected by pyannote-diarization · 1 added by you". */
+function speakerNote(segs: Segment[], lanes: string[], diariser: string | null): string {
+  const fromRun = new Set(segs.filter((s) => s.source_run_id !== null && s.speaker).map((s) => s.speaker!));
+  const fromRefs = new Set(segs.filter((s) => s.source_run_id === null && !s.created && s.speaker && !fromRun.has(s.speaker)).map((s) => s.speaker!));
+  const byYou = lanes.filter((n) => !fromRun.has(n) && !fromRefs.has(n)).length;
+  const parts = [
+    fromRun.size ? `${fromRun.size} detected by ${diariser ?? "pseudo-labelling"}` : "",
+    fromRefs.size ? `${fromRefs.size} from the references` : "",
+    byYou ? `${byYou} added by you` : "",
+    lanes.length >= MAX_SPEAKERS ? `limit of ${MAX_SPEAKERS} reached` : "",
+  ];
+  return parts.filter(Boolean).join(" · ");
 }
 
 function BulkBar({ n, speakers, onAssign, onAction, onMerge, onClear }: { n: number; speakers: string[]; onAssign: (s: string) => void; onAction: (a: string) => void; onMerge: () => void; onClear: () => void }) {
@@ -530,7 +578,7 @@ function SegmentRow({
         {s.confidence === null ? "—" : s.confidence.toFixed(2)}
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <Chip tone={STATUS_TONE[s.status]}>{STATUS_LABELS[s.status]}</Chip>
+        <Chip tone={STATUS_TONE[s.status]}>{statusLabel(s)}</Chip>
         {s.flagged && <span className="ml-1 text-warn" title={s.flag_note ?? "Flagged"}><I.Flag size={12} /></span>}
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">

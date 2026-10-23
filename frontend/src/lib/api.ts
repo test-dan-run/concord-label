@@ -326,6 +326,8 @@ export interface Segment {
   chosen: string | null;
   agreement: Record<string, number> | null;
   words: { w: string; start: number; end: number }[] | null;
+  /** Drawn by hand in Annotate rather than from a model or the references. */
+  created: boolean;
   alternatives?: { service: string; model: string; text: string; build_key: string | null; source_app: string | null }[];
   file?: string;
 }
@@ -369,6 +371,8 @@ export interface AnnotateView {
   dataset: { id: number; name: string; language: string | null };
   segments: Segment[];
   speakers: string[];
+  /** The segmentation model of the label run these segments came from; null without one. */
+  diariser: string | null;
   keywords: unknown[];
   thresholds: { high: number; low: number };
   prev_file_id: number | null;

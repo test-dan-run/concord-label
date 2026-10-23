@@ -8,12 +8,13 @@ match the segment.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..core.models import AudioFile, Model, Segment, SegmentStatus, utcnow
+from ..core.models import AudioFile, Model, Run, Segment, SegmentStatus, utcnow
 from ..runs import cache
 from . import console
 
@@ -32,7 +33,8 @@ def segment_json(s: Segment) -> dict[str, Any]:
             "source_run_id": s.source_run_id, "flagged": s.flagged, "flag_note": s.flag_note,
             "reviewed": s.reviewed, "edited_at": s.edited_at.isoformat() if s.edited_at else None,
             "updated_at": s.updated_at.isoformat() if s.updated_at else None,
-            "chosen": m.get("chosen"), "agreement": m.get("agreement"), "words": m.get("words")}
+            "chosen": m.get("chosen"), "agreement": m.get("agreement"), "words": m.get("words"),
+            "created": bool(m.get("created"))}
 
 
 def _touch(s: Segment) -> None:
@@ -193,6 +195,16 @@ def file_counts(session: Session, dataset_id: int) -> list[dict[str, Any]]:
                                                              "flagged": 0})} for f in files]
 
 
+def _diariser(session: Session, segs: list[Segment]) -> str | None:
+    """The segmentation model of the label run most of these segments came from (None without one)."""
+    runs = Counter(s.source_run_id for s in segs if s.source_run_id is not None)
+    if not runs:
+        return None
+    run = session.get(Run, runs.most_common(1)[0][0])
+    model = session.get(Model, (run.params or {}).get("seg_model_id") or -1) if run else None
+    return model.display_name if model else None
+
+
 def file_view(session: Session, f: AudioFile) -> dict[str, Any]:
     segs = sorted(f.segments, key=lambda s: (s.start, s.end))
     ids = [i for s in segs for i in ((s.meta or {}).get("members") or {}).values()]
@@ -214,7 +226,7 @@ def file_view(session: Session, f: AudioFile) -> dict[str, Any]:
     return {"file": {"id": f.id, "path": f.rel_path, "stem": f.stem, "duration": f.duration, "status": f.status,
                      "dataset_id": f.dataset_id, "meta": f.meta},
             "dataset": {"id": f.dataset.id, "name": f.dataset.name, "language": f.dataset.language},
-            "segments": rows, "speakers": speakers, "keywords": [],
+            "segments": rows, "speakers": speakers, "diariser": _diariser(session, segs), "keywords": [],
             "thresholds": th or {"high": 0.85, "low": 0.5},
             "prev_file_id": siblings[k - 1] if k > 0 else None,
             "next_file_id": siblings[k + 1] if k + 1 < len(siblings) else None,

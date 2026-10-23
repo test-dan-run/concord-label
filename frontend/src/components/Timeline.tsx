@@ -29,7 +29,8 @@ export interface Marker {
 const LANE_H = 14;
 const LANE_GAP = 4;
 const WAVE_H = 56;
-const LABEL_W = 118;
+/** Width of the lane-name column; other lane rows (Annotate's speaker lanes) line up with it. */
+export const LABEL_W = 118;
 
 function useWidth(ref: React.RefObject<HTMLDivElement | null>): number {
   const [w, setW] = useState(600);

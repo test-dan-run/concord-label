@@ -57,7 +57,7 @@ test("annotate: edit, shortcuts, multi-select, bulk confirm, audio", async ({ pa
   await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
   await expect(page).toHaveURL(/\/label\/annotate\/\d+/);
   await expect(page.getByRole("heading", { name: /Segments · \d+/ })).toBeVisible();
-  await expect(page.getByRole("img", { name: "Speaker and error lanes" })).toBeVisible();
+  await expect(page.locator("[data-lane]").first()).toBeVisible();
   await page.getByRole("button", { name: "All", exact: true }).click();
   // inline edit with autosave
   const first = page.getByLabel(/^Transcript at /).first();
@@ -89,6 +89,67 @@ test("annotate: edit, shortcuts, multi-select, bulk confirm, audio", async ({ pa
   const second = await pill.textContent();
   await page.keyboard.press("1");
   await expect(pill).not.toHaveText(second!);
+  expect(errors).toEqual([]);
+});
+
+test("annotate: speaker lanes move, trim, draw and add a speaker", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 1 });
+  await expect(page.getByRole("heading", { name: "d02_8k" })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const lane = (n: string) => page.locator(`[data-lane="${n}"]`);
+  const bars = (n: string) => lane(n).locator("span[title]");
+  await expect(bars("spk0").first()).toBeVisible();
+  await expect(page.getByText("2 detected by pyannote-diarization")).toBeVisible();
+  const n0 = await bars("spk0").count();
+  const n1 = await bars("spk1").count();
+
+  // drag a spk0 segment onto the spk1 lane: it becomes spk1's, and stays so after a reload
+  const b = (await bars("spk0").first().boundingBox())!;
+  const l1 = (await lane("spk1").boundingBox())!;
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2 + 4, l1.y + l1.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await expect(bars("spk1")).toHaveCount(n1 + 1);
+  await expect(bars("spk0")).toHaveCount(n0 - 1);
+  await page.reload();
+  await expect(bars("spk1")).toHaveCount(n1 + 1);
+
+  // a focused grip nudges with the arrow keys and saves once the keys stop
+  const grip = bars("spk1").first().getByRole("button", { name: /^End of segment/ });
+  const before = await grip.getAttribute("aria-label");
+  await grip.focus();
+  await grip.press("ArrowRight");
+  await grip.press("ArrowRight");
+  await expect(grip).not.toHaveAttribute("aria-label", before!);
+  const after = (await grip.getAttribute("aria-label"))!;
+  await page.waitForTimeout(1200);
+  await page.reload();
+  await expect(page.getByRole("button", { name: after, exact: true })).toHaveCount(1);
+
+  // Escape cancels a drag
+  const c = (await bars("spk1").first().boundingBox())!;
+  await page.mouse.move(c.x + c.width / 2, c.y + c.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(c.x + c.width / 2 + 80, c.y + c.height / 2, { steps: 4 });
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  expect((await bars("spk1").first().boundingBox())!.x).toBeCloseTo(c.x, 0);
+
+  // add a speaker, then draw a segment on its empty lane
+  await page.getByRole("button", { name: "Add speaker" }).click();
+  await expect(lane("spk2")).toContainText("Drag here to add a segment for spk2, or press 3 on a selected one.");
+  await expect(page.getByText("1 added by you")).toBeVisible();
+  const l2 = (await lane("spk2").boundingBox())!;
+  await page.mouse.move(l2.x + l2.width * 0.1, l2.y + l2.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(l2.x + l2.width * 0.2, l2.y + l2.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await expect(bars("spk2")).toHaveCount(1);
+  await expect(page.locator("tbody")).toContainText("New · manual");
   expect(errors).toEqual([]);
 });
 
