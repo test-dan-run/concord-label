@@ -125,6 +125,12 @@ must stay compatible.
 | Frontend pages Models, Add model, Contract, Jobs, Upload, Offline export | own copy | own copy |
 | `fixtures/` | all | `generated/` and `recorded/` as copies; Bench regenerates both (`just fixtures`, `just record`) and Label copies them again when they change |
 
+> **Since the model catalog** (platform `MODEL_CATALOG_REDESIGN.md`): `registry/` (registry reader,
+> compatibility check) and the Add model and Contract pages are gone from both copies; registering and
+> verifying models happen in the catalog's own UI. `platform/` now holds the catalog client glue
+> (Label: `platform/catalog.py`) and the platform tool runner for offline kits; leases, starting models and
+> the output index are the catalog's (§6 below is history).
+
 ### 2.3 Contracts between the apps
 
 The only things the two apps must agree on. They are written in `CONTRACTS.md`, which carries a version
@@ -297,6 +303,10 @@ with the latest score per model on the newest version. Without a reachable Bench
 ---
 
 ## 6. Sharing one GPU between two workers
+
+> **Superseded by the model catalog.** Leases are now taken from the platform's model catalog
+> (`POST /api/leases`, through `aicore.catalog`), one per pipeline stage, and the `stack.py --holder` /
+> `lease` / `release` commands below are no longer used by Label. See README.md "Jobs".
 
 Today one worker starts what a job needs with `stack.py up` and batches jobs so services fit under
 `util_limit`. With two apps, Label's worker could start a service that makes `stack.py` stop one that a

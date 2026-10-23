@@ -78,7 +78,8 @@ class JobStatus(enum.StrEnum):
     running = "running"
     done = "done"
     failed = "failed"
-    blocked = "blocked"  # the platform could not start a required service
+    waiting = "waiting"  # its lease is queued in the catalog, waiting for compute
+    blocked = "blocked"  # the catalog could not grant a lease (a model failed to start, or no catalog)
 
 
 class Dataset(Base):
@@ -177,16 +178,24 @@ class KeywordEvent(Base):
 
 
 class Model(Base):
+    """A catalog model as Label knows it. Registration, verification and serving live in the model catalog
+    (platform/catalog/README.md); this row exists so runs and outputs can refer to a model by id. It is
+    created the first time a model is used and refreshed from the catalog's record whenever the catalog
+    answers (platform/catalog.py): capabilities, timing level, protocol and build key are a cache of that
+    record, so live evaluation and exports work while the catalog is down."""
+
     __tablename__ = "model"
     id: Mapped[int] = mapped_column(primary_key=True)
-    registry_name: Mapped[str] = mapped_column(String(200), unique=True)
+    catalog_id: Mapped[str] = mapped_column(String(200), unique=True)  # the platform service name
     display_name: Mapped[str] = mapped_column(String(200))
     tags: Mapped[list[str]] = mapped_column(default=list)
-    parent_model_id: Mapped[int | None] = mapped_column(ForeignKey("model.id", ondelete="SET NULL"))
-    capabilities: Mapped[list[str]] = mapped_column(default=list)
+    capabilities: Mapped[list[str]] = mapped_column(default=list)  # asr | vad | diar, from the capability record
     timing_level: Mapped[str | None] = mapped_column(String(16))
-    check_report: Mapped[dict[str, Any]] = mapped_column(default=dict)
-    registry_snapshot: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    contract: Mapped[str | None] = mapped_column(String(32))
+    api: Mapped[str | None] = mapped_column(String(64))
+    build_key: Mapped[str | None] = mapped_column(String(16))  # the current build when last synced
+    record: Mapped[dict[str, Any]] = mapped_column(default=dict)  # the catalog's model record, as last read
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     @property
@@ -211,7 +220,7 @@ class Run(Base):
     dataset_id: Mapped[int] = mapped_column(ForeignKey("dataset.id", ondelete="CASCADE"))
     status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | running | done | failed | blocked
     error: Mapped[str | None] = mapped_column(Text)
-    image_tags: Mapped[dict[str, Any]] = mapped_column(default=dict)  # service -> {image, labels}
+    image_tags: Mapped[dict[str, Any]] = mapped_column(default=dict)  # model -> {image, build_key}
     params: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # Per-file cuts and the cache rows of each member, plus the run's summary (label/pseudo.py).
     outputs: Mapped[dict[str, Any]] = mapped_column(default=dict)
@@ -224,30 +233,40 @@ class Run(Base):
 
 
 class ModelOutput(Base):
-    """The inference cache, keyed on (model, audio, span, params). Label runs read and fill it, and live
-    evaluation reads it."""
+    """The inference cache, keyed on (model, audio, span, params, build). Label runs read and fill it, and
+    live evaluation reads it. The catalog's output index (runs/cache.py) knows every row with a build key,
+    so Concord Bench can read it (POST /api/outputs/batch); an output read from Bench is copied here with
+    `source_app` / `source_id` naming where it came from. Rows from before the catalog have no build key:
+    they stay readable by id (segment.meta.members) but never match a lookup."""
 
     __tablename__ = "model_output"
-    __table_args__ = (UniqueConstraint("model_name", "audio_sha256", "span_start", "span_end", "params_hash"),)
+    __table_args__ = (
+        UniqueConstraint("model_name", "audio_sha256", "span_start", "span_end", "params_hash", "build_key"),
+        Index("ix_output_lookup", "model_name", "build_key", "params_hash", "audio_sha256"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
-    model_name: Mapped[str] = mapped_column(String(200))  # platform service name
+    model_name: Mapped[str] = mapped_column(String(200))  # catalog model id (platform service name)
     audio_sha256: Mapped[str] = mapped_column(String(64))
     span_start: Mapped[float] = mapped_column(Float, default=0.0)
     span_end: Mapped[float] = mapped_column(Float, default=-1.0)  # -1 = whole file
     params_hash: Mapped[str] = mapped_column(String(16))
+    build_key: Mapped[str | None] = mapped_column(String(16))  # catalog build key; NULL on rows from before it
+    params: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # the adapter params params_hash was made from
     output: Mapped[dict[str, Any]] = mapped_column()
     latency_s: Mapped[float] = mapped_column(Float)
-    image: Mapped[str | None] = mapped_column(String(300))
+    image: Mapped[str | None] = mapped_column(String(300))  # image tag, for people; the build key is what counts
+    source_app: Mapped[str | None] = mapped_column(String(32))  # set on copies read from another app
+    source_id: Mapped[int | None] = mapped_column(Integer)  # the output's id in that app
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Job(Base):
     __tablename__ = "job"
     id: Mapped[int] = mapped_column(primary_key=True)
-    type: Mapped[str] = mapped_column(String(32))  # ingest | check | label | export
+    type: Mapped[str] = mapped_column(String(32))  # ingest | label | export | reference
     payload: Mapped[dict[str, Any]] = mapped_column(default=dict)
     status: Mapped[str] = mapped_column(String(16), default=JobStatus.queued)
-    required_services: Mapped[list[str]] = mapped_column(default=list)
+    required_services: Mapped[list[str]] = mapped_column(default=list)  # catalog models with work to do
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text)
     progress: Mapped[float] = mapped_column(Float, default=0.0)

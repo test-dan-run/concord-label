@@ -14,7 +14,7 @@ from ..runs import jobs
 from .datasets import job_brief
 
 router = APIRouter(tags=["jobs"])
-ACTIVE = ("queued", "running")
+ACTIVE = ("queued", "running", "waiting")
 
 
 def run_label(run: Run) -> str:
@@ -52,7 +52,7 @@ def job_label(session: Session, j: Job) -> str:
         d = session.get(Dataset, p.get("dataset_id"))
         return f"ingest · {d.name}" if d else "ingest"
     if j.type == "check":
-        return f"check · {p.get('service')}"
+        return f"check · {p.get('service')} (moved to the model catalog)"
     if j.type == "label":
         r = session.get(Run, p.get("run_id"))
         return f"pseudo-label · {r.dataset.name}" if r else "pseudo-label"

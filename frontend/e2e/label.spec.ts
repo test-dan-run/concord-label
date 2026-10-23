@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 
-// Concord Label on the replayed fixture set: tests/e2e_server.py registers the fixture models, uploads the
+// Concord Label on the replayed fixture set: tests/e2e_server.py lists the fixture models from the replay catalog, uploads the
 // annotated fixture set ("Synth fixtures") and an audio-only copy of its audio ("Unlabelled calls"), and
 // pseudo-labels the copy with pyannote -> both Whispers. Console errors fail the test.
 

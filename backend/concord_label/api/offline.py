@@ -60,7 +60,7 @@ def services_table(session: Session = Depends(get_session)) -> dict[str, Any]:
         rep = export.dry_run()
     except export.ExportError as exc:
         raise HTTPException(503, f"platform unavailable: {exc}") from None
-    registered = {m.registry_name: m for m in session.scalars(select(Model))}
+    registered = {m.catalog_id: m for m in session.scalars(select(Model))}
     rows = []
     for r in rep["services"]:
         m = registered.get(r["name"])

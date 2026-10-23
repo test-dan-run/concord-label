@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, qs, type LabelPreview, type LabelResults, type LabelSummary, type Model, type Run, type Job } from "../../lib/api";
-import { clock, num, pct, timingLabel } from "../../lib/format";
+import { api, qs, type CacheState, type LabelPreview, type LabelResults, type LabelSummary, type Model, type ModelList, type Run, type Job } from "../../lib/api";
+import { capLabel, clock, coldStart, jobStatusText, num, pct, timingLabel } from "../../lib/format";
 import { confidenceColor, labelButton, STATUS_LABELS } from "../../lib/label";
 import { C } from "../../lib/colors";
 import * as I from "../../components/icons";
-import { Bar, Button, Chip, Empty, ErrorNote, Fact, JobPill, PageHeader, Panel, Select, Spinner, cx } from "../../components/ui";
+import { Bar, Button, Chip, Empty, ErrorNote, Fact, JobPill, PageHeader, Panel, Select, Spinner, StatusDot, cx } from "../../components/ui";
 import { BarLegend, Crumbs, DatasetChooser, LabelTabs, StatusBar } from "./common";
 
 const STRATEGIES = [
@@ -15,8 +15,21 @@ const STRATEGIES = [
   { value: "single", label: "One model", hint: "One member's text; the others still measure agreement." },
 ];
 
-const STATE_TONE = { saved: "good", partial: "warn", new: "default" } as const;
-const STATE_TEXT = { saved: "saved outputs", partial: "partly saved", new: "needs inference" };
+const STATE_TONE: Record<CacheState, "good" | "info" | "warn" | "default"> = { saved: "good", bench: "info", partial: "warn", new: "default" };
+const STATE_TEXT: Record<CacheState, string> = { saved: "saved outputs", bench: "saved in Bench", partial: "partly saved", new: "needs inference" };
+const ACTIVE = ["queued", "running", "waiting"];
+
+/** What the catalog says about a model: its state, what it does and how long it takes to load. */
+function ModelFacts({ m }: { m: Model }) {
+  return (
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
+      <span className="flex items-center gap-1" title={m.state_detail ?? undefined}><StatusDot state={m.state} />{m.state}</span>
+      <span>{m.capabilities.map(capLabel).join(" + ")}</span>
+      {m.stages.includes("asr") && <span>{timingLabel(m.timing_level)}</span>}
+      <span className="num" title="cold start: how long the catalog takes to load it">{coldStart(m.cold_start_s, m.cold_start_measured)} to load</span>
+    </span>
+  );
+}
 
 export function PseudoLabelPage() {
   const { datasetId } = useParams();
@@ -28,45 +41,50 @@ export function PseudoLabelPage() {
 
 function PseudoLabel({ datasetId }: { datasetId: number }) {
   const qc = useQueryClient();
-  const models = useQuery({ queryKey: ["models"], queryFn: () => api.get<Model[]>("/models") });
+  const models = useQuery({ queryKey: ["models"], queryFn: () => api.get<ModelList>("/models"), refetchInterval: 15_000 });
   const results = useQuery({
     queryKey: ["label-results", datasetId],
     queryFn: () => api.get<LabelResults>(`/label/datasets/${datasetId}/results`),
-    refetchInterval: (q) => (q.state.data?.job && ["queued", "running"].includes(q.state.data.job.status) ? 1500 : false),
+    refetchInterval: (q) => (q.state.data?.job && ACTIVE.includes(q.state.data.job.status) ? 1500 : false),
   });
-  const segModels = useMemo(() => (models.data ?? []).filter((m) => m.stages.includes("seg")), [models.data]);
-  const asrModels = useMemo(() => (models.data ?? []).filter((m) => m.stages.includes("asr")), [models.data]);
+  const all = models.data?.models;
+  const segModels = useMemo(() => (all ?? []).filter((m) => m.stages.includes("seg")), [all]);
+  const asrModels = useMemo(() => (all ?? []).filter((m) => m.stages.includes("asr")), [all]);
+  const catalogUi = models.data?.catalog.ui_url;
 
+  // Models are picked by catalog id; a run's params name Label's own model ids.
   const [tasks, setTasks] = useState<Set<string>>(new Set(["asr", "diar"]));
-  const [segId, setSegId] = useState<number | null>(null);
-  const [asrIds, setAsrIds] = useState<Set<number>>(new Set());
+  const [segId, setSegId] = useState<string | null>(null);
+  const [asrIds, setAsrIds] = useState<Set<string>>(new Set());
   const [strategy, setStrategy] = useState("best_aligned");
-  const [singleId, setSingleId] = useState<number | null>(null);
+  const [singleId, setSingleId] = useState<string | null>(null);
   const [high, setHigh] = useState(0.85);
   const [low, setLow] = useState(0.5);
 
   // Defaults once models load: the first diariser, every ASR model; the last run's settings when there is one.
   const lastParams = results.data?.run?.params as Record<string, unknown> | undefined;
   useEffect(() => {
-    if (!models.data || !results.data || segId !== null) return;
+    if (!all || !results.data || segId !== null) return;
     if (lastParams?.seg_model_id) {
-      setSegId(lastParams.seg_model_id as number);
-      setAsrIds(new Set((lastParams.asr_model_ids as number[]) ?? []));
+      const named = (lastParams.models as Record<string, string> | undefined) ?? {};
+      const cid = (id: unknown) => named[String(id)] ?? all.find((m) => m.id === id)?.catalog_id ?? null;
+      setSegId(cid(lastParams.seg_model_id));
+      setAsrIds(new Set(((lastParams.asr_model_ids as number[]) ?? []).map(cid).filter((x): x is string => !!x)));
       setTasks(new Set((lastParams.tasks as string[]) ?? ["asr", "diar"]));
       setStrategy((lastParams.strategy as string) ?? "best_aligned");
-      setSingleId((lastParams.single_model_id as number | null) ?? null);
+      setSingleId(lastParams.single_model_id ? cid(lastParams.single_model_id) : null);
       setHigh((lastParams.high as number) ?? 0.85);
       setLow((lastParams.low as number) ?? 0.5);
       return;
     }
     const diar = segModels.find((m) => m.capabilities.includes("diar")) ?? segModels[0];
-    if (diar) setSegId(diar.id);
-    setAsrIds(new Set(asrModels.map((m) => m.id)));
-  }, [models.data, results.data, segModels, asrModels, segId, lastParams]);
+    if (diar) setSegId(diar.catalog_id);
+    setAsrIds(new Set(asrModels.map((m) => m.catalog_id)));
+  }, [all, results.data, segModels, asrModels, segId, lastParams]);
 
-  const seg = segModels.find((m) => m.id === segId);
+  const seg = segModels.find((m) => m.catalog_id === segId);
   const wantAsr = tasks.has("asr");
-  const ids = [...asrIds].sort((a, b) => a - b);
+  const ids = [...asrIds].sort();
   const preview = useQuery({
     queryKey: ["label-preview", datasetId, segId, ids.join(",")],
     queryFn: () => api.get<LabelPreview>(`/label/datasets/${datasetId}/preview${qs({ seg_model_id: segId, asr_model_ids: ids.join(",") })}`),
@@ -91,16 +109,17 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
   });
 
   const r = results.data;
-  const running = !!r?.job && ["queued", "running"].includes(r.job.status);
+  const running = !!r?.job && ACTIVE.includes(r.job.status);
   const pv = preview.data;
   const saved = wantAsr ? (pv?.saved_members ?? 0) : 0;
   const fresh = wantAsr ? (pv?.new_members ?? 0) : 0;
+  const fromBench = wantAsr ? (pv?.bench_members ?? 0) : 0;
   const problems: string[] = [];
   if (!seg) problems.push("Pick a VAD / diarisation model for the segments.");
   if (tasks.has("diar") && seg && !seg.capabilities.includes("diar")) problems.push(`${seg.display_name} returns no speakers; pick a diariser for the speakers task.`);
   if (wantAsr && !ids.length) problems.push("Pick at least one ASR model.");
   if (!tasks.size) problems.push("Choose at least one task.");
-  if (strategy === "single" && !ids.includes(singleId ?? -1)) problems.push("Pick the model to use as the starting hypothesis.");
+  if (strategy === "single" && !ids.includes(singleId ?? "")) problems.push("Pick the model to use as the starting hypothesis.");
   if (low > high) problems.push("The review threshold must not be above the auto-accept threshold.");
   const button = !wantAsr ? "Label speakers" : labelButton(saved, fresh);
 
@@ -127,42 +146,47 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
             </span>
           </fieldset>
           <div className="flex flex-col gap-1.5">
-            <Select label="Segments from" value={segId ?? ""} onChange={(e) => setSegId(Number(e.target.value))}>
+            <Select label="Segments from" value={segId ?? ""} onChange={(e) => setSegId(e.target.value)}>
               {segModels.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.display_name} · {m.capabilities.includes("diar") ? "diariser" : "speech only"}
+                <option key={m.catalog_id} value={m.catalog_id}>
+                  {m.display_name} · {m.capabilities.includes("diar") ? "diariser" : "speech only"} · {m.state} · {coldStart(m.cold_start_s, m.cold_start_measured)} to load
                 </option>
               ))}
             </Select>
+            {seg && <ModelFacts m={seg} />}
             {pv && (
               <span className="text-xs text-muted">
                 <Chip tone={STATE_TONE[pv.seg.state]}>{STATE_TEXT[pv.seg.state]}</Chip> <span className="num">{pv.seg.cached_files}/{pv.files}</span> files segmented already
+                {pv.seg.bench_files > 0 && <>, <span className="num">{pv.seg.bench_files}</span> in Concord Bench</>}
               </span>
             )}
-            {!segModels.length && models.data && <Empty>No VAD / diarisation model registered. <Link to="/models/add">Add one</Link>.</Empty>}
+            {models.data && !models.data.catalog.reachable && <ErrorNote error={`The model catalog is not reachable: ${models.data.catalog.error}`} />}
+            {!segModels.length && models.data && <Empty>No VAD / diarisation model in the catalog. Register one in the <a href={catalogUi} target="_blank" rel="noreferrer">model catalog</a>.</Empty>}
           </div>
           {wantAsr && (
             <fieldset className="border-0 p-0 m-0 flex flex-col gap-1.5">
               <legend className="text-[11px] text-muted uppercase tracking-wider mb-1.5">ASR members</legend>
-              {!asrModels.length && models.data && <Empty>No ASR model registered. <Link to="/models/add">Add one</Link>.</Empty>}
+              {!asrModels.length && models.data && <Empty>No ASR model in the catalog. Register one in the <a href={catalogUi} target="_blank" rel="noreferrer">model catalog</a>.</Empty>}
               {asrModels.map((m) => {
-                const st = pv?.members.find((x) => x.model_id === m.id);
+                const st = pv?.members.find((x) => x.service === m.catalog_id);
                 return (
-                  <label key={m.id} className="flex flex-wrap items-center gap-2 text-[13px] py-1 border-b border-track last:border-0">
+                  <label key={m.catalog_id} className="flex flex-wrap items-center gap-2 text-[13px] py-1 border-b border-track last:border-0">
                     <input
                       type="checkbox"
-                      checked={asrIds.has(m.id)}
+                      checked={asrIds.has(m.catalog_id)}
                       onChange={() => setAsrIds((s) => {
                         const n = new Set(s);
-                        if (n.has(m.id)) n.delete(m.id);
-                        else n.add(m.id);
+                        if (n.has(m.catalog_id)) n.delete(m.catalog_id);
+                        else n.add(m.catalog_id);
                         return n;
                       })}
                     />
-                    <span className="flex-1 min-w-0 truncate">{m.display_name}</span>
-                    <span className="text-[11px] text-muted">{timingLabel(m.timing_level)}</span>
+                    <span className="flex flex-col flex-1 min-w-0">
+                      <span className="truncate">{m.display_name}</span>
+                      <ModelFacts m={m} />
+                    </span>
                     {st && (
-                      <Chip tone={STATE_TONE[st.state]} title={`${st.cached_cuts} of ${st.known_cuts} known segments in the cache${st.files_without_segments ? `; ${st.files_without_segments} files not segmented yet` : ""}`}>
+                      <Chip tone={STATE_TONE[st.state]} title={`${st.cached_cuts} of ${st.known_cuts} known segments saved here, ${st.bench_cuts} in Concord Bench${st.files_without_segments ? `; ${st.files_without_segments} files not segmented yet` : ""}`}>
                         {STATE_TEXT[st.state]}
                       </Chip>
                     )}
@@ -184,9 +208,9 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
                 </label>
               ))}
               {strategy === "single" && (
-                <Select label="Model" value={singleId ?? ""} onChange={(e) => setSingleId(Number(e.target.value))}>
+                <Select label="Model" value={singleId ?? ""} onChange={(e) => setSingleId(e.target.value || null)}>
                   <option value="">Choose…</option>
-                  {asrModels.filter((m) => asrIds.has(m.id)).map((m) => <option key={m.id} value={m.id}>{m.display_name}</option>)}
+                  {asrModels.filter((m) => asrIds.has(m.catalog_id)).map((m) => <option key={m.catalog_id} value={m.catalog_id}>{m.display_name}</option>)}
                 </Select>
               )}
             </fieldset>
@@ -214,9 +238,23 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
             <Button variant="primary" disabled={!!problems.length || running || start.isPending || preview.isLoading} onClick={() => start.mutate()}>
               <I.Wand size={14} /> {button}
             </Button>
-            {fresh > 0 && <span className="text-xs text-muted">The services for new models are started for you.</span>}
-            {fresh === 0 && wantAsr && pv && <span className="text-xs text-muted">No inference needed: every member's output is saved.</span>}
+            {fresh > 0 && <span className="text-xs text-muted">The model catalog loads one model at a time; the run waits if compute is busy.</span>}
+            {fresh === 0 && wantAsr && pv && <span className="text-xs text-muted">No inference needed: every member's output is saved{fromBench ? ` (${fromBench} copied from Concord Bench)` : ""}.</span>}
           </div>
+          {pv?.plan && pv.plan.steps.length > 0 && (
+            <div className="flex flex-col gap-1 text-xs text-muted">
+              <span>
+                Plan, stage by stage: <span className="num">{pv.plan.loads}</span> model load{pv.plan.loads === 1 ? "" : "s"}, about <span className="num">{coldStart(pv.plan.est_load_s)}</span> of cold starts.
+              </span>
+              <span className="flex flex-wrap gap-1">
+                {pv.plan.steps.map((st) => (
+                  <Chip key={`${st.stage}-${st.model}`} tone={st.skip ? "good" : st.load ? "warn" : "default"} title={st.skip ? "nothing missing: skipped" : st.load ? "needs loading" : "already running"}>
+                    {st.stage} · {st.model}{st.skip ? " · skip" : ""}
+                  </Chip>
+                ))}
+              </span>
+            </div>
+          )}
         </Panel>
         <Results r={r} running={running} loading={results.isLoading} />
       </div>
@@ -258,7 +296,10 @@ function Results({ r, running, loading }: { r?: LabelResults; running: boolean; 
       <Panel title="Dataset progress" actions={r.job && <JobPill status={r.job.status} progress={r.job.progress} />}>
         <StatusBar p={r.progress} className="h-3" />
         <BarLegend p={r.progress} />
-        {running && r.job?.message && <span className="text-xs text-muted num">{r.job.message}</span>}
+        {running && r.job?.status === "waiting" && (
+          <span className="text-xs text-warn">{jobStatusText(r.job)}{r.job.waiting?.waiting_for ? `: ${r.job.waiting.waiting_for}` : ""}</span>
+        )}
+        {running && r.job?.status !== "waiting" && r.job?.message && <span className="text-xs text-muted num">{r.job.message}</span>}
         {r.job?.status === "failed" && <ErrorNote error={r.job.error} />}
         {r.job?.status === "blocked" && <ErrorNote error={`Blocked: ${r.job.error}`} />}
       </Panel>

@@ -143,3 +143,40 @@ def test_record_then_replay(tmp_path, monkeypatch, data_dir):
     assert out["text"] == "recorded words"
     with pytest.raises(base.ReplayMiss):
         b.run(AUDIO, AudioRef("other"))
+
+
+def test_params_hold_no_image_and_hash_like_aicore():
+    """The index key both Concord apps compute: adapter params without the image or build, hashed by aicore."""
+    from types import SimpleNamespace
+
+    from aicore.catalog import params_hash
+
+    from concord_label.adapters import for_model
+
+    asr = SimpleNamespace(catalog_id="whisper-large-v3", contract="openai", api="audio.transcriptions",
+                          timing_level="segment")
+    a = for_model(asr, "en-SG")
+    assert a.params == {"adapter": "OpenAIASR", "timing": "segment", "language": "en"}
+    assert a.params_hash == params_hash(a.params) == base.params_hash(a.params)
+    seg = SimpleNamespace(catalog_id="pyannote-diarization", contract="oip-v2", api="infer", timing_level="segment")
+    assert for_model(seg, "en").params == {"adapter": "OIPSegmenter"}
+    chat = SimpleNamespace(catalog_id="qwen3-8b", contract="openai", api="chat.completions", timing_level="text")
+    assert set(for_model(chat, "en").params) == {"adapter", "timing", "prompt"}
+    with pytest.raises(base.AdapterError, match="no adapter"):
+        for_model(SimpleNamespace(catalog_id="bge-m3", contract="openai", api="embeddings", timing_level=None))
+
+
+def test_recordings_are_keyed_without_the_image():
+    """fixtures/recorded was re-keyed by fixtures/rekey_recordings.py: each file's name is its params' hash."""
+    from aicore.catalog import params_hash
+
+    from conftest import RECORDED
+
+    files = sorted(RECORDED.glob("*/*.json"))
+    if not files:
+        pytest.skip("no recordings")
+    for path in files:
+        rec = json.loads(path.read_text())
+        assert "image" not in rec["params"], path.name
+        assert path.stem == AudioRef(rec["audio"]["sha256"], rec["audio"].get("start", 0.0),
+                                     rec["audio"].get("end", -1.0)).key(rec["service"], params_hash(rec["params"]))

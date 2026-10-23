@@ -5,9 +5,10 @@ means bumping its version and old scores stay explainable.
 - `basic` (default, Q9): lowercase, dashes and slashes become spaces, other punctuation is removed,
   whitespace collapsed. "Don't" -> "dont", "state-of-the-art" -> "state of the art".
 - `whisper_en`: OpenAI Whisper's English normaliser (spelling, contractions, numbers).
-- `platform:<service>`: any platform `text.transform` service, applied before `basic`. Offered as an
+- `platform:<service>`: any `text.transform` model in the catalog, applied before `basic`. Offered as an
   extra, never the default: the platform's `text-normalizer` adds casing and punctuation, which is
-  the opposite of WER normalisation, so `basic` runs after it.
+  the opposite of WER normalisation, so `basic` runs after it. It is called through the model catalog's
+  gateway (aicore with AICORE_CATALOG), which starts it on demand; it takes no lease.
 """
 
 from __future__ import annotations
@@ -94,11 +95,14 @@ def platform_normaliser(service: str) -> Normaliser:
     def fn(texts: list[str]) -> list[str]:
         import aicore
 
+        from ..core.settings import get_settings
+
+        get_settings()  # exports AICORE_CATALOG, so the call goes through the catalog's gateway
         c = aicore.client(service)
         out = c.transform(texts) if texts else []
         return basic_fn(out)
 
-    return Normaliser(f"platform:{service}", 1, f"{service} + basic", f"Platform text.transform service "
+    return Normaliser(f"platform:{service}", 1, f"{service} + basic", f"Catalog text.transform model "
                       f"{service!r}, then basic.", fn, service=service)
 
 

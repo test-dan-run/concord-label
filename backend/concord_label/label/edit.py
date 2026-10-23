@@ -197,11 +197,12 @@ def file_view(session: Session, f: AudioFile) -> dict[str, Any]:
     segs = sorted(f.segments, key=lambda s: (s.start, s.end))
     ids = [i for s in segs for i in ((s.meta or {}).get("members") or {}).values()]
     outs = cache.outputs_for(session, ids)
-    names = {m.registry_name: m.display_name for m in session.scalars(select(Model))}
+    names = {m.catalog_id: m.display_name for m in session.scalars(select(Model))}
     rows = []
     for s in segs:
         d = segment_json(s)
-        d["alternatives"] = [{"service": svc, "model": names.get(svc, svc), "text": outs[i].output.get("text", "")}
+        d["alternatives"] = [{"service": svc, "model": names.get(svc, svc), "text": outs[i].output.get("text", ""),
+                              "build_key": outs[i].build_key, "source_app": outs[i].source_app}
                              for svc, i in ((s.meta or {}).get("members") or {}).items() if i in outs]
         rows.append(d)
     speakers = sorted({s.speaker for s in segs if s.speaker})

@@ -154,7 +154,8 @@ def export(session: Session, ds: Dataset, mode: str = "changed", file_ids: list[
             for o in outs:
                 lines.append(json.dumps({"model_name": o.model_name, "audio_sha256": o.audio_sha256,
                                          "span_start": o.span_start, "span_end": o.span_end,
-                                         "params_hash": o.params_hash, "output": o.output, "latency_s": o.latency_s,
+                                         "params_hash": o.params_hash, "build_key": o.build_key,
+                                         "params": o.params, "output": o.output, "latency_s": o.latency_s,
                                          "image": o.image}) + "\n")
             n_outputs = len(lines)
             z.writestr("runs/model_outputs.jsonl", "".join(lines))
@@ -463,16 +464,20 @@ def _import_outputs(session: Session, root: Path) -> int:
         if not line.strip():
             continue
         r = json.loads(line)
+        build_key = r.get("build_key")  # packages from before the model catalog have none
+        if not build_key:
+            continue  # such an output could never match a lookup again; segments still carry their text
         exists = session.scalar(select(ModelOutput.id).where(
             ModelOutput.model_name == r["model_name"], ModelOutput.audio_sha256 == r["audio_sha256"],
             ModelOutput.span_start == r["span_start"], ModelOutput.span_end == r["span_end"],
-            ModelOutput.params_hash == r["params_hash"]))
+            ModelOutput.params_hash == r["params_hash"], ModelOutput.build_key == build_key))
         if exists:
             continue
         try:
             with session.begin_nested():
                 session.add(ModelOutput(**{k: r[k] for k in ("model_name", "audio_sha256", "span_start", "span_end",
-                                                             "params_hash", "output", "latency_s", "image")}))
+                                                             "params_hash", "output", "latency_s", "image")},
+                                        build_key=build_key, params=r.get("params")))
             n += 1
         except IntegrityError:
             pass

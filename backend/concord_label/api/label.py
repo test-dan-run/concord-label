@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..core.db import get_session
 from ..core.models import AudioFile, Job, Model, Run, RunTask, Segment, SegmentStatus
 from ..label import console, edit, fusion, live, pseudo
+from ..platform import catalog
 from ..runs import jobs
 from .datasets import dataset_json, get_dataset, job_brief
 from .jobs import ACTIVE, run_json
@@ -26,33 +27,50 @@ def review_console(session: Session = Depends(get_session)) -> list[dict[str, An
 
 # ---------------------------------------------------------------- pseudo-labelling
 
-def _models(session: Session, seg_model_id: int | None, asr_model_ids: list[int]) -> tuple[Model, list[Model]]:
-    seg = session.get(Model, seg_model_id or -1)
-    if seg is None or not seg.is_seg:
+ModelRef = int | str  # Label's model id, or a catalog model id (a row is made on first use)
+
+
+def _model(session: Session, ref: ModelRef) -> Model:
+    if isinstance(ref, str) and ref.isdigit():
+        ref = int(ref)
+    try:
+        return catalog.ensure_model(session, ref)
+    except KeyError as exc:
+        raise HTTPException(422, str(exc.args[0])) from None
+    except catalog.CatalogUnavailable as exc:
+        raise HTTPException(503, str(exc)) from None
+
+
+def _models(session: Session, seg_ref: ModelRef | None, asr_refs: list[ModelRef]) -> tuple[Model, list[Model]]:
+    if seg_ref is None or seg_ref == "":
         raise HTTPException(422, "pick a VAD / diarisation model for the segments")
+    seg = _model(session, seg_ref)
+    if not seg.is_seg:
+        raise HTTPException(422, f"{seg.display_name} is not a VAD / diarisation model in the catalog")
     asr = []
-    for i in asr_model_ids:
-        m = session.get(Model, i)
-        if m is None or not m.is_asr:
-            raise HTTPException(422, f"model {i} is not a registered ASR model")
+    for ref in asr_refs:
+        m = _model(session, ref)
+        if not m.is_asr:
+            raise HTTPException(422, f"{m.display_name} is not an ASR model in the catalog")
         asr.append(m)
     return seg, asr
 
 
-def _ids(csv: str) -> list[int]:
-    try:
-        return [int(x) for x in csv.split(",") if x.strip()]
-    except ValueError:
-        raise HTTPException(400, "asr_model_ids must be comma-separated ids") from None
+def _refs(csv: str) -> list[ModelRef]:
+    """`3,whisper-large-v3` -> [3, "whisper-large-v3"]: numbers are Label's ids, the rest catalog ids."""
+    return [int(x) if x.strip().isdigit() else x.strip() for x in csv.split(",") if x.strip()]
 
 
 @router.get("/datasets/{dataset_id}/preview")
-def label_preview(dataset_id: int, seg_model_id: int, asr_model_ids: str = "",
+def label_preview(dataset_id: int, seg_model_id: str, asr_model_ids: str = "",
                   session: Session = Depends(get_session)) -> dict[str, Any]:
-    """Cost of a label run: which members' outputs are already saved for this dataset."""
+    """Cost of a label run: which outputs are saved here or in Concord Bench, and the catalog's plan.
+    Model ids are Label's ids or catalog ids."""
     ds = get_dataset(session, dataset_id)
-    seg, asr = _models(session, seg_model_id, _ids(asr_model_ids))
-    return pseudo.preview(session, ds, seg, asr)
+    seg, asr = _models(session, (_refs(seg_model_id) or [None])[0], _refs(asr_model_ids))
+    pv = pseudo.preview(session, ds, seg, asr)
+    session.commit()  # model rows made on first use
+    return pv
 
 
 @router.get("/datasets/{dataset_id}/runs")
@@ -65,11 +83,13 @@ def list_label_runs(dataset_id: int, session: Session = Depends(get_session)) ->
 
 
 class LabelRunIn(BaseModel):
+    """Models by Label id or catalog id (pickers send catalog ids)."""
+
     tasks: list[str] = Field(default_factory=lambda: ["asr", "diar"])
-    seg_model_id: int
-    asr_model_ids: list[int] = Field(default_factory=list)
+    seg_model_id: int | str
+    asr_model_ids: list[int | str] = Field(default_factory=list)
     strategy: str = "best_aligned"
-    single_model_id: int | None = None
+    single_model_id: int | str | None = None
     high: float = Field(default=fusion.DEFAULT_HIGH, ge=0, le=1)
     low: float = Field(default=fusion.DEFAULT_LOW, ge=0, le=1)
 
@@ -91,7 +111,8 @@ def start_label_run(dataset_id: int, body: LabelRunIn, session: Session = Depend
         raise HTTPException(422, "transcripts need at least one ASR model")
     if "diar" in tasks and not seg.has_speakers:
         raise HTTPException(422, f"{seg.display_name} returns no speakers; pick a diariser for the speakers task")
-    if body.strategy == "single" and body.single_model_id not in [m.id for m in asr]:
+    single = next((m for m in asr if body.single_model_id in (m.id, m.catalog_id)), None)
+    if body.strategy == "single" and single is None:
         raise HTTPException(422, "the single-model strategy needs one of the chosen ASR models")
     active = session.scalar(select(Run).where(Run.task == RunTask.label, Run.dataset_id == ds.id,
                                               Run.status.in_(ACTIVE)))
@@ -100,13 +121,15 @@ def start_label_run(dataset_id: int, body: LabelRunIn, session: Session = Depend
     pv = pseudo.preview(session, ds, seg, asr)
     run = Run(task=RunTask.label, dataset_id=ds.id, status="queued",
               params={"tasks": tasks, "seg_model_id": seg.id, "asr_model_ids": [m.id for m in asr],
-                      "strategy": body.strategy, "single_model_id": body.single_model_id,
+                      "models": {str(m.id): m.catalog_id for m in [seg, *asr]},
+                      "strategy": body.strategy, "single_model_id": single.id if single else None,
                       "high": body.high, "low": body.low,
-                      "preview": {"saved_members": pv["saved_members"], "new_members": pv["new_members"]}})
+                      "preview": {"saved_members": pv["saved_members"], "bench_members": pv["bench_members"],
+                                  "new_members": pv["new_members"], "plan": pv["plan"]}})
     session.add(run)
     session.flush()
     session.refresh(run)
-    job = jobs.enqueue(session, "label", {"run_id": run.id}, pseudo.required_services(pv))
+    job = jobs.enqueue(session, "label", {"run_id": run.id}, pseudo.required_models(pv))
     session.commit()
     return {"run": run_json(run), "job": job_brief(job)}
 
@@ -130,7 +153,7 @@ def label_results(dataset_id: int, session: Session = Depends(get_session)) -> d
     if run is not None:
         job = session.scalar(select(Job).where(Job.type == "label").where(Job.payload["run_id"].as_integer() == run.id)
                              .order_by(Job.id.desc()))
-    names = {m.registry_name: m.display_name for m in session.scalars(select(Model))}
+    names = {m.catalog_id: m.display_name for m in session.scalars(select(Model))}
     seg = session.get(Model, run.params.get("seg_model_id") or -1) if run else None
     prog = console.progress(session, [ds])[ds.id]
     return {"dataset": dataset_json(session, ds), "run": run_json(run) if run else None,

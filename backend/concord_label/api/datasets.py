@@ -147,10 +147,13 @@ def dataset_json(session: Session, ds: Dataset, detail: bool = False) -> dict[st
 
 
 def job_brief(job: Job) -> dict[str, Any]:
-    live = jobs.live_progress(job.id) if job.status == "running" else None
+    """A job for the pages. While its lease waits in the catalog's queue the job is `waiting`, and `waiting`
+    says for which models, its position and what it waits for (from the worker's progress file)."""
+    live = jobs.live_progress(job.id) if job.status in ("running", "waiting") else None
     return {"id": job.id, "type": job.type, "status": job.status,
             "progress": live["progress"] if live else job.progress,
             "message": live["message"] if live else job.message,
+            "waiting": (live or {}).get("waiting") if job.status == "waiting" else None,
             "error": job.error, "required_services": job.required_services, "payload": job.payload,
             "result": job.result, "created_at": job.created_at.isoformat(),
             "started_at": job.started_at.isoformat() if job.started_at else None,

@@ -2,16 +2,16 @@
 
 Job types:
 - ingest  {dataset_id, source, cleanup}         copy, decode, derive, parse references
-- check   {service}                             compatibility check on the check clip
 - label   {run_id}                              ensemble pseudo-labelling (Phase 2), writes segments
-- export  {export_id, services, kind, dest, ...}  an offline kit; needs no service
+- export  {export_id, services, kind, dest, ...}  an offline kit; needs no model
 - reference {export_id, dataset_id}             Send to Bench: write a reference package, push it if asked
 
-Before a job needs services, the worker starts them with the platform's `stack.py`. It batches: the
-services of later queued jobs that fit next to this job's under `util_limit` are started in the
-same call, which keeps eviction to the minimum. If the platform tool fails, the job is `blocked`
-with its message. The services are leased to `label:job-<id>` while the job runs, renewed every minute
-and released when it ends (`services.Lease`), so Concord Bench's worker never stops them mid-run.
+Models are the model catalog's business (platform/catalog.py). A job that needs models takes leases from
+the catalog itself, one per stage (label/pseudo.py), as `label:job-<id>`; a leased model is never stopped,
+whichever app asks. While a lease waits in the catalog's queue the job is `waiting`, with its queue
+position and what it waits for (`JobContext.waiting`); a lease that fails, or a catalog that does not
+answer, makes the job `blocked` with the catalog's message. `required_services` lists the models a job
+has work for: among queued jobs, the worker takes the oldest whose models are all running already.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ from sqlalchemy.orm import Session
 
 from ..core import paths
 from ..core.db import SessionLocal
-from ..core.models import Dataset, Job, JobStatus, Model, OfflineExport, ReferenceExport, Run, utcnow
-from ..platform import services
+from ..core.models import Dataset, Job, JobStatus, OfflineExport, ReferenceExport, Run, utcnow
+from ..platform import catalog
 
 
 class JobContext:
@@ -42,11 +42,13 @@ class JobContext:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._progress = 0.0
         self._message = ""
+        self._waiting: dict[str, Any] | None = None
 
     def _write_progress(self) -> None:
         p = paths.job_progress(self.job_id)
         tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"progress": self._progress, "message": self._message[:300]}))
+        tmp.write_text(json.dumps({"progress": self._progress, "message": self._message[:300],
+                                   "waiting": self._waiting}))
         tmp.replace(p)
 
     def log(self, msg: str) -> None:
@@ -60,6 +62,32 @@ class JobContext:
         if msg:
             self._message = msg
         self._write_progress()
+
+    def waiting(self, lease: dict[str, Any]) -> None:
+        """The job's lease is queued in the catalog: the job is `waiting`, with its position and reason."""
+        self._waiting = {"models": lease.get("models") or [], "position": lease.get("position"),
+                         "waiting_for": lease.get("waiting_for"), "lease_state": lease.get("state")}
+        what = lease.get("waiting_for") or lease.get("state") or "compute"
+        pos = f" (#{lease['position']} in the queue)" if lease.get("position") else ""
+        self.log(f"waiting for {', '.join(self._waiting['models'])}{pos}: {what}")
+        self._set_status(JobStatus.waiting)
+
+    def active(self) -> None:
+        """The lease became active: the job runs again."""
+        if self._waiting is not None:
+            self._waiting = None
+            self._write_progress()
+            self._set_status(JobStatus.running)
+
+    def _set_status(self, status: str) -> None:
+        # A short session of its own: the handler's session has committed before it asked for a lease.
+        try:
+            with SessionLocal() as s:
+                s.execute(update(Job).where(Job.id == self.job_id, Job.status.in_((JobStatus.running, JobStatus.waiting)))
+                          .values(status=status))
+                s.commit()
+        except Exception:  # noqa: BLE001 - the status is cosmetic; the progress file still says it
+            pass
 
     @property
     def message(self) -> str:
@@ -91,33 +119,25 @@ def read_log(job_id: int, tail: int = 400) -> list[str]:
 # ---------------------------------------------------------------- scheduling
 
 def recover(session: Session) -> int:
-    """After a crash: running jobs go back to the queue."""
-    res = session.execute(update(Job).where(Job.status == JobStatus.running).values(status=JobStatus.queued))
+    """After a crash: running or waiting jobs go back to the queue (their leases expire on their own)."""
+    res = session.execute(update(Job).where(Job.status.in_((JobStatus.running, JobStatus.waiting)))
+                          .values(status=JobStatus.queued))
     return res.rowcount or 0
 
 
-def _up(names: set[str]) -> set[str]:
-    return {n for n in names if services.health(n).up}
-
-
-def claim_next(session: Session) -> tuple[Job, list[str]] | None:
-    """The next job and the service set to ensure for it (its own plus batch-mates')."""
+def claim_next(session: Session) -> Job | None:
+    """The next job: the oldest whose models are all running in the catalog (no start, no eviction), else the
+    oldest. Without a catalog answer, the oldest."""
     queued = session.scalars(select(Job).where(Job.status == JobStatus.queued).order_by(Job.id)).all()
     if not queued:
         return None
-    wanted = {n for j in queued for n in j.required_services}
-    up = _up(wanted) if wanted else set()
-    # Prefer the oldest job whose services are all up: no start, no eviction.
-    job = next((j for j in queued if set(j.required_services) <= up), queued[0])
-    batch = set(job.required_services)
-    if batch - up:
-        for other in queued:
-            cand = batch | set(other.required_services)
-            if other.id != job.id and services.fits_together(cand):
-                batch = cand
+    job = queued[0]
+    if any(j.required_services for j in queued):
+        state = catalog.states()
+        job = next((j for j in queued if all(state.get(n) == "running" for n in j.required_services)), queued[0])
     job.status, job.started_at, job.attempts = JobStatus.running, utcnow(), job.attempts + 1
     session.commit()
-    return job, sorted(batch)
+    return job
 
 
 # ---------------------------------------------------------------- handlers
@@ -143,20 +163,6 @@ def _handle_ingest(session: Session, job: Job, ctx: JobContext) -> dict[str, Any
     return {"dataset_id": p["dataset_id"]}
 
 
-def _handle_check(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
-    from ..registry.check import run_check
-
-    rep = run_check(job.payload["service"], ctx.log)
-    for line in rep.lines:
-        ctx.log(f"[{line.status}] {line.name}: {line.reason}")
-    report = rep.to_json()
-    # Re-checking a registered model refreshes what it stores.
-    m = session.scalar(select(Model).where(Model.registry_name == rep.service))
-    if m is not None and job.payload.get("update_model"):
-        m.check_report, m.capabilities, m.timing_level = report, rep.capabilities, rep.timing_level
-    return {"report": report}
-
-
 def _handle_label(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
     from ..label import pseudo
 
@@ -164,7 +170,7 @@ def _handle_label(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]
     if run is None:
         raise ValueError(f"run {job.payload['run_id']} not found")
     try:
-        pseudo.execute(session, run, ctx.log, ctx.progress)
+        pseudo.execute(session, run, ctx.log, ctx.progress, pseudo.Leases(holder_for(job.id), ctx))
         run.status = "done"
         session.commit()
     except Exception as exc:
@@ -223,39 +229,39 @@ def _handle_reference(session: Session, job: Job, ctx: JobContext) -> dict[str, 
             "bench_import_id": rec.bench_import_id, "counts": rec.counts}
 
 
-HANDLERS = {"ingest": _handle_ingest, "check": _handle_check, "label": _handle_label, "export": _handle_export,
-            "reference": _handle_reference}
+HANDLERS = {"ingest": _handle_ingest, "label": _handle_label, "export": _handle_export, "reference": _handle_reference}
 RUN_JOBS = ("label",)  # job types whose payload names a `run` that mirrors the job's state
 
 
 def holder_for(job_id: int) -> str:
-    """The platform lease holder of a job (SPLIT_PLAN.md §6)."""
-    return f"label:job-{job_id}"
+    """The catalog lease holder of a job."""
+    return catalog.holder_for(job_id)
 
 
-def run_job(job_id: int, batch: list[str] | None = None) -> None:
+def _blocked(session: Session, job_id: int, ctx: JobContext, exc: Exception) -> None:
+    ctx.log(f"blocked: {exc}")
+    job = session.get(Job, job_id)
+    job.status, job.error, job.finished_at = JobStatus.blocked, str(exc)[:2000], utcnow()
+    job.message = ctx.message[:300] or None
+    if job.type in RUN_JOBS:
+        run = session.get(Run, job.payload["run_id"])
+        if run is not None:
+            run.status, run.error = "blocked", str(exc)[:2000]
+    session.commit()
+
+
+def run_job(job_id: int) -> None:
     ctx = JobContext(job_id)
     session = SessionLocal()
-    lease: services.Lease | None = None
     try:
         job = session.get(Job, job_id)
         assert job is not None
-        needed = batch or job.required_services
-        if needed:
-            lease = services.Lease(needed, holder_for(job_id), ctx.log)
-            try:
-                lease.acquire()
-            except services.ServicesBlocked as exc:
-                ctx.log(f"blocked: {exc}")
-                job.status, job.error, job.finished_at = JobStatus.blocked, str(exc), utcnow()
-                job.message = ctx.message[:300] or None
-                if job.type in RUN_JOBS:
-                    run = session.get(Run, job.payload["run_id"])
-                    if run is not None:
-                        run.status, run.error = "blocked", str(exc)
-                session.commit()
-                return
-        result = HANDLERS[job.type](session, job, ctx)
+        try:
+            result = HANDLERS[job.type](session, job, ctx)
+        except catalog.ServicesBlocked as exc:
+            session.rollback()
+            _blocked(session, job_id, ctx, exc)
+            return
         job = session.get(Job, job_id)
         job.status, job.result, job.progress, job.finished_at = JobStatus.done, result, 1.0, utcnow()
         job.message = ctx.message[:300] or None
@@ -270,11 +276,6 @@ def run_job(job_id: int, batch: list[str] | None = None) -> None:
         job.message = ctx.message[:300] or None
         session.commit()
     finally:
-        if lease is not None:
-            try:
-                lease.close()
-            except Exception as exc:  # noqa: BLE001 - the job's outcome is already recorded
-                ctx.log(f"release failed: {exc}")
         session.close()
 
 
@@ -284,13 +285,12 @@ def run_pending(max_jobs: int | None = None) -> int:
     while max_jobs is None or done < max_jobs:
         session = SessionLocal()
         try:
-            claimed = claim_next(session)
+            job = claim_next(session)
         finally:
             session.close()
-        if claimed is None:
+        if job is None:
             break
-        job, batch = claimed
-        run_job(job.id, batch)
+        run_job(job.id)
         done += 1
     return done
 

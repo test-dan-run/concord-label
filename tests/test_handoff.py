@@ -106,9 +106,12 @@ class App:
         return ds
 
     def register(self, name: str) -> dict[str, Any]:
-        """A registry entry added as a model: its compatibility check (replayed), then Add model."""
-        job = self.job(self.post(f"/registry/{name}/check", 202)["id"])
-        return self.post("/models", 201, json={"registry_name": name, "check_job_id": job["id"]})
+        """A model from the model catalog. In replay mode each app's catalog is the stand-in built from the
+        recordings, which has the fixture models registered. `id` is what a run request takes."""
+        listed = self.get("/models")
+        models = listed["models"] if isinstance(listed, dict) else listed
+        m = next(m for m in models if name in (m.get("catalog_id"), m.get("registry_name"), m.get("name")))
+        return {**m, "id": m.get("id") or m.get("catalog_id")}
 
 
 def wait_up(app: App, timeout: float = 120) -> dict[str, Any]:

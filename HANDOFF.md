@@ -88,6 +88,10 @@ Canvas artboards: `Main`, `Benchmarks-Pipelines`, `ASR-Errors`, `Diar-Errors`, `
 - Audio-only mode in Phase 1: store the dataset; the "After upload → pseudo-label" option can be hidden or disabled until Phase 2.
 
 ### 3.2 Register a model (`Add-Model`) — simplified for the platform
+
+> **Moved to the platform's model catalog.** Registering, verifying (the compatibility check) and the
+> contract page now live in the catalog's own UI (platform `MODEL_CATALOG_REDESIGN.md`); Concord Label lists
+> catalog models read-only and keeps no registration screens. §3.2 and §3.5 are kept as the original brief.
 - **Pick from the platform registry** (searchable list of entries from the platform config). Show what the config says (protocol, server, endpoint) read-only.
 - Optional: display name, tags, "derived from" (parent model, for lineage in benchmarks).
 - **Compatibility check** runs on a ~10 s two-speaker reference clip and records:
@@ -124,6 +128,8 @@ Canvas artboards: `Main`, `Benchmarks-Pipelines`, `ASR-Errors`, `Diar-Errors`, `
   - Sortable file table. Expand a file for speaker lanes plus a side-by-side speaker-attributed transcript excerpt.
 
 ### 3.5 Contract page (`Model-Contract`)
+
+> **Moved to the platform's model catalog** (see the note under §3.2).
 Replace the long design page with a short page:
 - what Concord sends and expects;
 - the capability / timing detection rules;

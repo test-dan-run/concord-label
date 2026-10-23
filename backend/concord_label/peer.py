@@ -125,7 +125,7 @@ def detail(r: httpx.Response) -> str:
 # ---------------------------------------------------------------- locked scores (CONTRACTS.md §4)
 
 def locked_scores(dataset_uid: str, install_id: str, normaliser: str) -> dict[str, dict[str, Any]] | None:
-    """Bench's latest score per model (by registry name) on the newest version of this dataset, or None
+    """Bench's latest score per model (by catalog model id) on the newest version of this dataset, or None
     when Bench is not linked, has no dataset from this source (404), or does not answer in time."""
     if not usable():
         return None

@@ -60,17 +60,29 @@ export interface AppConfig {
   default_collar: number;
   collars: number[];
   replay: boolean;
-  no_evict: boolean;
+  /** The model catalog: registering, verifying and serving models happen there (`ui_url`). */
+  catalog: { url: string; ui_url: string };
+  public_url: string;
+}
+
+/** A job's lease waiting in the catalog's queue ("waiting for compute"). */
+export interface JobWaiting {
+  models: string[];
+  position: number | null;
+  waiting_for: string | null;
+  lease_state: string | null;
 }
 
 export interface Job {
   id: number;
   type: string;
-  status: "queued" | "running" | "done" | "failed" | "blocked";
+  status: "queued" | "running" | "waiting" | "done" | "failed" | "blocked";
   progress: number;
   message: string | null;
   error: string | null;
+  /** Catalog models the job has work for (it leases them one stage at a time). */
   required_services: string[];
+  waiting: JobWaiting | null;
   payload: Record<string, unknown>;
   result: Record<string, unknown>;
   created_at: string;
@@ -138,59 +150,38 @@ export interface DatasetReport {
   has_speaker_text: boolean;
 }
 
-export interface CheckLine {
-  name: string;
-  status: "pass" | "warn" | "fail" | "info";
-  reason: string;
-}
-
-export interface CheckReport {
-  service: string;
-  usable_as: string | null;
-  capabilities: string[];
-  timing_level: string | null;
-  lines: CheckLine[];
-  sample: { transcript?: string; wer?: number; der?: number; segments?: number[][]; speakers?: string[] };
-  ok: boolean;
-}
-
-export interface RegistryEntry {
-  name: string;
-  alias: string | null;
-  aliases: string[];
-  contract: string;
-  api: string;
-  engine: string;
-  kind: string;
-  image: string;
-  labels: Record<string, string>;
-  signature?: { inputs: { name: string; datatype: string; shape: number[] }[]; outputs: { name: string; datatype: string; shape: number[] }[] };
-  description: string;
-  tasks: string[];
-  gpu_fraction: number;
-  host_port: number;
-  base_url: string;
-  url: string;
-  usable_as: string | null;
-  relevance: number;
-  not_usable: string | null;
-  model_id: number | null;
-  display_name: string | null;
-}
-
+/** A catalog model (GET /api/models). `id` is Label's own model id, null until a run first uses it; pickers
+ *  and run requests use `catalog_id`. Capabilities come from the catalog's verifier. */
 export interface Model {
-  id: number;
-  registry_name: string;
+  id: number | null;
+  catalog_id: string;
   display_name: string;
   tags: string[];
-  parent_model_id: number | null;
+  description: string | null;
+  contract: string | null;
+  api: string | null;
+  engine: string | null;
+  image: string | null;
+  state: "running" | "stopped" | "starting" | "stopping" | "queued" | "failed" | "unknown";
+  state_detail: string | null;
+  leased_by: string[];
+  build_key: string | null;
   capabilities: string[];
   timing_level: string | null;
-  check_report: CheckReport;
-  registry: Partial<RegistryEntry>;
-  created_at: string;
+  capabilities_status: string | null;
+  usable_as: string | null;
+  not_usable: string | null;
   stages: string[];
+  cold_start_s: number | null;
+  cold_start_measured: boolean;
+  gpu: { fraction?: number; gb?: number } | null;
   runs: number;
+  catalog_url: string;
+}
+
+export interface ModelList {
+  models: Model[];
+  catalog: { url: string; ui_url: string; reachable: boolean; error: string | null };
 }
 
 export interface Normaliser {
@@ -211,7 +202,8 @@ export interface Run {
   dataset: string;
   status: string;
   error: string | null;
-  image_tags: Record<string, { image?: string; labels?: Record<string, string> }>;
+  /** Per model, the build it ran with. */
+  image_tags: Record<string, { image?: string | null; build_key?: string | null }>;
   params: Record<string, unknown>;
   rtf: Record<string, number | null>;
   created_at: string;
@@ -271,23 +263,48 @@ export interface ConsoleRow {
   created_at: string;
 }
 
-export interface PreviewMember {
+/** saved: every output here; bench: here or saved in Concord Bench (found through the catalog's index). */
+export type CacheState = "saved" | "bench" | "partial" | "new";
+
+interface PreviewModel {
   model_id: number;
   name: string;
+  /** The catalog model id. */
   service: string;
+  state: CacheState;
+  model_state: string | null;
+  cold_start_s: number | null;
+  cold_start_measured: boolean | null;
+}
+
+export interface PreviewMember extends PreviewModel {
   timing_level: string | null;
   cached_cuts: number;
+  bench_cuts: number;
   known_cuts: number;
   files_without_segments: number;
-  state: "saved" | "partial" | "new";
+}
+
+export interface PlanStep {
+  stage: string;
+  model: string;
+  load: boolean;
+  cold_start_s: number;
+  items: number | null;
+  hits: number | null;
+  missing: number | null;
+  skip: boolean;
 }
 
 export interface LabelPreview {
   files: number;
-  seg: { model_id: number; name: string; service: string; cached_files: number; state: "saved" | "partial" | "new" };
+  seg: PreviewModel & { cached_files: number; bench_files: number };
   members: PreviewMember[];
   saved_members: number;
+  bench_members: number;
   new_members: number;
+  /** The catalog's plan (stage by stage); null when the catalog did not answer. */
+  plan: { loads: number; est_load_s: number; steps: PlanStep[] } | null;
 }
 
 export interface Segment {
@@ -309,7 +326,7 @@ export interface Segment {
   chosen: string | null;
   agreement: Record<string, number> | null;
   words: { w: string; start: number; end: number }[] | null;
-  alternatives?: { service: string; model: string; text: string }[];
+  alternatives?: { service: string; model: string; text: string; build_key: string | null; source_app: string | null }[];
   file?: string;
 }
 
@@ -360,7 +377,8 @@ export interface AnnotateView {
 }
 
 export interface LiveModel {
-  model_id: number;
+  /** null: a catalog model Label never used, listed for its locked score in Bench alone. */
+  model_id: number | null;
   name: string;
   service: string;
   coverage: number;

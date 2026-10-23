@@ -1,4 +1,6 @@
-"""Shared fixtures. Every test gets its own CONCORD_DATA and database; nothing needs the platform."""
+"""Shared fixtures. Every test gets its own CONCORD_DATA and database; nothing needs the platform or the model
+catalog: every test runs against an in-memory `FakeCatalog` (aicore.catalog), and the replay fixtures against
+the replay catalog built from fixtures/recorded."""
 
 from __future__ import annotations
 
@@ -22,14 +24,20 @@ def dialogue_files() -> dict:
 
 
 @pytest.fixture(autouse=True)
-def no_platform_tools(request, monkeypatch):
-    """Lease renewals and releases never reach a real stack.py in tests (orchestration tests record
-    them); live tests use the real platform."""
-    from concord_label.platform import services
+def fake_catalog(request):
+    """An empty in-memory catalog for every test, so nothing reaches a real one (live tests use the real one).
+    Tests add models with `fake_catalog.add_model(...)` or swap in their own with `catalog.set_catalog`."""
+    from aicore.catalog import FakeCatalog
+
+    from concord_label.platform import catalog
 
     if request.node.get_closest_marker("live"):
+        yield None
         return
-    monkeypatch.setattr(services, "run_tool", lambda cmd, timeout=120: (0, ""))
+    cat = FakeCatalog([])
+    catalog.set_catalog(cat)
+    yield cat
+    catalog.set_catalog(None)
 
 
 @pytest.fixture
@@ -38,7 +46,8 @@ def data_dir(tmp_path, monkeypatch):
     from concord_label.core.settings import reset_settings
 
     monkeypatch.setenv("CONCORD_DATA", str(tmp_path / "data"))
-    for var in ("REPLAY_DIR", "RECORD_DIR", "NO_EVICT"):
+    for var in ("REPLAY_DIR", "RECORD_DIR", "AICORE_CATALOG", "CATALOG_URL", "CATALOG_UI_URL", "PUBLIC_URL",
+                "CONCORD_PUBLIC_URL"):
         monkeypatch.delenv(var, raising=False)
     reset_settings()
     db.reset_engines()
@@ -68,8 +77,19 @@ def client(data_dir):
 
 
 @pytest.fixture
-def replay(monkeypatch, data_dir):
-    """Recorded responses instead of live services, with the endpoint map they were recorded with."""
+def replay_catalog():
+    """A fresh replay catalog (the fixture models, verified and running) as the catalog of this test."""
+    from concord_label.platform import catalog
+
+    cat = catalog.replay_catalog.__wrapped__(str(RECORDED), "")
+    catalog.set_catalog(cat)
+    return cat
+
+
+@pytest.fixture
+def replay(monkeypatch, data_dir, replay_catalog):
+    """Recorded responses instead of live services, with the endpoint map they were recorded with, and the
+    replay catalog standing in for the model catalog."""
     from concord_label.core.settings import reset_settings
 
     if not (RECORDED / "endpoints.generated.yaml").is_file():
@@ -85,7 +105,7 @@ def replay(monkeypatch, data_dir):
 
 @pytest.fixture
 def label_flow(replay, client, tmp_path):
-    """Registered models, an annotated dataset and an audio-only copy of the same audio ("unlabelled")."""
+    """Catalog models, an annotated dataset and an audio-only copy of the same audio ("unlabelled")."""
     from label_helpers import seed
 
     return seed(client, tmp_path / "staging")

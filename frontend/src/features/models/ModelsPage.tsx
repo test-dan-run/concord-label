@@ -1,64 +1,73 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
-import { api, type Job, type Model } from "../../lib/api";
-import { ago, capLabel, timingLabel } from "../../lib/format";
-import * as I from "../../components/icons";
-import { Button, Chip, Empty, ErrorNote, LinkButton, PageHeader, Panel, Spinner } from "../../components/ui";
+import { useQuery } from "@tanstack/react-query";
+import { api, type ModelList } from "../../lib/api";
+import { capLabel, coldStart, timingLabel } from "../../lib/format";
+import { Chip, Empty, ErrorNote, PageHeader, Panel, Spinner, StatusDot } from "../../components/ui";
 
+// Models live in the model catalog: it registers, verifies, starts and serves them. This page lists them
+// read-only; registering a model or reading its verification report happens in the catalog's own UI.
 export function ModelsPage() {
-  const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["models"], queryFn: () => api.get<Model[]>("/models") });
-  const recheck = useMutation({ mutationFn: (id: number) => api.post<Job>(`/models/${id}/recheck`), onSuccess: () => qc.invalidateQueries({ queryKey: ["models"] }) });
-  const del = useMutation({ mutationFn: (id: number) => api.del(`/models/${id}`), onSuccess: () => qc.invalidateQueries() });
-  const byId = Object.fromEntries((q.data ?? []).map((m) => [m.id, m]));
+  const q = useQuery({ queryKey: ["models"], queryFn: () => api.get<ModelList>("/models"), refetchInterval: 10_000 });
+  const cat = q.data?.catalog;
+  const models = q.data?.models ?? [];
   return (
     <>
       <PageHeader
-        crumbs="Bring your own"
+        crumbs="Setup"
         title="Models"
-        subtitle="Registered from the platform registry. Capabilities and timing come from the compatibility check."
-        actions={<LinkButton to="/models/add" variant="primary"><I.Plus /> Add model</LinkButton>}
+        subtitle="From the model catalog, which registers, verifies and runs them. Capabilities and timing come from its verifier."
+        actions={cat && <a href={cat.ui_url} target="_blank" rel="noreferrer" className="text-[13px]">Open the model catalog ↗</a>}
       />
       <Panel>
         {q.isLoading && <Spinner />}
-        <ErrorNote error={q.error ?? recheck.error ?? del.error} />
-        {q.data?.length === 0 && <Empty>No models yet. <Link to="/models/add">Add one from the registry</Link>.</Empty>}
-        {!!q.data?.length && (
+        <ErrorNote error={q.error} />
+        {cat && !cat.reachable && <ErrorNote error={`The model catalog at ${cat.url} is not reachable (${cat.error}). Showing the models Label has used, as last seen.`} />}
+        {q.data && models.length === 0 && (
+          <Empty>
+            No models in the catalog yet. Register them in the <a href={cat?.ui_url} target="_blank" rel="noreferrer">model catalog</a>.
+          </Empty>
+        )}
+        {models.length > 0 && (
           <div className="overflow-x-auto scroll-thin">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr className="text-[11px] text-muted uppercase tracking-wider text-left">
                   <th scope="col" className="font-medium px-3 py-2 border-b border-line">Model</th>
-                  <th scope="col" className="font-medium px-3 py-2 border-b border-line">Detected</th>
+                  <th scope="col" className="font-medium px-3 py-2 border-b border-line">State</th>
+                  <th scope="col" className="font-medium px-3 py-2 border-b border-line">Capabilities</th>
                   <th scope="col" className="font-medium px-3 py-2 border-b border-line">Timing</th>
-                  <th scope="col" className="font-medium px-3 py-2 border-b border-line">Image</th>
-                  <th scope="col" className="font-medium px-3 py-2 border-b border-line">Tags</th>
-                  <th scope="col" className="font-medium px-3 py-2 border-b border-line text-right">Runs</th>
-                  <th scope="col" className="px-3 py-2 border-b border-line"><span className="sr-only">Actions</span></th>
+                  <th scope="col" className="font-medium px-3 py-2 border-b border-line">Cold start</th>
+                  <th scope="col" className="font-medium px-3 py-2 border-b border-line">Build</th>
+                  <th scope="col" className="font-medium px-3 py-2 border-b border-line text-right">Label runs</th>
                 </tr>
               </thead>
               <tbody>
-                {q.data?.map((m) => (
-                  <tr key={m.id} className="border-b border-track align-top">
+                {models.map((m) => (
+                  <tr key={m.catalog_id} className={`border-b border-track align-top ${m.stages.length ? "" : "text-muted"}`}>
                     <td className="px-3 py-2.5">
                       <span className="flex flex-col">
-                        <span>{m.display_name}</span>
-                        <span className="text-[11px] text-subtle num">{m.registry_name} · {m.registry.contract} / {m.registry.api}</span>
-                        {m.parent_model_id && <span className="text-[11px] text-subtle">derived from {byId[m.parent_model_id]?.display_name ?? `#${m.parent_model_id}`}</span>}
-                        <span className="text-[11px] text-subtle">added {ago(m.created_at)}</span>
+                        <a href={m.catalog_url} target="_blank" rel="noreferrer">{m.display_name}</a>
+                        <span className="text-[11px] text-subtle num">{m.catalog_id} · {m.contract} / {m.api}</span>
+                        {m.tags.length > 0 && <span className="flex flex-wrap gap-1 mt-1">{m.tags.map((t) => <Chip key={t}>#{t}</Chip>)}</span>}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5"><span className="flex flex-wrap gap-1">{m.capabilities.map((c) => <Chip key={c} tone="good">{capLabel(c)}</Chip>)}</span></td>
-                    <td className="px-3 py-2.5 text-xs text-muted">{timingLabel(m.timing_level)}</td>
-                    <td className="px-3 py-2.5 text-[11px] text-muted num break-all max-w-[220px]">{m.registry.image}</td>
-                    <td className="px-3 py-2.5"><span className="flex flex-wrap gap-1">{m.tags.map((t) => <Chip key={t}>#{t}</Chip>)}</span></td>
-                    <td className="px-3 py-2.5 text-right num">{m.runs}</td>
                     <td className="px-3 py-2.5">
-                      <span className="flex gap-1.5 justify-end">
-                        <Button size="sm" onClick={() => recheck.mutate(m.id)} title="Run the compatibility check again and update capabilities">Re-check</Button>
-                        <Button size="sm" variant="danger" onClick={() => confirm(`Remove ${m.display_name} and its runs?`) && del.mutate(m.id)}>Remove</Button>
+                      <span className="flex items-center gap-1.5 text-xs" title={m.state_detail ?? (m.leased_by.length ? `leased by ${m.leased_by.join(", ")}` : undefined)}>
+                        <StatusDot state={m.state} />
+                        {m.state}
                       </span>
                     </td>
+                    <td className="px-3 py-2.5">
+                      {m.capabilities.length > 0 ? (
+                        <span className="flex flex-wrap gap-1">{m.capabilities.map((c) => <Chip key={c} tone="good">{capLabel(c)}</Chip>)}</span>
+                      ) : (
+                        <span className="text-xs text-subtle">{m.not_usable ?? "—"}</span>
+                      )}
+                      {m.capabilities_status === "stale" && <span className="block text-[11px] text-warn mt-1">verified on an earlier build</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-muted">{timingLabel(m.timing_level)}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted num">{coldStart(m.cold_start_s, m.cold_start_measured)}</td>
+                    <td className="px-3 py-2.5 text-[11px] text-muted num" title={m.image ?? undefined}>{m.build_key ?? "not known yet"}</td>
+                    <td className="px-3 py-2.5 text-right num">{m.runs}</td>
                   </tr>
                 ))}
               </tbody>

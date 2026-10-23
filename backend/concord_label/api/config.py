@@ -30,15 +30,25 @@ def get_config() -> dict[str, Any]:
         "default_collar": DEFAULT_COLLAR,
         "collars": [0.0, 0.1, 0.25, 0.5],
         "replay": s.replay_dir is not None,
-        "no_evict": s.no_evict,
+        # The model catalog: models, leases, the output index and the gateway (platform/catalog/README.md).
+        "catalog": {"url": s.catalog_root, "ui_url": s.catalog_ui},
+        "public_url": s.public_base_url,
         "links": {"platform_readme": "dev/README.md", "contracts_readme": "platform/contracts/README.md"},
     }
 
 
+def text_transform_services() -> list[str]:
+    """Catalog models with the text.transform contract (offered as WER normalisers); [] without a catalog."""
+    from ..platform import catalog
+
+    try:
+        return sorted(r["id"] for r in catalog.models() if r.get("api") == "text.transform")
+    except catalog.CatalogUnavailable:
+        return []
+
+
 @router.get("/normalisers")
 def list_normalisers() -> list[dict[str, Any]]:
-    from ..registry.reader import text_transform_services
-
     out = [{"id": n.id, "key": n.key, "label": n.label, "description": n.description, "default": n.id ==
             normalisers.DEFAULT, "service": None} for n in normalisers.BUILTIN.values()]
     for svc in text_transform_services():

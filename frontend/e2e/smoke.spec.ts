@@ -32,7 +32,7 @@ test("the app opens on the console; the nav has Label's pages only", async ({ pa
   expect(errors).toEqual([]);
 });
 
-test("datasets, upload, models, contract, jobs and offline export load", async ({ page }) => {
+test("datasets, upload, models, jobs and offline export load", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/datasets");
   await expect(page.getByRole("link", { name: "Synth fixtures" })).toBeVisible();
@@ -45,17 +45,20 @@ test("datasets, upload, models, contract, jobs and offline export load", async (
   await expect(page.getByRole("heading", { name: "Upload dataset" })).toBeVisible();
   await expect(page.getByRole("link", { name: "asr.jsonl" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Benchmark plan" })).toHaveCount(0);
-  await page.goto("/models/add?name=pyannote-diarization");
-  await expect(page.getByText("OIP signature")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Benchmark on" })).toHaveCount(0);
+  // Models come from the model catalog (the replay stand-in here): read-only, with state, capabilities,
+  // cold start and build; registering moved to the catalog's own UI, so Add model and Contract are gone.
   await page.goto("/models");
   await expect(page.getByText("faster-whisper-large-v3 · openai / audio.transcriptions")).toBeVisible();
-  await page.goto("/contract");
-  await expect(page.getByText("How capabilities and timing are detected")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open the model catalog ↗" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Add model/ })).toHaveCount(0);
+  for (const path of ["/models/add", "/contract"]) {
+    await page.goto(path);
+    await expect(page).toHaveURL(/\/models$/);
+  }
   await page.goto("/jobs");
   await expect(page.getByRole("heading", { name: "Jobs" })).toBeVisible();
   expect(errors).toEqual([]);
-  // The offline page asks the platform's stack.py for its services, which the e2e container does not
+  // The offline page asks the platform's bundle.py for its services, which the e2e container does not
   // have (a 503 the page shows); it still loads.
   await page.goto("/offline");
   await expect(page.getByRole("heading", { name: "Export for offline" })).toBeVisible();

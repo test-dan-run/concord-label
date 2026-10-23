@@ -59,3 +59,17 @@ export function capLabel(c: string): string {
 export function timingLabel(t: string | null | undefined): string {
   return { word: "word times", segment: "segment times", text: "text only" }[t ?? ""] ?? DASH;
 }
+
+/** A model's cold start ("~20 s", "~3 min"); "est." when the catalog has not measured it yet. */
+export function coldStart(s: number | null | undefined, measured = true): string {
+  if (s === null || s === undefined) return DASH;
+  const t = s < 90 ? `~${Math.round(s)} s` : `~${Math.round(s / 60)} min`;
+  return measured ? t : `${t} (est.)`;
+}
+
+/** A job's status in a few words: "waiting for compute #2" while its lease is queued in the catalog. */
+export function jobStatusText(j: { status: string; progress: number; waiting?: { position: number | null } | null }): string {
+  if (j.status === "running") return `${Math.round(j.progress * 100)}%`;
+  if (j.status === "waiting") return j.waiting?.position ? `waiting for compute #${j.waiting.position}` : "waiting for compute";
+  return j.status;
+}

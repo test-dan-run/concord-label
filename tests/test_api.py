@@ -1,11 +1,9 @@
-"""HTTP API on the fixture set (TestClient): config, uploads, ingest job, registry errors, templates."""
+"""HTTP API on the fixture set (TestClient): config, uploads, ingest job, templates, the catalog's models."""
 
 from __future__ import annotations
 
 import io
 import zipfile
-
-import pytest
 
 from concord_label.runs import jobs
 from conftest import GEN
@@ -111,25 +109,3 @@ def test_templates(client):
     assert {"asr.jsonl", "diarisation.rttm", "speaker_transcripts.stm", "README.md"} <= names
     assert client.get("/api/templates/asr.csv").text.startswith("audio_filepath,text")
     assert client.get("/api/templates/..%2Fdataset%2Ftruth.json").status_code == 404
-
-
-def test_registry_lists_platform_entries(client):
-    entries = client.get("/api/registry").json()
-    by = {e["name"]: e for e in entries}
-    if not by:
-        pytest.skip("no endpoint map")
-    assert by["silero-vad"]["usable_as"] == "segmenter" and by["silero-vad"]["relevance"] == 0
-    assert by["text-normalizer"]["usable_as"] is None
-    assert entries[0]["relevance"] == 0  # speech models first
-    assert client.post("/api/registry/nope/check").status_code == 404
-
-
-def test_model_requires_successful_check(client, session):
-    job = jobs.enqueue(session, "check", {"service": "silero-vad"})
-    job.status = "done"
-    job.result = {"report": {"capabilities": [], "timing_level": None}}
-    session.commit()
-    r = client.post("/api/models", json={"registry_name": "silero-vad", "check_job_id": job.id})
-    assert r.status_code == 422
-    r = client.post("/api/models", json={"registry_name": "default-vad", "check_job_id": 999})
-    assert r.status_code == 400

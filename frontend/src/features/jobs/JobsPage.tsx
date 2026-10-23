@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type Job } from "../../lib/api";
-import { ago } from "../../lib/format";
+import { ago, jobStatusText } from "../../lib/format";
 import { Button, cx, Empty, ErrorNote, JobPill, PageHeader, Panel, Spinner } from "../../components/ui";
 
 export function JobsPage() {
@@ -12,7 +12,7 @@ export function JobsPage() {
   const retry = useMutation({ mutationFn: (id: number) => api.post(`/jobs/${id}/retry`), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
   return (
     <>
-      <PageHeader crumbs="Concord Label" title="Jobs" subtitle="Ingests, compatibility checks, pseudo-label runs and offline kits. One worker runs them in order, starting the platform services each needs." />
+      <PageHeader crumbs="Concord Label" title="Jobs" subtitle="Ingests, pseudo-label runs, Send to Bench and offline kits. One worker runs them in order; a pseudo-label run leases its models from the model catalog one stage at a time, and waits for compute when the catalog queues it." />
       <div className="flex flex-col xl:flex-row gap-5 items-start">
         <Panel className="flex-1 w-full">
           {q.isLoading && <Spinner />}
@@ -28,7 +28,11 @@ export function JobsPage() {
               <span className="num text-xs text-subtle w-10">#{j.id}</span>
               <JobPill status={j.status} progress={j.progress} />
               <span className="flex-1 min-w-[200px] text-[13px]">{j.label}</span>
-              <span className="text-xs text-muted truncate max-w-[360px]">{j.status === "done" ? "" : j.error ?? j.message ?? ""}</span>
+              {j.status === "waiting" ? (
+                <span className="text-xs text-warn truncate max-w-[360px]" title={j.waiting?.waiting_for ?? undefined}>{jobStatusText(j)}{j.waiting?.waiting_for ? `: ${j.waiting.waiting_for}` : ""}</span>
+              ) : (
+                <span className="text-xs text-muted truncate max-w-[360px]">{j.status === "done" ? "" : j.error ?? j.message ?? ""}</span>
+              )}
               <span className="text-xs text-subtle">{ago(j.finished_at ?? j.started_at ?? j.created_at)}</span>
             </button>
           ))}
@@ -37,7 +41,12 @@ export function JobsPage() {
           {!open && <span className="text-[13px] text-muted">Pick a job to see its log.</span>}
           {log.data && (
             <>
-              <span className="text-xs text-muted">{log.data.label} · services: {log.data.required_services.join(", ") || "none"}</span>
+              <span className="text-xs text-muted">{log.data.label} · models with work: {log.data.required_services.join(", ") || "none"}</span>
+              {log.data.status === "waiting" && (
+                <span className="text-xs text-warn">
+                  Waiting for compute{log.data.waiting?.position ? ` (#${log.data.waiting.position} in the catalog's queue)` : ""}: {log.data.waiting?.waiting_for ?? "the catalog is starting the models"}
+                </span>
+              )}
               {log.data.error && <ErrorNote error={log.data.error} />}
               <pre className="m-0 max-h-[60vh] overflow-auto scroll-thin bg-canvas border border-track rounded-md p-2.5 text-[11px] text-muted num whitespace-pre-wrap">{(log.data.log ?? []).join("\n") || "(no output yet)"}</pre>
             </>

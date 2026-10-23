@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from concord_label import adapters, peer
-from concord_label.core.models import AudioFile, Dataset, Model, Run, Segment, SegmentStatus
+from concord_label.core.models import AudioFile, Dataset, Model, ModelOutput, Run, Segment, SegmentStatus
 from concord_label.core.settings import reset_settings
 from concord_label.label import refpkg
 from concord_label.runs import jobs
@@ -286,8 +286,12 @@ def test_pseudo_labelled_dataset_complete_and_any(labelled, client, tmp_path, no
     # params are exactly the seg adapter's own params for that call, nothing added
     seg_adapter = adapters.for_model(session.get(Model, run.params["seg_model_id"]))
     assert o["params"] == seg_adapter.params == run.params["seg_adapter"]
-    assert set(o["params"]) == {"adapter", "image"} and o["params"]["adapter"] == "OIPSegmenter"
-    assert o["image"] and o["image"] == o["params"]["image"] and o["latency_s"] >= 0
+    assert o["params"] == {"adapter": "OIPSegmenter"}  # no image: the build key travels beside the params
+    seg_row = session.query(ModelOutput).filter_by(model_name="pyannote-diarization", audio_sha256=o["sha256"],
+                                                   span_end=-1.0).one()
+    assert o["build_key"] and o["build_key"] == run.image_tags["pyannote-diarization"]["build_key"]
+    assert o["build_key"] == seg_row.build_key and o["image"] == run.image_tags["pyannote-diarization"]["image"]
+    assert o["latency_s"] >= 0
     assert o["output"]["segments"] and len(o["output"]["speakers"]) == len(o["output"]["segments"])
 
     # scope any: both files, confirmed segments only, transcripts only

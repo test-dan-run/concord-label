@@ -9,12 +9,16 @@ response, `parse()` turns it into the normalised output. Recordings hold raw res
 tests still exercise every parser.
 
 Record / replay (settings `record_dir`, `replay_dir`): files at `<dir>/<service>/<key>.json`, keyed
-on the same (service, audio sha256, span, params) as the output cache.
+on (service, audio sha256, span, params hash). The build key is not in it, so a recording replays for any
+build. Calls go through the model catalog's gateway (aicore with AICORE_CATALOG set), which starts a
+stopped model and holds the call; a 503 while it starts is retried here.
+
+`params_hash` is aicore's (`aicore.catalog.params_hash`): the catalog's output index needs both Concord
+apps to hash the same params the same way.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from abc import ABC, abstractmethod
@@ -24,6 +28,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
+from aicore.catalog import params_hash
 
 from ..core.settings import get_settings
 
@@ -36,10 +41,6 @@ class AdapterError(Exception):
 
 class ReplayMiss(AdapterError):
     pass
-
-
-def params_hash(params: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()[:16]
 
 
 @dataclass(frozen=True)

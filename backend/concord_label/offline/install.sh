@@ -111,7 +111,7 @@ install_full() {
   docker compose --env-file "$KIT/concord/.env" -f "$KIT/concord/compose.yml" up -d
   if [ -n "$BENCH_IMAGE" ]; then echo "Concord Bench: http://127.0.0.1:8600"; fi
   if [ -n "$LABEL_IMAGE" ]; then echo "Concord Label: http://127.0.0.1:8620"; fi
-  echo "Register each model with Add model."
+  echo "Register each model in the model catalog."
 }
 
 install_add() {
@@ -144,7 +144,7 @@ install_add() {
   docker load -i "$KIT/images/platform.tar"
   say "merging into $inst"
   merge
-  echo "Done. Register the new models with Add model in the apps that use them."
+  echo "Done. Register the new models in the model catalog."
 }
 
 check_docker

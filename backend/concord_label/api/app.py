@@ -16,7 +16,8 @@ from fastapi.staticfiles import StaticFiles
 
 from ..core import db
 from ..core.settings import VERSION, get_settings
-from . import audio, config, datasets, jobs, label, models, offline, references, sync
+from ..platform import catalog
+from . import audio, config, datasets, jobs, label, models, offline, outputs, references, sync
 
 log = logging.getLogger("concord_label")
 
@@ -32,11 +33,14 @@ def create_app(migrate: bool = True) -> FastAPI:
             except db.ForeignDatabase as exc:
                 log.error("%s", exc)
                 raise
+        # Where the catalog and Concord Bench read Label's outputs (POST /api/outputs/batch). In the
+        # background, retried until the catalog answers: Label works without it.
+        catalog.register_app_in_background()
         yield
 
     app = FastAPI(title="Concord Label", version=VERSION, lifespan=lifespan)
     for r in (config.router, datasets.router, models.router, jobs.router, audio.router, label.router, sync.router,
-              offline.router, references.router):
+              offline.router, references.router, outputs.router):
         app.include_router(r, prefix="/api")
 
     dist = settings.frontend_dist

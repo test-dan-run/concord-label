@@ -1,9 +1,22 @@
 """Ensemble pseudo-labelling as a `label` run (PLAN §6.2).
 
 A label run is a seg -> ASR pipeline without a reference: the seg model's segments are merged and padded
-(`cuts.prepare_cuts`, so outputs saved by earlier label runs are cache hits), each cut is
-transcribed by every ASR member, and the members are fused per cut. Members already in the cache for
-every cut cost nothing; the run then needs no service at all ("Re-fuse 4 saved outputs").
+(`cuts.prepare_cuts`, the same cuts Concord Bench's pipelines use), each cut is transcribed by every ASR
+member, and the members are fused per cut.
+
+It runs **stage by stage** (MODEL_CATALOG_REDESIGN.md "Job planning"), so each model loads once and only
+one model is leased at a time:
+
+1. the segmenter over every file, under one catalog lease on that model alone;
+2. the cuts of every file (no model);
+3. each ASR member over every cut, one lease per member, released before the next. The catalog's plan
+   (`plan`) orders the members (running ones first, then by cold start);
+4. fusion, triage and `write_segments` (no model).
+
+Before a stage takes its lease, its outputs are looked up in batches (runs/cache.py): Label's own rows,
+then the catalog's output index, where outputs Concord Bench already made are read from Bench and copied
+here. A stage with nothing missing takes no lease ("Re-fuse 4 saved outputs"). Outputs are committed per
+file, so a failed or interrupted run that is retried skips what it already did.
 
 Writing segments follows one rule: reviewed work (confirmed, or touched by a person) is never replaced.
 Earlier machine segments nobody touched are replaced; a new segment that mostly overlaps reviewed
@@ -11,25 +24,31 @@ work is dropped.
 
 `run.params`: tasks (asr, diar), seg_model_id, asr_model_ids, strategy, single_model_id, high, low.
 `run.outputs`: {"files": {file_id: {seg_cache_id, cuts: [{start, end, speaker, src, members}]}},
-"summary": {...}}.
+"summary": {...}}. `run.image_tags`: per model, the build it ran with ({build_key, image}).
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
+import httpx
+from aicore.catalog import CatalogError
+from aicore.catalog import span as index_span
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import adapters
+from ..adapters.base import Adapter
 from ..core import paths
 from ..core.models import AudioFile, Dataset, Model, ModelOutput, Run, Segment, utcnow
 from ..cuts import prepare_cuts, usable_files
 from ..datasets.audio import cut, load_derived
-from ..platform.services import image_info
+from ..platform import catalog
 from ..runs import cache
+from ..runs.cache import Key
 from . import fusion
 
 Log = Callable[[str], None]
@@ -37,24 +56,46 @@ Progress = Callable[[float, str], None]
 
 OVERLAP_DROP = 0.5  # a new segment overlapping reviewed work by more than this share of itself is dropped
 MIN_ASR_SPAN = 0.05
+SEG_SHARE = 0.3  # progress: stage 1 is the first 30 %, stage 2 runs to 90 %, fusion the rest
 
 
 class LabelError(Exception):
     pass
 
 
+class Leases:
+    """How a run takes its models: one catalog lease per stage as `holder`. While the catalog queues the
+    request, `ctx.waiting(lease)` marks the job waiting; `ctx.active()` when it is granted."""
+
+    def __init__(self, holder: str, ctx: Any = None):
+        self.holder = holder
+        self.ctx = ctx
+
+    @contextmanager
+    def __call__(self, model_ids: list[str], log: Log) -> Iterator[Any]:
+        with catalog.leased(self.holder, model_ids, log, on_wait=getattr(self.ctx, "waiting", None),
+                            on_active=getattr(self.ctx, "active", None)) as lease:
+            yield lease
+
+
 def _models(session: Session, params: dict[str, Any]) -> tuple[Model, list[Model]]:
-    seg = session.get(Model, params.get("seg_model_id") or -1)
+    def get(i: int | None) -> Model | None:
+        try:
+            return catalog.ensure_model(session, int(i)) if i is not None else None
+        except (KeyError, ValueError):
+            return None
+
+    seg = get(params.get("seg_model_id"))
     if seg is None or not seg.is_seg:
         raise LabelError("pseudo-labelling needs a VAD / diarisation model for the segments")
-    asr = [session.get(Model, i) for i in params.get("asr_model_ids") or []]
+    asr = [get(i) for i in params.get("asr_model_ids") or []]
     if any(m is None or not m.is_asr for m in asr):
-        raise LabelError("every ensemble member must be a registered ASR model")
+        raise LabelError("every ensemble member must be a catalog ASR model")
     if "asr" in params.get("tasks", []) and not asr:
         raise LabelError("transcripts need at least one ASR model")
     if "diar" in params.get("tasks", []) and not seg.has_speakers:
         raise LabelError(f"{seg.display_name} returns no speakers; pick a diariser for the speakers task")
-    return seg, asr
+    return seg, asr  # type: ignore[return-value]
 
 
 def asr_span(c_start: float, c_end: float, duration: float) -> tuple[float, float] | None:
@@ -66,70 +107,170 @@ def asr_span(c_start: float, c_end: float, duration: float) -> tuple[float, floa
     return round(c_start, 3), round(c_end, 3)
 
 
-def _cached_spans(session: Session, service: str, phash: str, shas: list[str]) -> dict[str, set[tuple[float, float]]]:
-    out: dict[str, set[tuple[float, float]]] = {}
-    rows = session.execute(select(ModelOutput.audio_sha256, ModelOutput.span_start, ModelOutput.span_end)
-                           .where(ModelOutput.model_name == service, ModelOutput.params_hash == phash,
-                                  ModelOutput.audio_sha256.in_(shas)))
-    for sha, s, e in rows:
-        out.setdefault(sha, set()).add((s, e))
+def file_spans(seg_output: dict[str, Any], duration: float) -> list[tuple[Any, tuple[float, float] | None]]:
+    """(cut, ASR span or None) for each cut of a file, from its segmenter output."""
+    cuts = prepare_cuts(seg_output["segments"], seg_output.get("speakers"), duration)
+    return [(c, asr_span(c.start, c.end, duration)) for c in cuts]
+
+
+def _plan_keys(keys: list[Key], phash: str) -> list[dict[str, Any]]:
+    out = []
+    for sha, s, e in keys:
+        a, b = index_span(s, e)
+        out.append({"audio_sha256": sha, "span_start": a, "span_end": b, "params_hash": phash})
     return out
 
 
-def preview(session: Session, ds: Dataset, seg_model: Model, asr_models: list[Model]) -> dict[str, Any]:
-    """What a label run would cost: per member, how many cuts are already in the cache.
+def plan(stages: list[dict[str, Any]], log: Log | None = None) -> dict[str, Any] | None:
+    """The catalog's plan for these stages (order, loads, index hits); None when it does not answer."""
+    try:
+        out = catalog.get_catalog().plan(stages)
+    except (CatalogError, httpx.HTTPError) as exc:
+        if log:
+            log(f"no plan from the catalog ({exc}); running in the chosen order")
+        return None
+    if log:
+        steps = ", ".join(f"{s['model']}{' (skip)' if s.get('skip') else ''}" for s in out.get("steps") or [])
+        log(f"plan: {steps}; {out.get('loads', 0)} load(s), about {out.get('est_load_s') or 0:.0f} s of cold starts")
+    return out
 
-    Cuts are only known where the seg model's output is cached; elsewhere every member needs inference."""
+
+def _brief(rec: dict[str, Any] | None) -> dict[str, Any]:
+    rec = rec or {}
+    return {"model_state": rec.get("state"), "cold_start_s": rec.get("cold_start_s"),
+            "cold_start_measured": rec.get("cold_start_measured")}
+
+
+def _record(m: Model) -> dict[str, Any] | None:
+    try:
+        return catalog.record(m.catalog_id)
+    except (KeyError, catalog.CatalogUnavailable):
+        return None
+
+
+def _state(local: int, other: int, total: int, unknown: int = 0) -> str:
+    """saved (all here) | bench (all here or in another app) | partial | new."""
+    if unknown == 0 and local == total:
+        return "saved"
+    if unknown == 0 and local + other == total:
+        return "bench"
+    return "partial" if local + other else "new"
+
+
+def preview(session: Session, ds: Dataset, seg_model: Model, asr_models: list[Model]) -> dict[str, Any]:
+    """What a label run would cost: per model, how many outputs are saved here, how many Concord Bench holds
+    (the catalog's output index: "saved in Bench"), and what is left to run. One index lookup per model.
+
+    Cuts are known where the segmenter's output is saved here or in Bench; elsewhere every member needs
+    inference."""
     files = usable_files(session, ds.id)
     seg = adapters.for_model(seg_model)
-    seg_rows = {r.audio_sha256: r for r in session.scalars(select(ModelOutput).where(
-        ModelOutput.model_name == seg.service, ModelOutput.params_hash == seg.params_hash,
-        ModelOutput.span_end == cache.WHOLE, ModelOutput.audio_sha256.in_([f.sha256 for f in files])))}
+    sb = catalog.current_build(seg_model)
+    seg_cache = cache.OutputCache(session, seg, sb["build_key"], sb["image"])
+    seg_keys = {f.id: cache.key(f.sha256) for f in files}
+    local = seg_cache.local(seg_keys.values())
+    remote = seg_cache.peek([k for k in seg_keys.values() if k not in local])
     plans: list[tuple[AudioFile, list[tuple[float, float]] | None]] = []
     for f in files:
-        row = seg_rows.get(f.sha256)
-        if row is None:
+        k = seg_keys[f.id]
+        out = local[k].output if k in local else (remote[k]["output"] if k in remote else None)
+        if out is None:
             plans.append((f, None))
             continue
-        cuts = prepare_cuts(row.output["segments"], row.output.get("speakers"), f.duration or 0.0)
-        plans.append((f, [sp for c in cuts if (sp := asr_span(c.start, c.end, f.duration or 0.0))]))
-    members = []
+        plans.append((f, [sp for _, sp in file_spans(out, f.duration or 0.0) if sp]))
+    members, stages_asr = [], {}
     for m in asr_models:
         a = adapters.for_model(m, ds.language)
-        have = _cached_spans(session, a.service, a.params_hash, [f.sha256 for f in files])
-        cached = total = unknown = 0
-        for f, spans in plans:
-            if spans is None:
-                unknown += 1
-                continue
-            total += len(spans)
-            cached += sum(1 for sp in spans if sp in have.get(f.sha256, set()))
-        saved = unknown == 0 and cached == total
-        members.append({"model_id": m.id, "name": m.display_name, "service": m.registry_name,
-                        "timing_level": m.timing_level, "cached_cuts": cached, "known_cuts": total,
-                        "files_without_segments": unknown,
-                        "state": "saved" if saved else ("partial" if cached else "new")})
-    seg_cached = sum(1 for _, s in plans if s is not None)
-    return {"files": len(files), "seg": {"model_id": seg_model.id, "name": seg_model.display_name,
-                                         "service": seg_model.registry_name, "cached_files": seg_cached,
-                                         "state": "saved" if seg_cached == len(files) else
-                                         ("partial" if seg_cached else "new")},
+        b = catalog.current_build(m)
+        oc = cache.OutputCache(session, a, b["build_key"], b["image"])
+        keys = [cache.key(f.sha256, s, e) for f, spans in plans if spans for s, e in spans]
+        have = oc.local(keys)
+        hits = oc.hits([k for k in keys if k not in have])
+        unknown = sum(1 for _, spans in plans if spans is None)
+        if unknown == 0:
+            stages_asr[m.catalog_id] = _plan_keys(keys, a.params_hash)
+        members.append({"model_id": m.id, "name": m.display_name, "service": m.catalog_id,
+                        "timing_level": m.timing_level, "cached_cuts": len(have), "bench_cuts": len(hits),
+                        "known_cuts": len(keys), "files_without_segments": unknown,
+                        "state": _state(len(have), len(hits), len(keys), unknown), **_brief(_record(m))})
+    seg_cached = len(local)
+    seg_state = _state(seg_cached, len(remote), len(files))
+    stages: list[dict[str, Any]] = [{"name": "seg", "models": [seg_model.catalog_id],
+                                     "keys": {seg_model.catalog_id: _plan_keys(list(seg_keys.values()),
+                                                                                 seg.params_hash)}}]
+    if asr_models:
+        stages.append({"name": "asr", "models": [m.catalog_id for m in asr_models], "after": "seg",
+                       **({"keys": stages_asr} if len(stages_asr) == len(asr_models) else {})})
+    pl = plan(stages)
+    return {"files": len(files),
+            "seg": {"model_id": seg_model.id, "name": seg_model.display_name, "service": seg_model.catalog_id,
+                    "cached_files": seg_cached, "bench_files": len(remote), "state": seg_state,
+                    **_brief(_record(seg_model))},
             "members": members,
-            "saved_members": sum(1 for m in members if m["state"] == "saved"),
-            "new_members": sum(1 for m in members if m["state"] != "saved")}
+            "saved_members": sum(1 for m in members if m["state"] in ("saved", "bench")),
+            "bench_members": sum(1 for m in members if m["state"] == "bench"),
+            "new_members": sum(1 for m in members if m["state"] not in ("saved", "bench")),
+            "plan": None if pl is None else {"loads": pl.get("loads"), "est_load_s": pl.get("est_load_s"),
+                                             "steps": pl.get("steps") or []}}
 
 
-def required_services(pv: dict[str, Any]) -> list[str]:
-    """Services a label run must start: only stages that are not fully in the cache."""
-    names = [m["service"] for m in pv["members"] if m["state"] != "saved"]
-    if pv["seg"]["state"] != "saved":
+def required_models(pv: dict[str, Any]) -> list[str]:
+    """Catalog models a label run has work for (the rest is saved here or in Bench): what it will lease."""
+    names = [m["service"] for m in pv["members"] if m["state"] not in ("saved", "bench")]
+    if pv["seg"]["state"] not in ("saved", "bench"):
         names.append(pv["seg"]["service"])
     return sorted(set(names))
 
 
 # ---------------------------------------------------------------- execution
 
-def execute(session: Session, run: Run, log: Log, progress: Progress) -> None:
+def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple[AudioFile, list[Key]]],
+              leases: Leases, log: Log, progress: Callable[[float, str | None], None],
+              what: str) -> tuple[dict[Key, ModelOutput], int]:
+    """One model over its work: (rows by key, outputs computed). Saved and copied outputs first, in one
+    batch; the rest under one lease on this model alone, committed (and indexed) file by file."""
+    b = catalog.current_build(model)
+    oc = cache.OutputCache(session, adapter, b["build_key"], b["image"], log)
+    keys = list(dict.fromkeys(k for _, ks in work for k in ks))
+    found = oc.resolve(keys)
+    session.commit()
+    oc.record_index()
+    if all(k in found for k in keys):
+        log(f"{what}: all {len(keys)} outputs saved" + (f" ({oc.copied} copied from Concord Bench)" if oc.copied else "")
+            + "; no inference")
+        progress(1.0, None)
+        return found, 0
+    ran = 0
+    with leases([model.catalog_id], log) as lease:
+        fresh = catalog.current_build(model, force=True)
+        if fresh["build_key"] != oc.build_key:  # e.g. the build was not known until the model started
+            log(f"{what}: build {fresh['build_key']} (was {oc.build_key})")
+            oc = cache.OutputCache(session, adapter, fresh["build_key"], fresh["image"], log)
+            found = oc.resolve(keys)
+            session.commit()
+            oc.record_index()
+        todo = [(f, [k for k in dict.fromkeys(ks) if k not in found]) for f, ks in work]
+        todo = [(f, ks) for f, ks in todo if ks]
+        total = sum(len(ks) for _, ks in todo)
+        log(f"{what}: {len(keys) - total} of {len(keys)} outputs saved, {total} to run on {len(todo)} file(s)")
+        lost = False
+        for f, ks in todo:
+            if getattr(lease, "lost", None) and not lost:
+                lost = True
+                log(f"the lease on {model.catalog_id} was lost ({lease.lost}); calls still go through the gateway")
+            audio = load_derived(paths.derived(f.sha256))
+            for k in ks:
+                samples = audio if k[2] == cache.WHOLE else cut(audio, k[1], k[2])
+                found[k] = oc.run(samples, *k)
+                ran += 1
+            session.commit()  # keep outputs (a retry skips them), release the write lock
+            oc.record_index()
+            progress(ran / total, f"{what}: {f.rel_path}")
+    return found, ran
+
+
+def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Leases | None = None) -> None:
+    leases = leases or Leases(f"{catalog.APP}:run-{run.id}")
     ds: Dataset = run.dataset
     p = run.params
     seg_model, asr_models = _models(session, p)
@@ -137,45 +278,78 @@ def execute(session: Session, run: Run, log: Log, progress: Progress) -> None:
     files = usable_files(session, ds.id)
     if not files:
         raise LabelError("the dataset has no usable audio files")
+    if "asr" not in tasks:
+        asr_models = []
     seg = adapters.for_model(seg_model)
-    members = [adapters.for_model(m, ds.language) for m in asr_models] if "asr" in tasks else []
+    members = {m.catalog_id: adapters.for_model(m, ds.language) for m in asr_models}
     run.status, run.started_at = "running", utcnow()
-    run.image_tags = {n: image_info(n) for n in [seg.service] + [a.service for a in members]}
-    run.params = {**p, "seg_adapter": seg.params, "asr_adapters": {a.service: a.params for a in members}}
+    run.image_tags = {m.catalog_id: catalog.current_build(m) for m in [seg_model, *asr_models]}
+    run.params = {**p, "seg_adapter": seg.params, "asr_adapters": {n: a.params for n, a in members.items()}}
     session.commit()
+
+    # stage 1: the segmenter over every file
+    def seg_progress(x: float, msg: str | None) -> None:
+        progress(SEG_SHARE * x, msg or f"segments from {seg_model.display_name}")
+
+    seg_progress(0.0, f"stage 1: {seg_model.display_name} on {len(files)} files")
+    seg_rows, seg_ran = run_stage(session, seg_model, seg, [(f, [cache.key(f.sha256)]) for f in files], leases,
+                                  log, seg_progress, f"stage 1, {seg_model.catalog_id}")
+
+    # the cuts of every file
+    cuts: dict[int, list[tuple[Any, tuple[float, float] | None]]] = {}
+    for f in files:
+        cuts[f.id] = file_spans(seg_rows[cache.key(f.sha256)].output, f.duration or 0.0)
+    work = [(f, [cache.key(f.sha256, *sp) for _, sp in cuts[f.id] if sp]) for f in files]
+    n_keys = len({k for _, ks in work for k in ks})
+
+    # stage 2: each ASR member over every cut, one at a time, in the catalog's order
+    order = list(members)
+    if len(order) > 1:
+        pl = plan([{"name": "asr", "models": order, "keys": {n: _plan_keys(list({k for _, ks in work for k in ks}),
+                                                                           members[n].params_hash) for n in order}}],
+                  log)
+        planned = [s["model"] for s in (pl or {}).get("steps") or [] if s.get("model") in members]
+        order = list(dict.fromkeys(planned + order))
+    by_id = {m.catalog_id: m for m in asr_models}
+    member_rows: dict[str, dict[Key, ModelOutput]] = {}
+    calls = ran_asr = 0
+    for i, name in enumerate(order):
+        lo = SEG_SHARE + (0.9 - SEG_SHARE) * i / len(order)
+        hi = SEG_SHARE + (0.9 - SEG_SHARE) * (i + 1) / len(order)
+
+        def asr_progress(x: float, msg: str | None, lo: float = lo, hi: float = hi, name: str = name) -> None:
+            progress(lo + (hi - lo) * x, msg or name)
+
+        asr_progress(0.0, f"stage 2: {by_id[name].display_name} on {n_keys} cuts")
+        member_rows[name], ran = run_stage(session, by_id[name], members[name], work, leases, log, asr_progress,
+                                           f"stage 2, {name}")
+        calls += n_keys
+        ran_asr += ran
+
+    # fusion: no model
     out_files: dict[str, Any] = {}
-    calls = hits = 0
     seg_s = asr_s = audio_s = 0.0
-    for k, f in enumerate(files):
-        progress(k / len(files), f"{seg_model.display_name} → {len(members)} ASR: {f.rel_path}")
-        audio = load_derived(paths.derived(f.sha256))
-        row, _ = cache.get_or_run(session, seg, audio, f.sha256, image=seg.options.get("image"))
+    for f in files:
+        row = seg_rows[cache.key(f.sha256)]
         seg_s += row.latency_s
-        dur = f.duration or 0.0
-        cuts = prepare_cuts(row.output["segments"], row.output.get("speakers"), dur)
         entry: dict[str, Any] = {"seg_cache_id": row.id, "cuts": []}
-        for c in cuts:
+        for c, sp in cuts[f.id]:
             cd: dict[str, Any] = {"start": c.start, "end": c.end, "speaker": c.speaker, "src": c.src, "members": {}}
-            span = asr_span(c.start, c.end, dur)
-            for a in members:
-                if span is None:
-                    continue
-                s, e = span
-                samples = audio if e == cache.WHOLE else cut(audio, s, e)
-                mo, hit = cache.get_or_run(session, a, samples, f.sha256, s, e, a.options.get("image"))
-                cd["members"][a.service] = mo.id
-                asr_s += mo.latency_s
-                calls += 1
-                hits += hit
+            if sp is not None:
+                k = cache.key(f.sha256, *sp)
+                for name in members:
+                    mo = member_rows[name][k]
+                    cd["members"][name] = mo.id
+                    asr_s += mo.latency_s
             entry["cuts"].append(cd)
         out_files[str(f.id)] = entry
-        audio_s += dur
-        session.commit()  # keep cache rows, release the write lock
+        audio_s += f.duration or 0.0
     run.outputs = {"files": out_files}
     run.rtf_by_stage = {"seg": seg_s / audio_s if audio_s else None, "asr": asr_s / audio_s if audio_s else None,
                         "total": (seg_s + asr_s) / audio_s if audio_s else None, "audio_s": audio_s,
                         "processing_s": seg_s + asr_s}
-    log(f"label: {len(files)} files, {calls} ASR calls ({hits} from cache)")
+    log(f"label: {len(files)} files, segmenter ran on {seg_ran}; {calls} ASR cuts, {ran_asr} run "
+        f"({calls - ran_asr} saved)")
     progress(0.9, "fusing")
     summary = write_segments(session, run, files)
     run.outputs = {"files": out_files, "summary": summary}
@@ -203,7 +377,7 @@ def write_segments(session: Session, run: Run, files: list[AudioFile]) -> dict[s
     single = None
     if strategy == "single":
         m = session.get(Model, p.get("single_model_id") or -1)
-        single = m.registry_name if m else None
+        single = m.catalog_id if m else None
     high, low = float(p.get("high", fusion.DEFAULT_HIGH)), float(p.get("low", fusion.DEFAULT_LOW))
     services = list((p.get("asr_adapters") or {}).keys())
     ids = [i for e in run.outputs["files"].values() for c in e["cuts"] for i in c["members"].values()]

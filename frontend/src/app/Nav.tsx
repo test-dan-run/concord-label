@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { api, type Job } from "../lib/api";
+import { jobStatusText } from "../lib/format";
 import * as I from "../components/icons";
 import { cx } from "../components/ui";
 
@@ -47,15 +48,16 @@ function Jobs() {
     refetchInterval: 2000,
   });
   const running = data ?? [];
+  const waiting = running.filter((j) => j.status === "waiting");
   return (
     <NavLink to="/jobs" className="mt-auto flex flex-col gap-2 p-3 border border-track rounded-md no-underline !text-fg hover:bg-track">
       <span className="flex items-center gap-2 text-xs">
-        <span className={cx("size-2 rounded-full", running.length ? "bg-primary animate-pulse" : "bg-subtle")} />
+        <span className={cx("size-2 rounded-full", waiting.length ? "bg-warn animate-pulse" : running.length ? "bg-primary animate-pulse" : "bg-subtle")} />
         {running.length ? `${running.length} job${running.length > 1 ? "s" : ""} running` : "No jobs running"}
       </span>
       {running.slice(0, 3).map((j) => (
-        <span key={j.id} className="text-[11px] text-muted num truncate" title={j.message ?? undefined}>
-          {j.label} · {j.status === "running" ? `${Math.round(j.progress * 100)}%` : j.status}
+        <span key={j.id} className={cx("text-[11px] num truncate", j.status === "waiting" ? "text-warn" : "text-muted")} title={j.waiting?.waiting_for ?? j.message ?? undefined}>
+          {j.label} · {jobStatusText(j)}
         </span>
       ))}
     </NavLink>

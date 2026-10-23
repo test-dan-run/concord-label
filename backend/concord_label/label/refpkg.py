@@ -9,7 +9,8 @@ What goes in follows the old Promote rules (PLAN.md §6.6):
 The references file follows what the segments carry: speaker and text -> `refs/segments.seglst.json`,
 text only (or scope `any`) -> `refs/segments.jsonl`, speaker only -> `refs/refs.rttm`. `refs/uids.jsonl`
 carries every segment's uid so flags can come back (§3). `outputs/seg.jsonl` optionally carries the
-whole-file outputs of the label runs' seg model, with their params written out in full (§2.5).
+whole-file outputs of the label runs' seg model, with their params written out in full and the catalog
+build key that made them (§2.5).
 
 A package is one zip with a single top folder `<name>-refs-v<N>/`. It is either downloaded, or pushed to
 Bench with its chunked upload API and staged there as a reference import (`push`).
@@ -161,20 +162,21 @@ def _label_runs(session: Session, ds: Dataset) -> list[Run]:
 
 
 def label_models(session: Session, ds: Dataset) -> list[str]:
-    """Registry names of the models the dataset's label runs used (seg model first, then ASR members)."""
+    """Catalog model ids of the models the dataset's label runs used (seg model first, then ASR members)."""
     out: list[str] = []
     for r in _label_runs(session, ds):
         for mid in [r.params.get("seg_model_id"), *(r.params.get("asr_model_ids") or [])]:
             m = session.get(Model, mid) if mid else None
-            if m is not None and m.registry_name not in out:
-                out.append(m.registry_name)
+            if m is not None and m.catalog_id not in out:
+                out.append(m.catalog_id)
     return out
 
 
 def seg_outputs(session: Session, ds: Dataset, shas: list[str]) -> list[dict[str, Any]]:
     """Whole-file outputs of the label runs' seg models on these files (CONTRACTS.md §2.5). The params are
     the ones the run called the model with, written out in full; a cache row is taken only when its hash is
-    the hash of those params, and only with a pinned image tag."""
+    the hash of those params, and only with a build key (rows from before the model catalog have none),
+    which Bench matches on."""
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for r in reversed(_label_runs(session, ds)):
@@ -184,18 +186,18 @@ def seg_outputs(session: Session, ds: Dataset, shas: list[str]) -> list[dict[str
             continue
         ph = params_hash(params)
         rows = session.scalars(select(ModelOutput).where(
-            ModelOutput.model_name == m.registry_name, ModelOutput.params_hash == ph,
-            ModelOutput.span_start == 0.0, ModelOutput.span_end == cache.WHOLE,
-            ModelOutput.audio_sha256.in_(shas)).order_by(ModelOutput.audio_sha256))
+            ModelOutput.model_name == m.catalog_id, ModelOutput.params_hash == ph,
+            ModelOutput.build_key.is_not(None), ModelOutput.span_start == 0.0, ModelOutput.span_end == cache.WHOLE,
+            ModelOutput.audio_sha256.in_(shas)).order_by(ModelOutput.audio_sha256, ModelOutput.id.desc()))
+        run_image = ((r.image_tags or {}).get(m.catalog_id) or {}).get("image")
         for row in rows:
-            image = params.get("image")  # the tag in the params; the cache row was made with it (it is in the hash)
             key = (row.model_name, row.audio_sha256, ph)
-            if key in seen or not image:
-                continue
+            if key in seen:
+                continue  # one output per model, file and params: the newest run's, newest row first
             seen.add(key)
             o = row.output or {}
-            out.append({"model": row.model_name, "image": image, "sha256": row.audio_sha256, "params": params,
-                        "latency_s": round(float(row.latency_s), 4),
+            out.append({"model": row.model_name, "image": row.image or run_image, "build_key": row.build_key,
+                        "sha256": row.audio_sha256, "params": params, "latency_s": round(float(row.latency_s), 4),
                         "output": {"segments": o.get("segments") or [], "speakers": o.get("speakers")}})
     return out
 

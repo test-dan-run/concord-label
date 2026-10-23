@@ -3,8 +3,6 @@ import { Nav } from "./Nav";
 import { DatasetDetail } from "../features/datasets/DatasetDetail";
 import { DatasetsPage } from "../features/datasets/DatasetsPage";
 import { UploadDataset } from "../features/datasets/UploadDataset";
-import { AddModel } from "../features/models/AddModel";
-import { ContractPage } from "../features/models/ContractPage";
 import { ModelsPage } from "../features/models/ModelsPage";
 import { JobsPage } from "../features/jobs/JobsPage";
 import { AnnotatePage, OpenFile, OpenFileBySha } from "../features/label/Annotate";
@@ -58,8 +56,9 @@ export const router = createBrowserRouter([
       { path: "datasets/upload", element: <UploadDataset /> },
       { path: "datasets/:id", element: <DatasetDetail /> },
       { path: "models", element: <ModelsPage /> },
-      { path: "models/add", element: <AddModel /> },
-      { path: "contract", element: <ContractPage /> },
+      // Registering a model and its contract page moved to the model catalog's own UI.
+      { path: "models/add", element: <Navigate to="/models" replace /> },
+      { path: "contract", element: <Navigate to="/models" replace /> },
       { path: "offline", element: <ExportOffline /> },
       { path: "jobs", element: <JobsPage /> },
       { path: "*", element: <Navigate to="/label" replace /> },

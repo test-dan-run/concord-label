@@ -1,7 +1,7 @@
 """Helpers shared by the Label tests (fixtures `label_flow` / `labelled` are in conftest.py) and by
 tests/e2e_server.py. Everything goes through Label's own HTTP API on recorded responses: models are
-registered from the registry (compatibility check, no typed fields), datasets are uploaded by local path,
-and pseudo-labelling fills the output cache."""
+registered in the (replay) model catalog, the way a person registers them in the catalog's UI, and Label lists
+them; datasets are uploaded by local path, and pseudo-labelling fills the output cache."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from concord_label.platform import catalog
 from concord_label.runs import jobs
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,15 +35,17 @@ def stage_fixture_dataset(dest: Path, refs: str | None = "stm") -> Path:
 
 
 def register_models(client, names: list[str] | None = None) -> dict[str, dict[str, Any]]:
-    """Add each registry entry as a model: run its compatibility check, then add it with no typed fields."""
-    out = {}
-    for name in names or SEG_MODELS + ASR_MODELS:
-        job = _ok(client.post(f"/api/registry/{name}/check"), 202)
-        jobs.run_pending()
-        job = _ok(client.get(f"/api/jobs/{job['id']}"))
-        assert job["status"] == "done", f"check of {name} {job['status']}: {job['error']}"
-        out[name] = _ok(client.post("/api/models", json={"registry_name": name, "check_job_id": job["id"]}), 201)
-    return out
+    """Register each model in the catalog (idempotent; the replay catalog has them already), then read them
+    back from Label's model list: capabilities come from the catalog, nothing is typed here."""
+    names = names or SEG_MODELS + ASR_MODELS
+    cat = catalog.get_catalog()
+    for name in names:
+        cat.register(name)
+    catalog.clear_cache()
+    listed = {m["catalog_id"]: m for m in _ok(client.get("/api/models"))["models"]}
+    missing = [n for n in names if n not in listed]
+    assert not missing, f"not in the catalog: {missing}"
+    return {n: listed[n] for n in names}
 
 
 def create_dataset(client, src: Path, name: str, tags: list[str] | None = None) -> dict[str, Any]:
@@ -65,7 +68,7 @@ def seed(client, staging: Path, log: Callable[[str], None] = lambda m: None) -> 
     """Models, an annotated dataset ("Synth fixtures": audio + speaker-attributed STM) and an audio-only
     copy of the same audio ("Unlabelled calls")."""
     out: dict[str, Any] = {"models": register_models(client)}
-    out["ids"] = {n: m["id"] for n, m in out["models"].items()}
+    out["ids"] = {n: m["catalog_id"] for n, m in out["models"].items()}  # pickers send catalog ids
     log(f"registered {', '.join(out['models'])}")
     out["dataset"] = create_dataset(client, stage_fixture_dataset(staging / "annotated"), "Synth fixtures",
                                     ["synthetic", "en", "call-centre"])

@@ -48,7 +48,7 @@ test *args:
     uv run pytest {{args}}
     cd frontend && npm run test --silent
 
-# adapter / orchestration tests against live platform services (starts what they need)
+# tests against the running model catalog (`just catalog-up` in the platform repo; it starts what they lease)
 test-live *args:
     uv run pytest -m live -o addopts="--import-mode=importlib" {{args}}
 
@@ -74,7 +74,8 @@ e2e: build-web
       -e E2E_BASE_URL=http://concord-label-e2e-api:8621 mcr.microsoft.com/playwright:v1.64.1-noble npx playwright test
 
 # round trip with Concord Bench (SPLIT_PLAN.md §10): the concord-label and concord-bench images (`just build` in
-# each repository) on one Docker network, replaying fixtures/recorded; push and download, versions, locked score, flags
+# each repository) on one Docker network, replaying fixtures/recorded (each app's catalog is its replay stand-in);
+# push and download, versions, locked score, flags
 e2e-handoff *args:
     uv run pytest -m handoff -o addopts="--import-mode=importlib" -s tests/test_handoff.py {{args}}
 

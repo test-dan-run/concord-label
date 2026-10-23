@@ -1,7 +1,7 @@
 """Server for the Playwright tests: a fresh data dir seeded through Label's own API on recorded responses
-(models registered from the registry, an annotated dataset, and an audio-only copy of the same audio
-pseudo-labelled by pyannote -> both Whispers), then the API + built frontend on --port. No GPU or
-platform needed.
+(models from the replay catalog, an annotated dataset, and an audio-only copy of the same audio
+pseudo-labelled by pyannote -> both Whispers), then the API + built frontend on --port. No GPU, platform or
+model catalog needed: in replay mode the catalog is a stand-in built from fixtures/recorded.
 
     uv run python tests/e2e_server.py --port 8611
 """

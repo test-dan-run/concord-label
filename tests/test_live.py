@@ -1,39 +1,47 @@
-"""Against live platform services (`just test-live`). Starts what it needs through ensure_services."""
+"""Against the running model catalog (`just test-live`): Label lists the models from it, takes a lease the way
+a label run does, and calls a model through the catalog's gateway. The catalog starts what the lease names."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
 from concord_label.adapters import for_model
 from concord_label.adapters.base import AudioRef
-from concord_label.platform.services import ensure_services, health
-from concord_label.registry.check import check_clip, run_check
+from concord_label.datasets.audio import load_derived, sha256_file
+from concord_label.platform import catalog
 
 pytestmark = pytest.mark.live
 
+CHECK = Path(__file__).resolve().parents[1] / "fixtures" / "generated" / "check"
+
 
 @pytest.fixture(scope="module", autouse=True)
-def services():
-    ensure_services(["silero-vad", "faster-whisper-large-v3"], print)
+def reachable():
+    from concord_label.core.settings import get_settings
+
+    get_settings()  # exports AICORE_CATALOG
+    if not catalog.get_catalog().available():
+        pytest.skip(f"no model catalog at {get_settings().catalog_root} (`just catalog-up` in the platform repo)")
 
 
-def test_health_reports_up():
-    assert health("silero-vad").up and health("default-vad").up
+def test_catalog_lists_the_speech_models():
+    tasks = {r["id"]: catalog.capabilities(r)[0] for r in catalog.models(force=True)}
+    assert "vad" in tasks.get("silero-vad", []) and "asr" in tasks.get("faster-whisper-large-v3", [])
 
 
-def test_check_detects_vad_and_word_times():
-    assert run_check("silero-vad").capabilities == ["vad"]
-    rep = run_check("faster-whisper-large-v3")
-    assert rep.capabilities == ["asr"] and rep.timing_level == "word"
+def test_adapter_through_the_gateway_under_a_lease():
+    rec = catalog.record("faster-whisper-large-v3", force=True)
 
-
-def test_adapter_on_check_clip():
     class M:
-        registry_name = "faster-whisper-large-v3"
-        registry_snapshot = {"contract": "openai", "api": "audio.transcriptions"}
-        timing_level = "word"
+        catalog_id = rec["id"]
+        contract, api = rec["contract"], rec["api"]
+        timing_level = catalog.capabilities(rec)[1]
 
-    audio, truth, sha = check_clip()
-    out, latency = for_model(M(), "en").run(audio, AudioRef(sha))
+    audio = load_derived(CHECK / "check_clip.wav")
+    with catalog.leased("label:test-live", [rec["id"]], print, on_wait=print) as lease:
+        assert lease.active
+        out, latency = for_model(M(), "en").run(audio, AudioRef(sha256_file(CHECK / "check_clip.wav")))
     assert out["words"] and latency > 0
     assert "parcel" in out["text"].lower()

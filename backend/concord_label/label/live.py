@@ -1,13 +1,15 @@
 """Live evaluation while labelling (PLAN §6.4): model scores against the segments confirmed so far.
 
 - References are confirmed segments with text, in the order they were confirmed.
-- A model's hypothesis for a segment is its cached output on exactly that span, else the member output
-  pseudo-labelling stored for it. Nothing is inferred here, so the page is cheap to refresh.
+- A model's hypothesis for a segment is its cached output on exactly that span from the model's current
+  build (catalog build key; a new build simply has no outputs yet), else the member output pseudo-labelling
+  stored for it when it is from that build too. Nothing is inferred here, so the page is cheap to refresh.
 - Below MIN_RANK confirmed segments the standings say "too few to rank". 95% intervals are a
   percentile bootstrap over segments (corpus WER of each resample).
 - DER uses only fully reviewed files (every segment reviewed), so missing labels never count as misses.
 - The locked benchmark score comes from Concord Bench (SPLIT_PLAN.md §5.3, CONTRACTS.md §4): one request
-  per page load, for the newest version Bench holds of this dataset, matched to models by registry name.
+  per page load, for the newest version Bench holds of this dataset, matched to models by catalog model id
+  (the platform service name, the same in both apps).
   Without a reachable Bench (or with no package of this dataset there) it is None and the page hides it.
   A model with a locked score but no outputs here for the confirmed segments (a dataset uploaded with its
   references) is listed with the locked score alone.
@@ -22,10 +24,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import adapters, peer
-from ..core.models import AudioFile, Dataset, Model, ModelOutput, Segment, SegmentStatus
+from ..core.models import AudioFile, Dataset, Model, Segment, SegmentStatus
 from ..cuts import usable_files
 from ..metrics import der, normalisers
 from ..metrics.der import Turn
+from ..platform import catalog
 from ..runs import cache
 from . import fusion
 
@@ -51,14 +54,8 @@ def _confirmed(session: Session, files: list[AudioFile]) -> list[Segment]:
     return sorted(segs, key=lambda s: (s.edited_at or s.updated_at, s.id))
 
 
-def _outputs(session: Session, service: str, phash: str, shas: list[str]) -> dict[tuple[str, float, float], ModelOutput]:
-    rows = session.scalars(select(ModelOutput).where(ModelOutput.model_name == service, ModelOutput.params_hash == phash,
-                                                     ModelOutput.audio_sha256.in_(shas)))
-    return {(r.audio_sha256, r.span_start, r.span_end): r for r in rows}
-
-
 def _locked(ds: Dataset, nkey: str) -> dict[str, dict[str, Any]]:
-    """Each model's locked benchmark score in Concord Bench, by registry name ({} without Bench)."""
+    """Each model's locked benchmark score in Concord Bench, by catalog model id ({} without Bench)."""
     from .sync import install_id
 
     return peer.locked_scores(ds.uid, install_id(), nkey) or {}
@@ -81,7 +78,8 @@ def asr_standings(session: Session, ds: Dataset, files: list[AudioFile], normali
             a = adapters.for_model(m, ds.language)
         except adapters.AdapterError:
             continue
-        have = _outputs(session, a.service, a.params_hash, list(set(sha.values())))
+        build = catalog.current_build(m)["build_key"]
+        have = cache.local_rows(session, a.service, build, a.params_hash, list(set(sha.values())))
         hyps: list[str | None] = []
         for s in segs:
             whole = s.start <= 0.0 and s.end >= dur[s.audio_file_id] - 1e-3
@@ -90,14 +88,16 @@ def asr_standings(session: Session, ds: Dataset, files: list[AudioFile], normali
             if row is None:
                 mid = ((s.meta or {}).get("members") or {}).get(a.service)
                 row = member_rows.get(mid) if mid else None
+                if row is not None and (not build or row.build_key != build):
+                    row = None  # another build's output: a new build is scored on its own outputs only
             hyps.append(row.output.get("text", "") if row else None)
         covered = [k for k, h in enumerate(hyps) if h is not None]
         if not covered:
-            if locked.get(m.registry_name):
+            if locked.get(m.catalog_id):
                 # No outputs here for the confirmed segments (references uploaded with the dataset, say), but
                 # Bench has benchmarked the model on a package of this dataset: list it with that score alone.
-                models.append({"model_id": m.id, "name": m.display_name, "service": m.registry_name, "coverage": 0,
-                               "words": 0, "wer": None, "ci": None, "curve": [], "locked": locked[m.registry_name]})
+                models.append({"model_id": m.id, "name": m.display_name, "service": m.catalog_id, "coverage": 0,
+                               "words": 0, "wer": None, "ci": None, "curve": [], "locked": locked[m.catalog_id]})
             continue
         hn = norm.many([hyps[k] or "" for k in covered])
         err = np.zeros(len(segs), dtype=float)
@@ -111,11 +111,21 @@ def asr_standings(session: Session, ds: Dataset, files: list[AudioFile], normali
         curve = [{"confirmed": k + 1, "wer": float(cum_e[k] / cum_n[k]) if cum_n[k] else None}
                  for k in range(len(segs)) if (k + 1) % step == 0 or k == len(segs) - 1]
         tot_n = words[has].sum()
-        models.append({"model_id": m.id, "name": m.display_name, "service": m.registry_name,
+        models.append({"model_id": m.id, "name": m.display_name, "service": m.catalog_id,
                        "coverage": len(covered), "words": int(tot_n),
                        "wer": float(err[has].sum() / tot_n) if tot_n else None,
                        "ci": bootstrap_ci(err[has], words[has]) if len(segs) >= MIN_RANK else None,
-                       "curve": curve, "locked": locked.get(m.registry_name)})
+                       "curve": curve, "locked": locked.get(m.catalog_id)})
+    # Catalog ASR models Label has never used have no outputs here; Bench's locked score still lists them.
+    seen = {m["service"] for m in models} | set(session.scalars(select(Model.catalog_id)))
+    try:
+        records = catalog.models() if locked else []
+    except catalog.CatalogUnavailable:
+        records = []
+    for rec in records:
+        if rec["id"] not in seen and locked.get(rec["id"]) and "asr" in catalog.capabilities(rec)[0]:
+            models.append({"model_id": None, "name": rec.get("display_name") or rec["id"], "service": rec["id"],
+                           "coverage": 0, "words": 0, "wer": None, "ci": None, "curve": [], "locked": locked[rec["id"]]})
     ranked = len(segs) >= MIN_RANK
     models.sort(key=lambda r: (r["wer"] is None, r["wer"] if r["wer"] is not None else 0))
     for k, r in enumerate(models):
@@ -137,7 +147,7 @@ def der_card(session: Session, files: list[AudioFile], collar: float) -> dict[st
             a = adapters.for_model(m)
         except adapters.AdapterError:
             continue
-        have = _outputs(session, a.service, a.params_hash, shas)
+        have = cache.local_rows(session, a.service, catalog.current_build(m)["build_key"], a.params_hash, shas)
         rows = []
         for f in complete:
             row = have.get((f.sha256, 0.0, cache.WHOLE))

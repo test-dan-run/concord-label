@@ -147,12 +147,12 @@ export function Tag({ children }: { children: ReactNode }) {
 
 export function StatusDot({ state }: { state: string }) {
   const color =
-    { up: "bg-good", replay: "bg-secondary", loading: "bg-warn", down: "bg-subtle", unknown: "bg-bad", running: "bg-primary", queued: "bg-subtle", done: "bg-good", failed: "bg-bad", blocked: "bg-warn" }[state] ?? "bg-subtle";
-  return <span aria-hidden className={cx("inline-block size-2 rounded-full shrink-0", color, state === "running" && "animate-pulse")} />;
+    { up: "bg-good", replay: "bg-secondary", loading: "bg-warn", down: "bg-subtle", unknown: "bg-bad", running: "bg-primary", queued: "bg-subtle", done: "bg-good", failed: "bg-bad", blocked: "bg-warn", waiting: "bg-warn", starting: "bg-warn", stopping: "bg-subtle", stopped: "bg-subtle" }[state] ?? "bg-subtle";
+  return <span aria-hidden className={cx("inline-block size-2 rounded-full shrink-0", color, ["running", "starting", "waiting"].includes(state) && "animate-pulse")} />;
 }
 
 export function JobPill({ status, progress }: { status: string; progress?: number }) {
-  const tone = { done: "good", failed: "bad", blocked: "warn", running: "info", queued: "default" }[status] as
+  const tone = { done: "good", failed: "bad", blocked: "warn", running: "info", waiting: "warn", queued: "default" }[status] as
     | "good"
     | "bad"
     | "warn"

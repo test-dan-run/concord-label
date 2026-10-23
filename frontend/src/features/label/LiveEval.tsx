@@ -17,9 +17,9 @@ export function LiveEvalPage() {
   return <Live datasetId={Number(datasetId)} />;
 }
 
-/** Colour per model, by model id (never by rank); models past the palette get none and stay table-only. */
-function seriesColors(models: LiveModel[]): Map<number, string> {
-  const ids = [...new Set(models.map((m) => m.model_id))].sort((a, b) => a - b);
+/** Colour per model, by catalog model id (never by rank); models past the palette get none and stay table-only. */
+function seriesColors(models: LiveModel[]): Map<string, string> {
+  const ids = [...new Set(models.map((m) => m.service))].sort();
   return new Map(ids.slice(0, MODEL_SERIES.length).map((id, k) => [id, MODEL_SERIES[k]]));
 }
 
@@ -105,7 +105,7 @@ function Live({ datasetId }: { datasetId: number }) {
   );
 }
 
-function Standings({ d, colors }: { d: LiveEval; colors: Map<number, string> }) {
+function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) {
   // The locked benchmark score comes from Concord Bench (BENCH_URL); hidden when Bench is not reachable or has no
   // package of this dataset.
   const showLocked = d.asr.models.some((m) => m.locked !== null);
@@ -126,11 +126,11 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<number, string> }) 
             </thead>
             <tbody>
               {d.asr.models.map((m) => (
-                <tr key={m.model_id} className="border-b border-track">
+                <tr key={m.service} className="border-b border-track">
                   <td className="px-2 py-2 num text-muted">{m.rank ?? "—"}</td>
                   <td className="px-2 py-2">
                     <span className="flex items-center gap-2">
-                      <span className="size-2.5 rounded-sm shrink-0" style={{ background: colors.get(m.model_id) ?? "transparent", border: colors.get(m.model_id) ? undefined : `1px solid ${C.line}` }} />
+                      <span className="size-2.5 rounded-sm shrink-0" style={{ background: colors.get(m.service) ?? "transparent", border: colors.get(m.service) ? undefined : `1px solid ${C.line}` }} />
                       <span className="truncate">{m.name}</span>
                     </span>
                     {m.coverage < d.asr.confirmed && <span className="text-[11px] text-subtle num">{m.coverage}/{d.asr.confirmed} segments</span>}
@@ -164,8 +164,8 @@ const H = 240;
 const PAD = { l: 44, r: 112, t: 12, b: 28 };
 
 /** One 2px line per model; the zone below `minRank` is shaded "too few to rank"; crosshair tooltip. */
-function WerCurve({ models, colors, total, minRank }: { models: LiveModel[]; colors: Map<number, string>; total: number; minRank: number }) {
-  const shown = models.filter((m) => colors.has(m.model_id));
+function WerCurve({ models, colors, total, minRank }: { models: LiveModel[]; colors: Map<string, string>; total: number; minRank: number }) {
+  const shown = models.filter((m) => colors.has(m.service));
   const box = useRef<SVGSVGElement>(null);
   const [hover, setHover] = useState<number | null>(null);
   const ymax = Math.max(0.05, ...shown.flatMap((m) => m.curve.map((p) => p.wer ?? 0))) * 1.1;
@@ -188,8 +188,8 @@ function WerCurve({ models, colors, total, minRank }: { models: LiveModel[]; col
     <div className="flex flex-col gap-2">
       <span className="flex flex-wrap gap-3 text-[11px] text-muted" aria-hidden>
         {shown.map((m) => (
-          <span key={m.model_id} className="flex items-center gap-1.5">
-            <span className="w-3 h-0.5 rounded" style={{ background: colors.get(m.model_id) }} />
+          <span key={m.service} className="flex items-center gap-1.5">
+            <span className="w-3 h-0.5 rounded" style={{ background: colors.get(m.service) }} />
             {m.name}
           </span>
         ))}
@@ -216,10 +216,10 @@ function WerCurve({ models, colors, total, minRank }: { models: LiveModel[]; col
           <text x={(PAD.l + W - PAD.r) / 2} y={H - 8} fontSize={10} textAnchor="middle" fill={C.subtle}>confirmed segments</text>
           {shown.map((m) => {
             const pts = m.curve.filter((p) => p.wer !== null);
-            const color = colors.get(m.model_id)!;
+            const color = colors.get(m.service)!;
             const last = pts[pts.length - 1];
             return (
-              <g key={m.model_id}>
+              <g key={m.service}>
                 <polyline fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" points={pts.map((p) => `${x(p.confirmed)},${y(p.wer!)}`).join(" ")} />
                 {last && (
                   <>
@@ -236,8 +236,8 @@ function WerCurve({ models, colors, total, minRank }: { models: LiveModel[]; col
           <div className="absolute top-2 pointer-events-none bg-panel border border-line rounded-md px-2.5 py-1.5 text-xs shadow-lg" style={{ left: `${Math.min(70, (x(hover) / W) * 100 + 2)}%` }}>
             <div className="text-muted num mb-1">{hover} confirmed</div>
             {shown.map((m) => (
-              <div key={m.model_id} className="flex items-center gap-2">
-                <span className="w-2.5 h-0.5 rounded" style={{ background: colors.get(m.model_id) }} />
+              <div key={m.service} className="flex items-center gap-2">
+                <span className="w-2.5 h-0.5 rounded" style={{ background: colors.get(m.service) }} />
                 <span className="text-muted">{m.name}</span>
                 <span className="num ml-auto text-fg">{pct(at(m, hover)?.wer)}</span>
               </div>
@@ -251,14 +251,14 @@ function WerCurve({ models, colors, total, minRank }: { models: LiveModel[]; col
           <thead>
             <tr>
               <th scope="col" className="px-2 py-1 text-left font-medium">Confirmed</th>
-              {shown.map((m) => <th key={m.model_id} scope="col" className="px-2 py-1 text-right font-medium">{m.name}</th>)}
+              {shown.map((m) => <th key={m.service} scope="col" className="px-2 py-1 text-right font-medium">{m.name}</th>)}
             </tr>
           </thead>
           <tbody>
             {(shown[0]?.curve ?? []).map((p) => (
               <tr key={p.confirmed}>
                 <td className="px-2 py-0.5">{p.confirmed}</td>
-                {shown.map((m) => <td key={m.model_id} className="px-2 py-0.5 text-right">{pct(at(m, p.confirmed)?.wer)}</td>)}
+                {shown.map((m) => <td key={m.service} className="px-2 py-0.5 text-right">{pct(at(m, p.confirmed)?.wer)}</td>)}
               </tr>
             ))}
           </tbody>

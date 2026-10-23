@@ -1,5 +1,5 @@
-"""Label on recorded responses: registering models, pseudo-labelling an audio-only copy of the fixture set,
-the console, annotation edits and live evaluation (HTTP API, no GPU)."""
+"""Label on recorded responses: models from the (replay) catalog, pseudo-labelling an audio-only copy of the
+fixture set, the console, annotation edits and live evaluation (HTTP API, no GPU)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from concord_label.core.models import Segment
 from label_helpers import ASR_MODELS, SEG_MODELS, _ok, label
 
 
-def test_registration_needs_no_typed_fields(label_flow):
+def test_models_and_capabilities_come_from_the_catalog(label_flow):
     assert set(label_flow["models"]) == set(ASR_MODELS + SEG_MODELS)
     caps = {n: (m["capabilities"], m["timing_level"]) for n, m in label_flow["models"].items()}
     assert caps["faster-whisper-large-v3"] == (["asr"], "word")

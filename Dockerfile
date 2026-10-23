@@ -7,8 +7,9 @@
 # The platform's aicore client is a sibling repo, so it comes in through a named build context:
 #   docker build --build-context platform=../../platform --target label -t concord-label:0.2.0 .
 #
-# Running: mount the platform directory at /platform and the Docker socket (Concord Label starts services with
-# the platform's tools/stack.py), join ai-net, and set AI_HOST={name}. See README.md.
+# Running: join ai-net, where the model catalog answers at http://catalog:8700 (it starts and serves every
+# model; Label only takes leases and calls its gateway). Mount the platform directory at /platform and the
+# Docker socket only for offline kits (the platform's tools/bundle.py). See README.md.
 
 ARG PYTHON=python:3.12.15-slim-bookworm
 ARG NODE=node:22.23.3-bookworm-slim
@@ -30,8 +31,8 @@ FROM ${PYTHON} AS pybuild
 ENV UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1 UV_PROJECT_ENVIRONMENT=/opt/venv
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /usr/local/bin/uv
-# The platform tools' own environment: at run time stack.py uses it with `uv run --no-sync`, so the
-# mounted platform's .venv on the host is never rebuilt from inside the container.
+# The platform tools' own environment: at run time bundle.py (offline kits) uses it with `uv run --no-sync`, so
+# the mounted platform's .venv on the host is never rebuilt from inside the container.
 COPY --from=platform pyproject.toml uv.lock /opt/platform-src/
 COPY --from=platform clients/aicore /opt/platform-src/clients/aicore
 COPY --from=platform custom/_bases/common /opt/platform-src/custom/_bases/common
@@ -49,18 +50,18 @@ FROM ${PYTHON} AS label
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PATH=/opt/venv/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /usr/local/bin/uv
-# docker CLI + compose plugin: stack.py drives `docker compose` on the host's daemon (socket mounted)
+# docker CLI + compose plugin: offline kits save images through the host's daemon (socket mounted)
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 COPY --from=pybuild /opt/platform-venv /opt/platform-venv
 COPY --from=pybuild /opt/venv /opt/venv
 WORKDIR /srv/apps/concord-label
 COPY README.md ./
-COPY fixtures/generated/check fixtures/generated/check
 COPY fixtures/generated/templates fixtures/generated/templates
 # UV_OFFLINE: `uv run --no-sync` for the platform tools never reaches for the network (offline kits).
 ENV CONCORD_HOME=/srv/apps/concord-label CONCORD_DATA=/data PLATFORM_DIR=/platform PLATFORM_VENV=/opt/platform-venv \
-    AI_HOST={name} AICORE_ENDPOINTS=/platform/clients/aicore/src/aicore/endpoints.generated.yaml UV_OFFLINE=1
+    AI_HOST={name} AICORE_ENDPOINTS=/platform/clients/aicore/src/aicore/endpoints.generated.yaml UV_OFFLINE=1 \
+    CATALOG_URL=http://catalog:8700 AICORE_CATALOG=http://catalog:8700 PUBLIC_URL=http://concord-label:8620
 VOLUME /data
 COPY --from=web-base /web/dist /srv/apps/concord-label/frontend/dist
 EXPOSE 8620
