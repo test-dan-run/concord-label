@@ -106,6 +106,9 @@ export function Nav() {
         <Item to="/models" icon={<I.Cpu />} prefix>Models</Item>
         <Item to="/jobs" icon={<I.List />}>Jobs</Item>
       </Group>
+      <Group title="Help">
+        <Item to="/docs" icon={<I.Doc />}>Docs</Item>
+      </Group>
       <Jobs />
       </div>
     </nav>

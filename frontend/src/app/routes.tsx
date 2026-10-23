@@ -4,6 +4,7 @@ import { DatasetDetail } from "../features/datasets/DatasetDetail";
 import { DatasetsPage } from "../features/datasets/DatasetsPage";
 import { UploadDataset } from "../features/datasets/UploadDataset";
 import { ModelsPage } from "../features/models/ModelsPage";
+import { DocsPage } from "../features/docs/DocsPage";
 import { JobsPage } from "../features/jobs/JobsPage";
 import { AnnotatePage, OpenFile, OpenFileBySha } from "../features/label/Annotate";
 import { LiveEvalPage } from "../features/label/LiveEval";
@@ -59,6 +60,7 @@ export const router = createBrowserRouter([
       { path: "models/add", element: <Navigate to="/models" replace /> },
       { path: "contract", element: <Navigate to="/models" replace /> },
       { path: "jobs", element: <JobsPage /> },
+      { path: "docs", element: <DocsPage /> },
       { path: "*", element: <Navigate to="/label" replace /> },
     ],
   },

@@ -8,7 +8,7 @@ import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-r
 import { api, qs, type AnnotateView, type LabelFile, type SegStatus, type Segment } from "../../lib/api";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, segmentAt, selectRange, STATUS_LABELS } from "../../lib/label";
+import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS, STATUS_TONE } from "../../lib/label";
 import { AudioPlayer, PlayFrom, useAudio } from "../../components/AudioPlayer";
 import { Timeline, type LaneGroup } from "../../components/Timeline";
 import * as I from "../../components/icons";
@@ -23,8 +23,6 @@ const SHOW: { value: Show; label: string }[] = [
   { value: "rejected", label: "Rejected" },
   { value: "confirmed", label: "Confirmed" },
 ];
-const STATUS_TONE: Record<SegStatus, "good" | "warn" | "bad" | "info" | "default"> = { confirmed: "good", auto: "info", pseudo: "warn", rejected: "bad" };
-
 /** `/label/file/:fileId` (from error analysis): find the file's dataset, then open the annotator on it. */
 export function OpenFile() {
   const { fileId } = useParams();
@@ -589,22 +587,12 @@ function SidePanel({ s, ctl, onUse, onFlag, onSplit, onDelete, onLive }: { s: Se
 }
 
 export function Shortcuts() {
-  const keys: [string, string][] = [
-    ["Space", "play / pause"],
-    ["Tab", "next low-confidence"],
-    ["1–8", "assign speaker"],
-    ["V", "split at playhead"],
-    ["M", "merge"],
-    ["Enter", "confirm"],
-    ["↑ ↓", "move"],
-    ["Shift-click", "select range"],
-  ];
   return (
     <span className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted" aria-label="Keyboard shortcuts">
-      {keys.map(([k, d]) => (
-        <span key={k} className="flex items-center gap-1.5">
-          <kbd className="num text-[10px] border border-line rounded px-1 py-px text-fg bg-track">{k}</kbd>
-          {d}
+      {SHORTCUTS.map(({ key, short }) => (
+        <span key={key} className="flex items-center gap-1.5">
+          <kbd className="num text-[10px] border border-line rounded px-1 py-px text-fg bg-track">{key}</kbd>
+          {short}
         </span>
       ))}
       <Link to="/label" className="ml-auto text-[11px]">Back to the console</Link>

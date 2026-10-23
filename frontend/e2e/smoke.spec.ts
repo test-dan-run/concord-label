@@ -18,7 +18,7 @@ test("the app opens on the console; the nav has Label's pages only", async ({ pa
   await expect(page).toHaveURL(/\/label$/);
   await expect(page).toHaveTitle("Concord Label");
   const nav = page.getByRole("navigation", { name: "Primary" });
-  for (const name of ["Console", "Pseudo-label", "Annotate", "Live evaluation", "Datasets", "Sync", "Models", "Jobs"]) {
+  for (const name of ["Console", "Pseudo-label", "Annotate", "Live evaluation", "Datasets", "Sync", "Models", "Jobs", "Docs"]) {
     await expect(nav.getByRole("link", { name, exact: true })).toBeVisible();
   }
   for (const name of ["Benchmarks", "Error analysis", "Training", "Offline export"]) {

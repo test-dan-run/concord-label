@@ -33,6 +33,20 @@ export const STATUS_LABELS: Record<SegStatus, string> = {
 
 export const STATUS_BAR: Record<SegStatus, BarKey> = { confirmed: "confirmed", auto: "auto", pseudo: "review", rejected: "rejected" };
 
+export const STATUS_TONE: Record<SegStatus, "good" | "warn" | "bad" | "info"> = { confirmed: "good", auto: "info", pseudo: "warn", rejected: "bad" };
+
+/** Annotate's keyboard shortcuts: `short` for the strip under the segment table, `does` for the Docs page. */
+export const SHORTCUTS: { key: string; short: string; does: string }[] = [
+  { key: "Space", short: "play / pause", does: "Play or pause" },
+  { key: "Tab", short: "next low-confidence", does: "Next low-confidence segment" },
+  { key: "1–8", short: "assign speaker", does: "Assign a speaker to the selected segments" },
+  { key: "V", short: "split at playhead", does: "Split the segment at the playhead" },
+  { key: "M", short: "merge", does: "Merge the selected segments, or the segment with the next one" },
+  { key: "Enter", short: "confirm", does: "Confirm the selected segments" },
+  { key: "↑ ↓", short: "move", does: "Move between segments" },
+  { key: "Shift-click", short: "select range", does: "Select a range of segments" },
+];
+
 /** Confidence colour (AeroAudio): >= high emerald, >= low amber, below rose, none slate. */
 export function confidenceColor(c: number | null | undefined, high = 0.85, low = 0.5): string {
   if (c === null || c === undefined) return C.subtle;
