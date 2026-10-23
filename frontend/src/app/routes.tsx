@@ -10,7 +10,6 @@ import { LiveEvalPage } from "../features/label/LiveEval";
 import { PseudoLabelPage } from "../features/label/PseudoLabel";
 import { ReviewConsole } from "../features/label/ReviewConsole";
 import { SyncPage } from "../features/label/SyncPage";
-import { ExportOffline } from "../features/offline/ExportOffline";
 
 // Improve (Phase 3) is on hold and in no image, so there is no Training route (SPLIT_PLAN.md §3.2).
 
@@ -59,7 +58,6 @@ export const router = createBrowserRouter([
       // Registering a model and its contract page moved to the model catalog's own UI.
       { path: "models/add", element: <Navigate to="/models" replace /> },
       { path: "contract", element: <Navigate to="/models" replace /> },
-      { path: "offline", element: <ExportOffline /> },
       { path: "jobs", element: <JobsPage /> },
       { path: "*", element: <Navigate to="/label" replace /> },
     ],

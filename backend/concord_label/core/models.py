@@ -1,7 +1,7 @@
 """Concord Label's SQLite schema (PLAN §4, SPLIT_PLAN.md §2.1).
 
-The tables Concord Bench also has (dataset, audio_file, segment, keyword_event, model, model_output, job,
-offline_export) started identical to Bench's and may change separately; only CONTRACTS.md must stay
+The tables Concord Bench also has (dataset, audio_file, segment, keyword_event, model, model_output,
+job) started identical to Bench's and may change separately; only CONTRACTS.md must stay
 compatible. Label's own: `run` (label runs only), `sync_package` and `reference_export`.
 
 `dataset.uid` names a dataset across apps: it is `source.dataset_uid` in the reference packages sent to
@@ -323,27 +323,6 @@ class ReferenceExport(Base):
     bench_import_id: Mapped[int | None] = mapped_column(Integer)  # Bench's staged reference import
     bench_dataset_id: Mapped[int | None] = mapped_column(Integer)  # set if Bench ever reports it
     bench_preview: Mapped[dict[str, Any]] = mapped_column(default=dict)
-    error: Mapped[str | None] = mapped_column(Text)
-    job_id: Mapped[int | None] = mapped_column(ForeignKey("job.id", ondelete="SET NULL"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
-
-
-class OfflineExport(Base):
-    """One offline kit written by this install. The kit is a folder on disk;
-    nothing of Concord's own state goes into it."""
-
-    __tablename__ = "offline_export"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    kind: Mapped[str] = mapped_column(String(8))  # full | models
-    services: Mapped[list[str]] = mapped_column(default=list)
-    # Full kits only: the app images in the kit, ", "-separated (CONTRACTS.md §6).
-    concord_image: Mapped[str | None] = mapped_column(String(300))
-    dest: Mapped[str] = mapped_column(String(1000))  # the folder the kit is written into
-    name: Mapped[str | None] = mapped_column(String(200))
-    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | running | done | failed
-    path: Mapped[str | None] = mapped_column(String(1000))  # the kit folder, once written
-    bytes: Mapped[int | None] = mapped_column(Integer)
     error: Mapped[str | None] = mapped_column(Text)
     job_id: Mapped[int | None] = mapped_column(ForeignKey("job.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

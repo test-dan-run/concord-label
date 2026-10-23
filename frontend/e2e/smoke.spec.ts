@@ -18,21 +18,21 @@ test("the app opens on the console; the nav has Label's pages only", async ({ pa
   await expect(page).toHaveURL(/\/label$/);
   await expect(page).toHaveTitle("Concord Label");
   const nav = page.getByRole("navigation", { name: "Primary" });
-  for (const name of ["Console", "Pseudo-label", "Annotate", "Live evaluation", "Datasets", "Sync", "Models", "Jobs", "Offline export"]) {
+  for (const name of ["Console", "Pseudo-label", "Annotate", "Live evaluation", "Datasets", "Sync", "Models", "Jobs"]) {
     await expect(nav.getByRole("link", { name, exact: true })).toBeVisible();
   }
-  for (const name of ["Benchmarks", "Error analysis", "Training"]) {
+  for (const name of ["Benchmarks", "Error analysis", "Training", "Offline export"]) {
     await expect(nav.getByRole("link", { name })).toHaveCount(0);
   }
-  // pages that moved to Concord Bench (or Improve, on hold) fall back to the console
-  for (const path of ["/benchmarks", "/errors", "/training"]) {
+  // pages that moved to Concord Bench or the model catalog (or Improve, on hold) fall back to the console
+  for (const path of ["/benchmarks", "/errors", "/training", "/offline"]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/label$/);
   }
   expect(errors).toEqual([]);
 });
 
-test("datasets, upload, models, jobs and offline export load", async ({ page }) => {
+test("datasets, upload, models and jobs load", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/datasets");
   await expect(page.getByRole("link", { name: "Synth fixtures" })).toBeVisible();
@@ -58,8 +58,4 @@ test("datasets, upload, models, jobs and offline export load", async ({ page }) 
   await page.goto("/jobs");
   await expect(page.getByRole("heading", { name: "Jobs" })).toBeVisible();
   expect(errors).toEqual([]);
-  // The offline page asks the platform's bundle.py for its services, which the e2e container does not
-  // have (a 503 the page shows); it still loads.
-  await page.goto("/offline");
-  await expect(page.getByRole("heading", { name: "Export for offline" })).toBeVisible();
 });

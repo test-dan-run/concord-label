@@ -89,14 +89,6 @@ lint:
 check-contracts *args:
     {{py}} contracts/check.py {{args}}
 
-# offline kit of platform services: just export-offline NAME... [--kind full|models] [--out DIR] [--app APP[=IMAGE]]...
-export-offline +args:
-    {{py}} -m concord_label.cli export-offline {{args}}
-
-# check an offline kit's files against its manifest.json
-verify-kit dir:
-    {{py}} -m concord_label.cli verify-kit {{dir}}
-
 # frontend production build into frontend/dist
 build-web:
     cd frontend && npm run build

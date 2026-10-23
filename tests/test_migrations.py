@@ -1,5 +1,5 @@
-"""Alembic revisions: 0002 backfills dataset uids, 0004 moves models to the catalog, and the head schema
-matches the ORM models."""
+"""Alembic revisions: 0002 backfills dataset uids, 0004 moves models to the catalog, 0005 drops offline kits,
+and the head schema matches the ORM models."""
 
 from __future__ import annotations
 
@@ -90,6 +90,35 @@ def test_0004_models_from_the_catalog(tmp_path, monkeypatch):
             assert cache.outputs_for(s, [41])[41].output == {"text": "hi"}  # still readable by id
             assert cache.local_rows(s, "whisper-large-v3", None, "0123456789abcdef", ["abc"]) == {}
             assert cache.local_rows(s, "whisper-large-v3", "feedfacefeedface", "0123456789abcdef", ["abc"]) == {}
+    finally:
+        db.reset_engines()
+        reset_settings()
+
+
+def test_0005_drops_offline_kits(tmp_path, monkeypatch):
+    """The offline_export table goes; a finished export job stays as history, an unfinished one is failed."""
+    from concord_label.core import db
+    from concord_label.core.settings import reset_settings
+
+    monkeypatch.setenv("CONCORD_DATA", str(tmp_path / "data"))
+    reset_settings()
+    db.reset_engines()
+    try:
+        (tmp_path / "data").mkdir()
+        cfg = db.alembic_config()
+        command.upgrade(cfg, "label_0004")
+        eng = sa.create_engine(db.db_url())
+        with eng.begin() as c:
+            for status in ("done", "queued"):
+                c.execute(sa.text("INSERT INTO job (type, payload, status, required_services, attempts, progress, "
+                                  "result, created_at) VALUES ('export', '{}', :s, '[]', 0, 0, '{}', '2026-10-21')"),
+                          {"s": status})
+        command.upgrade(cfg, "head")
+        with eng.connect() as c:
+            assert "offline_export" not in sa.inspect(c).get_table_names()
+            rows = c.execute(sa.text("SELECT status, error FROM job WHERE type = 'export' ORDER BY id")).all()
+            assert [tuple(r) for r in rows] == [("done", None), ("failed", "offline kits moved to the model catalog")]
+        eng.dispose()
     finally:
         db.reset_engines()
         reset_settings()

@@ -105,7 +105,6 @@ export function Nav() {
       <Group title="Setup">
         <Item to="/models" icon={<I.Cpu />} prefix>Models</Item>
         <Item to="/jobs" icon={<I.List />}>Jobs</Item>
-        <Item to="/offline" icon={<I.Download />}>Offline export</Item>
       </Group>
       <Jobs />
       </div>

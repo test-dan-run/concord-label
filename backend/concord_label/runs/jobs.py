@@ -3,7 +3,6 @@
 Job types:
 - ingest  {dataset_id, source, cleanup}         copy, decode, derive, parse references
 - label   {run_id}                              ensemble pseudo-labelling (Phase 2), writes segments
-- export  {export_id, services, kind, dest, ...}  an offline kit; needs no model
 - reference {export_id, dataset_id}             Send to Bench: write a reference package, push it if asked
 
 Models are the model catalog's business (platform/catalog.py). A job that needs models takes leases from
@@ -28,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from ..core import paths
 from ..core.db import SessionLocal
-from ..core.models import Dataset, Job, JobStatus, OfflineExport, ReferenceExport, Run, utcnow
+from ..core.models import Dataset, Job, JobStatus, ReferenceExport, Run, utcnow
 from ..platform import catalog
 
 
@@ -182,31 +181,6 @@ def _handle_label(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]
     return {"run_id": run.id, "summary": {k: v for k, v in run.outputs["summary"].items() if k != "agreement"}}
 
 
-def _handle_export(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
-    from ..offline import export as offline
-
-    p = job.payload
-    rec = session.get(OfflineExport, p["export_id"])
-    if rec is None:
-        raise ValueError(f"offline export {p['export_id']} not found")
-    rec.status, rec.error = "running", None
-    session.commit()
-    try:
-        # jobs queued before kits could carry both apps name one image of this app
-        apps = p["apps"] if "apps" in p else {offline.THIS_APP: p["concord_image"]} if p.get("concord_image") else None
-        out = offline.export(p["services"], p["kind"], Path(p["dest"]), apps, p.get("name"),
-                             ctx.log, ctx.progress)
-    except Exception as exc:
-        session.rollback()
-        rec = session.get(OfflineExport, p["export_id"])
-        rec.status, rec.error, rec.finished_at = "failed", str(exc)[:2000], utcnow()
-        session.commit()
-        raise
-    rec.status, rec.path, rec.bytes, rec.finished_at = "done", out["path"], out["bytes"], utcnow()
-    session.commit()
-    return {"export_id": rec.id, "path": out["path"], "bytes": out["bytes"]}
-
-
 def _handle_reference(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
     from ..label import refpkg
 
@@ -229,7 +203,7 @@ def _handle_reference(session: Session, job: Job, ctx: JobContext) -> dict[str, 
             "bench_import_id": rec.bench_import_id, "counts": rec.counts}
 
 
-HANDLERS = {"ingest": _handle_ingest, "label": _handle_label, "export": _handle_export, "reference": _handle_reference}
+HANDLERS = {"ingest": _handle_ingest, "label": _handle_label, "reference": _handle_reference}
 RUN_JOBS = ("label",)  # job types whose payload names a `run` that mirrors the job's state
 
 
@@ -301,10 +275,6 @@ def retry(session: Session, job: Job) -> None:
         run = session.get(Run, job.payload["run_id"])
         if run is not None:
             run.status, run.error = "queued", None
-    if job.type == "export":
-        rec = session.get(OfflineExport, job.payload["export_id"])
-        if rec is not None:
-            rec.status, rec.error, rec.finished_at = "queued", None, None
     if job.type == "reference":
         ref = session.get(ReferenceExport, job.payload["export_id"])
         if ref is not None:

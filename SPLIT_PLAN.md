@@ -128,8 +128,9 @@ must stay compatible.
 > **Since the model catalog** (platform `MODEL_CATALOG_REDESIGN.md`): `registry/` (registry reader,
 > compatibility check) and the Add model and Contract pages are gone from both copies; registering and
 > verifying models happen in the catalog's own UI. `platform/` now holds the catalog client glue
-> (Label: `platform/catalog.py`) and the platform tool runner for offline kits; leases, starting models and
-> the output index are the catalog's (§6 below is history).
+> (Label: `platform/catalog.py`); leases, starting models and the output index are the catalog's (§6 below
+> is history). Offline kits moved to the catalog too: Label dropped `offline/`, its export page and
+> CONTRACTS.md §6 (§7 below is history).
 
 ### 2.3 Contracts between the apps
 
@@ -329,6 +330,8 @@ the apps for this.
 ---
 
 ## 7. Offline export after the split
+
+> **Superseded:** offline kits are the model catalog's now; Concord Label writes none (see §2.2).
 
 **Decided: both apps can write a kit.** Each app keeps its copy of the offline kit code (`offline/`)
 and its export page. A full kit holds the app images that are ticked: this app,

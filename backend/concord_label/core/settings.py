@@ -27,11 +27,8 @@ class Settings(BaseSettings):
     concord_data: Path = Field(default=REPO_ROOT / "data")
     # Phase 3 (Improve) is on hold and installed in no image, so there is no FEATURE_IMPROVE flag. A
     # concord-label-full image brings it back when Phase 3 is scoped (SPLIT_PLAN.md §3.2).
-    # Platform repo: the aicore endpoint map is generated here, and offline kits run its tools/bundle.py.
+    # Platform repo: the aicore endpoint map is generated here.
     platform_dir: Path = Field(default=REPO_ROOT.parent.parent / "platform")
-    # A ready environment for the platform's tools (containers): bundle.py then runs with
-    # `uv run --no-sync` in it, so the platform's own .venv on the host is never touched.
-    platform_venv: Path | None = None
     # The model catalog (platform/catalog/README.md): models, leases, the output index and the gateway every
     # inference call goes through. CATALOG_URL, else AICORE_CATALOG; `http://catalog:8700` in a container.
     catalog_url: str = Field(default="http://127.0.0.1:8700",
@@ -50,8 +47,6 @@ class Settings(BaseSettings):
     replay_dir: Path | None = None
     # Write every live model response into this folder (to refresh recordings).
     record_dir: Path | None = None
-    # The Concord image a full offline kit carries unless the export form picks another (Q3).
-    concord_image: str = "concord-label:0.2.0"
     # Concord Bench (SPLIT_PLAN.md §5): where "Send to Bench" pushes reference packages and where the
     # live evaluation reads locked scores. Unset: packages are downloaded and the Locked column is hidden.
     bench_url: str | None = None

@@ -68,8 +68,8 @@ directory and database.
   not in `just test`): the fixture set benchmarked in Bench directly, the same set uploaded here and sent
   by push (no audio travels) and by download, versions 1 and 2 accepted, the WER equal to the direct
   benchmark every time, the locked score shown here and a flag sent back. Everything is removed afterwards.
-- **Offline.** A full offline kit written by either app can hold Label, Bench or both; with both, they
-  start from one compose file and already know each other's address (see Offline kits).
+- **Offline.** Offline kits (apps, platform and models for a machine with no internet access) are the
+  model catalog's; Concord Label no longer writes them.
 - **Contracts.** `just check-contracts` checks `contracts/samples` and compares `CONTRACTS.md` and
   `contracts/` with the Bench repository (`--peer PATH`; by default `../Concord` next to this one); they
   must stay byte-identical.
@@ -82,8 +82,7 @@ directory and database.
 backend/concord_label/
   core/        settings, paths (the only module that knows where files live), SQLite models, db
   datasets/    audio (ffmpeg probe/decode, clipping, 16 kHz derive, peaks), annotation parsers, ingest
-  platform/    catalog.py: the model catalog (models, leases, replay stand-in, app registration);
-               tools.py: running the platform's tools for offline kits
+  platform/    catalog.py: the model catalog (models, leases, replay stand-in, app registration)
   adapters/    openai_asr, openai_chat_audio, oip_segmenter; record / replay transport
   runs/        job queue + worker (ingest, label, export, reference), output cache + the catalog's index
   cuts.py      a dataset's usable files; segmenter output -> merged, padded ASR cuts
@@ -91,10 +90,9 @@ backend/concord_label/
   label/       ensemble fusion, pseudo-label runs, console, annotate edits, live evaluation,
                label packages (sync), reference packages for Bench (refpkg), flags from Bench (flags)
   peer.py      Concord Bench: /api/config probe (cached), locked scores
-  offline/     offline kits
   api/         FastAPI routers
   migrations/  Alembic (0001 initial schema, 0002 dataset uid + reference_export, 0003 no duration cap,
-               0004 models from the catalog, outputs keyed on build key)
+               0004 models from the catalog, outputs keyed on build key, 0005 no offline kits)
 backend/concord_improve/   Phase 3 placeholder router; on hold, installed in no image
 frontend/src/  React + TanStack Query + Tailwind (AeroAudio tokens in index.css)
 contracts/     the contract samples and their checker (CONTRACTS.md); identical in Concord Bench
@@ -109,8 +107,8 @@ Both apps started from the same code, and each keeps its own copy (SPLIT_PLAN.md
 one of these modules is checked against Concord Bench in the same sitting:
 `core/`, `datasets/`, `platform/`, `adapters/`, `runs/cache.py`, `runs/jobs.py`,
 `runs/worker.py`, `cuts.py` (`prepare_cuts`, `usable_files`), `metrics/` (`wer`, `der`, `normalisers`,
-`vad`), `offline/`; in the frontend `components/` (`AudioPlayer`, `Timeline`, `timelineMath`, `TagInput`,
-`icons`, `ui`), `lib/` and the Models, Jobs, Upload and Offline export pages. The adapters' params (and so
+`vad`); in the frontend `components/` (`AudioPlayer`, `Timeline`, `timelineMath`, `TagInput`,
+`icons`, `ui`), `lib/` and the Models, Jobs and Upload pages. The adapters' params (and so
 `params_hash`, via `aicore.catalog.params_hash`) must stay identical in both apps: the catalog's output
 index matches outputs across them on build key + audio + span + params hash. Before the model catalog,
 `registry/` (registry reader, compatibility check) and the Add model and Contract pages were copies too;
@@ -134,7 +132,7 @@ both apps dropped them for the catalog's own UI.
   (`CATALOG_UI_URL`) for registering. Label keeps a `model` row per catalog model it has used (runs and
   outputs refer to model ids), created on first use and refreshed from the catalog, so live evaluation and
   exports still work while the catalog is down.
-- **Jobs.** One worker process works through the `job` table: ingest, label run, offline kit, Send to Bench.
+- **Jobs.** One worker process works through the `job` table: ingest, label run, Send to Bench.
   Among queued jobs it takes the oldest whose models are all running in the catalog, else the oldest. A
   label run leases its models from the catalog itself, one stage at a time, as `label:job-<id>` (aicore's
   client heartbeats every 30 s; a crashed worker's lease expires after 90 s). While the catalog queues the
@@ -233,51 +231,21 @@ next to the platform:
 
 ```bash
 docker run -d --name concord-label --network ai-net -p 127.0.0.1:8620:8620 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$(realpath ../../platform)":/platform -v concord-label-data:/data concord-label:0.2.0
 ```
 
 The image sets `CATALOG_URL=http://catalog:8700` and `PUBLIC_URL=http://concord-label:8620`, so on `ai-net`
 it finds the catalog (`just catalog-up` in the platform repo) and the catalog finds it. Every inference call
-goes through the catalog's gateway. The Docker socket and the platform mount are only for offline kits
-(the platform's `tools/bundle.py`); mount the platform at the same absolute path it has on the host if its
-compose file uses relative bind mounts. In development, run Concord Label on the host instead.
-
-## Offline kits
-
-Concord Label, Concord Bench or both, and chosen models, can go to a machine with no internet access
-(CONTRACTS.md §6). **Offline export** lists every
-platform service with its image and weight sizes; tick the models, pick a kit kind, tick the apps a full
-kit carries ("Include Concord Label" is ticked; "Include Concord Bench" shows Bench's local image tag, or
-says to run `just build` in that repository) and a destination folder, and the worker writes the kit there
-(progress on the Jobs page). From the command line:
-
-```bash
-just export-offline silero-vad whisper-large-v3 --kind full --out /mnt/usb   # Concord Label + platform + models
-just export-offline silero-vad --kind full --app concord-label --app concord-bench --out /mnt/usb  # both apps
-just export-offline whisper-large-v3-turbo --kind models --out /mnt/usb       # models only, for an existing install
-just verify-kit /mnt/usb/concord-offline-...                                  # checksums against manifest.json
-```
-
-`--app concord-bench=concord-bench:0.2.0` picks a tag; without one the other app's image is its contract
-name, `concord-bench:<this version>`, or else the first tag `docker images concord-bench` lists.
-
-- A full kit carries `images/concord-label.tar` and/or `images/concord-bench.tar` (listed as `"apps"` in
-  `manifest.json`). `./install.sh` loads them, writes `concord/.env` (`LABEL_IMAGE`, `BENCH_IMAGE`) and
-  starts the apps from `concord/compose.yml`: `concord-label` on http://127.0.0.1:8620 and `concord-bench`
-  on http://127.0.0.1:8600. With both, `BENCH_URL` and `LABEL_URL` point at each other, so Send to Bench
-  pushes and the locked score shows on the offline machine too.
-- `./install.sh --add <install>` merges a model kit into an install. Register models there in the model
-  catalog: no registrations or datasets travel; labels come back as label packages.
-- The air-gap test of a kit (`just test-offline`, with Bench alone and with both images) lives in Concord
-  Bench.
+goes through the catalog's gateway. The platform mount gives aicore the platform's endpoint map
+(`AICORE_ENDPOINTS`). In development, run Concord Label on the host instead.
 
 ## Status
 
 Milestones S2, S4, S5, S6 and S7 of SPLIT_PLAN.md (Label side): Label runs on its own, sends references to
-Bench, links with it, writes offline kits with either or both apps, and the round trip with the
+Bench, links with it, and the round trip with the
 `concord-bench` image passes (`just e2e-handoff`, SPLIT_PLAN.md §10). The split is built. Since then, models,
-leases and inference moved to the platform's model catalog (MODEL_CATALOG_REDESIGN.md in the platform repo).
+leases and inference moved to the platform's model catalog (MODEL_CATALOG_REDESIGN.md in the platform repo),
+and so did offline kits.
 
 Known limits:
 - KWS is not built (Q6). Only its hooks exist: the enums, the `keyword_event` table, the disabled

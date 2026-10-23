@@ -60,8 +60,7 @@ def job_label(session: Session, j: Job) -> str:
         d = session.get(Dataset, p.get("dataset_id"))
         return f"send to Bench · {d.name}" if d else "send to Bench"
     if j.type == "export":
-        kind = "full kit" if p.get("kind") == "full" else "model kit"
-        return f"offline {kind} · {', '.join(p.get('services') or [])}"
+        return f"offline kit · {', '.join(p.get('services') or [])} (moved to the model catalog)"
     return j.type
 
 
