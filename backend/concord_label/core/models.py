@@ -2,7 +2,8 @@
 
 The tables Concord Bench also has (dataset, audio_file, segment, keyword_event, model, model_output,
 job) started identical to Bench's and may change separately; only CONTRACTS.md must stay
-compatible. Label's own: `run` (label runs only), `sync_package` and `reference_export`.
+compatible. Label's own: `run` (label runs only), `sync_package`, `reference_export`, `lexicon` and
+`lexicon_version`.
 
 `dataset.uid` names a dataset across apps: it is `source.dataset_uid` in the reference packages sent to
 Concord Bench (CONTRACTS.md §2) and in the flags that come back (§3).
@@ -327,3 +328,38 @@ class ReferenceExport(Base):
     job_id: Mapped[int | None] = mapped_column(ForeignKey("job.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class Lexicon(Base):
+    """House spellings for words written more than one way (e.g. `lah` over `la`, `laa`). Applies to every
+    dataset. `draft` holds the entries being edited; Annotate and the counts use the latest published
+    version. `uid` recognises the same lexicon in a label package from another install."""
+
+    __tablename__ = "lexicon"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    uid: Mapped[str] = mapped_column(String(32), default=new_uid, unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    # [{"word": house spelling, "variants": [spellings to flag]}], in the order shown
+    draft: Mapped[list[Any]] = mapped_column(default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    versions: Mapped[list[LexiconVersion]] = relationship(back_populates="lexicon", cascade="all, delete-orphan",
+                                                          order_by="LexiconVersion.version")
+
+
+class LexiconVersion(Base):
+    """One published version of a lexicon: its entries as they were at publishing (or as imported)."""
+
+    __tablename__ = "lexicon_version"
+    __table_args__ = (UniqueConstraint("lexicon_id", "version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    lexicon_id: Mapped[int] = mapped_column(ForeignKey("lexicon.id", ondelete="CASCADE"))
+    version: Mapped[int] = mapped_column(Integer)
+    entries: Mapped[list[Any]] = mapped_column(default=list)
+    # None: published here; else the label package it was imported from
+    imported_from: Mapped[int | None] = mapped_column(ForeignKey("sync_package.id", ondelete="SET NULL"))
+    published_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    lexicon: Mapped[Lexicon] = relationship(back_populates="versions")

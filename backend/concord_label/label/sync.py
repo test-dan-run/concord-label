@@ -4,8 +4,11 @@ A package is a zip of plain files:
 - manifest.json   format, version, install, dataset details, scope, what is included, counts
 - files.csv       path, sha256, duration, sample_rate
 - segments.jsonl  file_sha256, start, end, speaker, text, status, confidence, source, updated_at
-                  (+ uid and reviewed, so the same segment is recognised on the other side)
+                  (+ uid and reviewed, so the same segment is recognised on the other side, and
+                  spelling_kept when the annotator kept a spelling a lexicon flags)
 - keywords.jsonl  empty until KWS lands (kept so packages stay forward-compatible)
+- lexicons.json   every lexicon's latest published version: uid, name, description, version,
+                  published_at, entries (lexicons apply to every dataset, so all of them travel)
 - runs/           optional: label runs and the model outputs (cache rows) for these files
 - audio/          optional: original audio at its path
 
@@ -16,6 +19,11 @@ else by time overlap (IoU >= 0.5) within the file. Merge rules:
 - two unreviewed versions: the newer one wins;
 - both sides reviewed, differently: a conflict for the user to resolve (local is kept until then).
 A snapshot of the target's segments is taken before the merge; undo restores it.
+
+Lexicons are matched by uid: one not here is added; a newer version is taken, an older one is kept; the
+same version with different entries is a conflict like a segment's (a choice of the package's entries
+publishes them as the next version here). A lexicon's draft is only replaced when it had no unpublished
+changes. Undo removes the lexicons and versions the import added and puts drafts back.
 
 Deletions are not carried: a segment deleted on one side reappears if the other side still has it.
 """
@@ -42,6 +50,8 @@ from ..core.models import (
     AudioFile,
     Dataset,
     FileStatus,
+    Lexicon,
+    LexiconVersion,
     ModelOutput,
     Run,
     RunTask,
@@ -51,6 +61,7 @@ from ..core.models import (
     utcnow,
 )
 from ..core.settings import VERSION as APP_VERSION
+from . import lexicon
 
 FORMAT = "concord-label-package"
 VERSION = 1
@@ -94,9 +105,94 @@ def _parse_time(v: str | None) -> datetime | None:
 
 
 def segment_record(s: Segment, sha: str) -> dict[str, Any]:
-    return {"uid": s.uid, "file_sha256": sha, "start": s.start, "end": s.end, "speaker": s.speaker, "text": s.text,
-            "status": s.status, "confidence": s.confidence, "source": source_of(s), "reviewed": s.reviewed,
-            "flagged": s.flagged, "updated_at": _iso(s.edited_at or s.updated_at)}
+    r = {"uid": s.uid, "file_sha256": sha, "start": s.start, "end": s.end, "speaker": s.speaker, "text": s.text,
+         "status": s.status, "confidence": s.confidence, "source": source_of(s), "reviewed": s.reviewed,
+         "flagged": s.flagged, "updated_at": _iso(s.edited_at or s.updated_at)}
+    if (s.meta or {}).get("spelling_kept"):
+        r["spelling_kept"] = s.meta["spelling_kept"]
+    return r
+
+
+# ---------------------------------------------------------------- lexicons
+
+def lexicon_records(session: Session) -> list[dict[str, Any]]:
+    out = []
+    for lx in session.scalars(select(Lexicon).order_by(Lexicon.id)):
+        pub = lexicon.published(lx)
+        if pub:
+            out.append({"uid": lx.uid, "name": lx.name, "description": lx.description, "version": pub[0],
+                        "published_at": _iso(lx.versions[-1].published_at), "entries": pub[1]})
+    return out
+
+
+def read_lexicons(root: Path) -> list[dict[str, Any]]:
+    """lexicons.json, entries cleaned as the Lexicons page would; [] in packages from before lexicons."""
+    p = root / "lexicons.json"
+    if not p.is_file():
+        return []
+    try:
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        out = []
+        for r in rows:
+            entries = [lexicon.entry(e["word"], e.get("variants") or []) for e in r["entries"]]
+            out.append({"uid": str(r["uid"]), "name": str(r["name"]), "description": r.get("description"),
+                        "version": int(r["version"]), "published_at": r.get("published_at"), "entries": entries})
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise SyncError(f"lexicons.json unreadable: {exc}") from None
+    return out
+
+
+def _same_entries(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> bool:
+    def key(es):
+        return sorted((lexicon.norm(e["word"]), sorted(lexicon.norm(v) for v in e["variants"])) for e in es)
+    return key(a) == key(b)
+
+
+def _lexicon_plan(session: Session, root: Path) -> list[dict[str, Any]]:
+    rows = []
+    for r in read_lexicons(root):
+        lx = session.scalar(select(Lexicon).where(Lexicon.uid == r["uid"]))
+        pub = lexicon.published(lx) if lx else None
+        if lx is None:
+            o = "add"
+        elif pub is None or r["version"] > pub[0] and not _same_entries(pub[1], r["entries"]):
+            o = "take_incoming"
+        elif _same_entries(pub[1], r["entries"]):
+            o = "unchanged"
+        elif r["version"] < pub[0]:
+            o = "keep_local"
+        else:
+            o = "conflict"
+        rows.append({"key": f"lexicon:{r['uid']}", "uid": r["uid"], "name": r["name"], "outcome": o,
+                     "incoming": {"version": r["version"], "entries": r["entries"], "description": r["description"]},
+                     "local": {"id": lx.id, "version": pub[0] if pub else None, "entries": pub[1] if pub else []}
+                     if lx else None})
+    return rows
+
+
+def _take_lexicon(session: Session, row: dict[str, Any], pkg: SyncPackage, changes: dict[str, Any],
+                  next_version: bool = False) -> None:
+    """Publish the package's entries of one lexicon here: a new lexicon, or a new version of ours (the
+    package's version number, or our next one when `next_version`, as for a resolved conflict)."""
+    inc = row["incoming"]
+    entries = [dict(e) for e in inc["entries"]]
+    if row["local"] is None:
+        lx = Lexicon(uid=row["uid"], name=row["name"], description=inc.get("description"), draft=entries)
+        lx.versions.append(LexiconVersion(version=inc["version"], entries=entries, imported_from=pkg.id))
+        session.add(lx)
+        session.flush()
+        changes["added"].append(lx.id)
+        return
+    lx = session.get(Lexicon, row["local"]["id"])
+    pub = lexicon.published(lx)
+    version = pub[0] + 1 if pub and (next_version or inc["version"] <= pub[0]) else inc["version"]
+    if lx.draft == (pub[1] if pub else []):  # no unpublished edits here: the draft follows
+        changes["drafts"][str(lx.id)] = lx.draft
+        lx.draft = entries
+    v = LexiconVersion(version=version, entries=entries, imported_from=pkg.id)
+    lx.versions.append(v)
+    session.flush()
+    changes["versions"].append(v.id)
 
 
 # ---------------------------------------------------------------- export
@@ -147,6 +243,8 @@ def export(session: Session, ds: Dataset, mode: str = "changed", file_ids: list[
         z.writestr("files.csv", buf.getvalue())
         z.writestr("segments.jsonl", "".join(json.dumps(r) + "\n" for r in rows))
         z.writestr("keywords.jsonl", "")
+        lexicons = lexicon_records(session)
+        z.writestr("lexicons.json", json.dumps(lexicons, indent=2))
         if include_outputs:
             shas = sorted({f.sha256 for f in files})
             outs = session.scalars(select(ModelOutput).where(ModelOutput.audio_sha256.in_(shas)).order_by(ModelOutput.id))
@@ -171,7 +269,8 @@ def export(session: Session, ds: Dataset, mode: str = "changed", file_ids: list[
                     z.write(src, f"audio/{f.rel_path}", compress_type=zipfile.ZIP_STORED)
                     n_audio += 1
         counts = {"files": len(files), "segments": len(rows), "by_status": by_status,
-                  "reviewed": sum(1 for r in rows if r["reviewed"]), "model_outputs": n_outputs, "audio_files": n_audio}
+                  "reviewed": sum(1 for r in rows if r["reviewed"]), "model_outputs": n_outputs, "audio_files": n_audio,
+                  "lexicons": len(lexicons)}
         manifest = {"format": FORMAT, "version": VERSION, "created_at": utcnow().isoformat(),
                     "concord_version": APP_VERSION, "install_id": install_id(),
                     "dataset": {"name": ds.name, "language": ds.language, "tags": ds.tags,
@@ -259,6 +358,7 @@ def stage(session: Session, source: Path) -> SyncPackage:
             raise SyncError("upload a .zip label package")
         root = _root(dest)
         manifest, files, segs = read_package(root)
+        lexicons = read_lexicons(root)
     except (SyncError, zipfile.BadZipFile) as exc:
         shutil.rmtree(dest, ignore_errors=True)
         raise SyncError(str(exc)) from None
@@ -271,7 +371,7 @@ def stage(session: Session, source: Path) -> SyncPackage:
     pkg.counts = {"files": len(files), "segments": len(segs), "by_status": by_status,
                   "reviewed": sum(1 for s in segs if _incoming_reviewed(s)),
                   "audio_files": sum(1 for f in files if (root / "audio" / f["path"]).is_file()),
-                  "model_outputs": _count_lines(root / "runs" / "model_outputs.jsonl")}
+                  "model_outputs": _count_lines(root / "runs" / "model_outputs.jsonl"), "lexicons": len(lexicons)}
     session.flush()
     return pkg
 
@@ -389,9 +489,12 @@ def plan(session: Session, pkg: SyncPackage, target_id: int | None) -> dict[str,
     conflicts = [{"key": f"{r['incoming']['file_sha256'][:12]}:{r['local']['id']}", "file_sha256":
                   r["incoming"]["file_sha256"], "local": r["local"], "incoming": r["incoming"], "resolution": None}
                  for r in rows if r["outcome"] == "conflict"]
+    lexicons = _lexicon_plan(session, root)
+    conflicts += [{"kind": "lexicon", "key": r["key"], "uid": r["uid"], "name": r["name"], "local": r["local"],
+                   "incoming": r["incoming"], "resolution": None} for r in lexicons if r["outcome"] == "conflict"]
     return {"target": {"id": target.id, "name": target.name} if target else None, "files": file_rows,
             "file_counts": fcounts, "counts": counts, "rows": rows[:PREVIEW_ROWS], "truncated": len(rows) > PREVIEW_ROWS,
-            "conflicts": conflicts, "_all_rows": rows}
+            "conflicts": conflicts, "lexicons": lexicons, "_all_rows": rows}
 
 
 RULES = [
@@ -435,6 +538,8 @@ def _apply_fields(s: Segment, r: dict[str, Any], pkg_id: int) -> None:
     if r.get("source") == "pseudo-label":
         s.source_run_id = None
     s.meta = {"imported_from": pkg_id, "source": r.get("source")}
+    if r.get("spelling_kept"):
+        s.meta["spelling_kept"] = sorted({lexicon.norm(str(k)) for k in r["spelling_kept"]})
 
 
 def _add_file(session: Session, ds: Dataset, f: dict[str, Any], root: Path) -> AudioFile | None:
@@ -533,6 +638,20 @@ def apply(session: Session, pkg: SyncPackage, target_id: int | None, resolutions
         elif o == "add":
             o = "skipped"
         applied[o] = applied.get(o, 0) + 1
+    changes: dict[str, Any] = {"added": [], "versions": [], "drafts": {}}
+    lex_applied: dict[str, int] = {}
+    for row in pl["lexicons"]:
+        o = row["outcome"]
+        if o in ("add", "take_incoming"):
+            _take_lexicon(session, row, pkg, changes)
+        elif o == "conflict":
+            choice = resolutions.get(row["key"])
+            if choice == "incoming":
+                _take_lexicon(session, row, pkg, changes, next_version=True)
+            conflicts.append({"kind": "lexicon", "key": row["key"], "uid": row["uid"], "name": row["name"],
+                              "local": row["local"], "incoming": row["incoming"],
+                              "resolution": choice if choice in ("incoming", "local") else None})
+        lex_applied[o] = lex_applied.get(o, 0) + 1
     n_out = _import_outputs(session, root)
     if ds.status != "ready":
         ds.status = "ready"
@@ -541,7 +660,8 @@ def apply(session: Session, pkg: SyncPackage, target_id: int | None, resolutions
     pkg.dataset_id, pkg.status, pkg.applied_at, pkg.snapshot_path = ds.id, "applied", utcnow(), str(snap)
     pkg.conflicts = conflicts
     pkg.counts = {**pkg.counts, "outcome": applied, "added_file_ids": added_files, "files_missing_audio": missing,
-                  "model_outputs_added": n_out, "created_dataset": not target_id}
+                  "model_outputs_added": n_out, "created_dataset": not target_id, "lexicon_outcome": lex_applied,
+                  "lexicon_changes": changes}
     session.flush()
     return pkg
 
@@ -570,7 +690,14 @@ def resolve(session: Session, pkg: SyncPackage, key: str, choice: str) -> dict[s
     c = next((c for c in conflicts if c["key"] == key), None)
     if c is None:
         raise SyncError(f"no conflict {key!r}")
-    if choice == "incoming":
+    if choice == "incoming" and c["resolution"] != "incoming" and c.get("kind") == "lexicon":
+        if session.scalar(select(Lexicon.id).where(Lexicon.uid == c["uid"])) is None:
+            raise SyncError("the local lexicon no longer exists")
+        changes = {"added": [], "versions": [], "drafts": {}, **(pkg.counts.get("lexicon_changes") or {})}
+        changes = {k: (list(v) if isinstance(v, list) else dict(v)) for k, v in changes.items()}
+        _take_lexicon(session, c, pkg, changes, next_version=True)
+        pkg.counts = {**pkg.counts, "lexicon_changes": changes}
+    elif choice == "incoming" and c.get("kind") != "lexicon":
         s = session.get(Segment, c["local"]["id"])
         if s is None:
             raise SyncError("the local segment no longer exists")
@@ -606,6 +733,19 @@ def undo(session: Session, pkg: SyncPackage) -> SyncPackage:
     ds = session.get(Dataset, ds_id)
     if ds is not None and pkg.counts.get("added_file_ids"):
         _refresh_report(session, ds)
+    changes = pkg.counts.get("lexicon_changes") or {}
+    for vid in changes.get("versions") or []:
+        v = session.get(LexiconVersion, vid)
+        if v is not None:
+            session.delete(v)
+    for lid, draft in (changes.get("drafts") or {}).items():
+        lx = session.get(Lexicon, int(lid))
+        if lx is not None:
+            lx.draft = draft
+    for lid in changes.get("added") or []:
+        lx = session.get(Lexicon, lid)
+        if lx is not None:
+            session.delete(lx)
     pkg.status, pkg.undone_at = "undone", utcnow()
     session.flush()
     return pkg

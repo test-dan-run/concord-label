@@ -167,3 +167,62 @@ def test_bad_packages(client, tmp_path, payload):
     p.write_bytes(payload)
     r = client.post("/api/sync/imports", json={"local_path": str(p)})
     assert r.status_code == 422
+
+
+def _with_lexicons(blob: bytes, tmp_path, lexicons) -> bytes:
+    """The package with its lexicons.json replaced, as another install would have written it."""
+    src, out = tmp_path / "src.zip", tmp_path / "out.zip"
+    src.write_bytes(blob)
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out, "w") as zout:
+        for n in zin.namelist():
+            zout.writestr(n, json.dumps(lexicons) if n == "lexicons.json" else zin.read(n))
+    return out.read_bytes()
+
+
+def test_lexicons_and_kept_spellings_travel(labelled, client, tmp_path):
+    ds = labelled["unlabelled"]
+    lx = _ok(client.post("/api/lexicons", json={"name": "Singlish"}), 201)
+    _ok(client.post(f"/api/lexicons/{lx['id']}/entries", json={"word": "lah", "variants": ["la"]}))
+    _ok(client.post(f"/api/lexicons/{lx['id']}/publish"))
+    a = segments_of(client, ds)[0]
+    _ok(client.patch(f"/api/label/segments/{a['id']}", json={"spelling_kept": ["la"], "status": "confirmed"}))
+    pkg, blob = export(client, ds)
+    assert pkg["counts"]["lexicons"] == 1
+    (tmp_path / "p.zip").write_bytes(blob)
+    with zipfile.ZipFile(tmp_path / "p.zip") as z:
+        sent = json.loads(z.read("lexicons.json"))
+        seg = next(json.loads(x) for x in z.read("segments.jsonl").decode().splitlines() if json.loads(x)["uid"] == a["uid"])
+    assert [(x["uid"], x["version"], x["entries"]) for x in sent] == [(lx["uid"], 1, [{"word": "lah", "variants": ["la"]}])]
+    assert seg["spelling_kept"] == ["la"]
+
+    # the other install published v2 of it and made a lexicon of its own
+    v2 = {**sent[0], "version": 2, "entries": [{"word": "lah", "variants": ["la", "laa"]}]}
+    new = {"uid": "f" * 32, "name": "Places", "description": None, "version": 1,
+           "entries": [{"word": "Jurong", "variants": ["Jurung"]}]}
+    staged = stage(client, tmp_path, _with_lexicons(blob, tmp_path, [v2, new]))
+    assert staged["counts"]["lexicons"] == 2
+    pl = _ok(client.get(f"/api/sync/imports/{staged['id']}/plan?target_dataset_id={ds}"))
+    assert {r["name"]: r["outcome"] for r in pl["lexicons"]} == {"Singlish": "take_incoming", "Places": "add"}
+    _ok(client.post(f"/api/sync/imports/{staged['id']}/apply", json={"target_dataset_id": ds}))
+    mine = _ok(client.get(f"/api/lexicons/{lx['id']}"))
+    assert mine["version"] == 2 and mine["draft"][0]["variants"] == ["la", "laa"] and not mine["dirty"]
+    assert [x["name"] for x in _ok(client.get("/api/lexicons"))] == ["Singlish", "Places"]
+    assert segments_of(client, ds)[0]["spelling_kept"] == ["la"]
+    # undo takes both back
+    _ok(client.post(f"/api/sync/imports/{staged['id']}/undo"))
+    assert [(x["name"], x["version"]) for x in _ok(client.get("/api/lexicons"))] == [("Singlish", 1)]
+
+    # the same version with other entries is a conflict; choosing the package's publishes them as v2
+    clash = {**sent[0], "entries": [{"word": "lah", "variants": ["lar"]}]}
+    staged = stage(client, tmp_path, _with_lexicons(blob, tmp_path, [clash]), name="clash.zip")
+    pl = _ok(client.get(f"/api/sync/imports/{staged['id']}/plan?target_dataset_id={ds}"))
+    c = next(c for c in pl["conflicts"] if c.get("kind") == "lexicon")
+    assert c["local"]["version"] == c["incoming"]["version"] == 1
+    applied = _ok(client.post(f"/api/sync/imports/{staged['id']}/apply", json={"target_dataset_id": ds}))
+    assert applied["conflicts_open"] == 1 and _ok(client.get(f"/api/lexicons/{lx['id']}"))["version"] == 1
+    _ok(client.post(f"/api/sync/imports/{staged['id']}/resolve", json={"key": c["key"], "choice": "incoming"}))
+    mine = _ok(client.get(f"/api/lexicons/{lx['id']}"))
+    assert mine["version"] == 2 and mine["draft"] == [{"word": "lah", "variants": ["lar"], "house": 0, "variant": 0,
+                                                       "review": None}]
+    _ok(client.post(f"/api/sync/imports/{staged['id']}/undo"))
+    assert _ok(client.get(f"/api/lexicons/{lx['id']}"))["version"] == 1

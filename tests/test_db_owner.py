@@ -41,14 +41,14 @@ def _state() -> tuple[set[str], list]:
 
 
 def test_ids_are_label_only():
-    assert db.known_revisions() == {"label_0001", "label_0002", "label_0003", "label_0004", "label_0005"}
-    assert db.next_revision_id() == "label_0006"
+    assert db.known_revisions() == {"label_0001", "label_0002", "label_0003", "label_0004", "label_0005", "label_0006"}
+    assert db.next_revision_id() == "label_0007"
 
 
 def test_a_new_folder_migrates_and_a_second_migrate_is_fine(empty_dir):
     db.migrate()
     db.migrate()
-    assert _state()[1] == [("label_0005",)]
+    assert _state()[1] == [("label_0006",)]
 
 
 @pytest.mark.parametrize(("version", "says"), [

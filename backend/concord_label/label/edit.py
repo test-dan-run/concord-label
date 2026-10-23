@@ -18,7 +18,7 @@ from ..core.models import AudioFile, Model, Run, Segment, SegmentStatus, utcnow
 from ..runs import cache
 from . import console
 
-EDITABLE = ("text", "speaker", "start", "end", "status", "flagged", "flag_note")
+EDITABLE = ("text", "speaker", "start", "end", "status", "flagged", "flag_note", "spelling_kept")
 MIN_LEN = 0.05
 
 
@@ -34,7 +34,7 @@ def segment_json(s: Segment) -> dict[str, Any]:
             "reviewed": s.reviewed, "edited_at": s.edited_at.isoformat() if s.edited_at else None,
             "updated_at": s.updated_at.isoformat() if s.updated_at else None,
             "chosen": m.get("chosen"), "agreement": m.get("agreement"), "words": m.get("words"),
-            "created": bool(m.get("created"))}
+            "created": bool(m.get("created")), "spelling_kept": m.get("spelling_kept") or []}
 
 
 def _touch(s: Segment) -> None:
@@ -60,6 +60,11 @@ def update(session: Session, s: Segment, fields: dict[str, Any]) -> Segment:
         if (round(start, 3), round(end, 3)) != (s.start, s.end):
             s.meta = {k: v for k, v in (s.meta or {}).items() if k not in ("members", "span", "words")}
     for k, v in fields.items():
+        if k == "spelling_kept":
+            # spelling hints the annotator chose to keep (label/lexicon.py); lower case, single spaces
+            kept = sorted({" ".join(str(x).lower().split()) for x in v or []} - {""})
+            s.meta = {**(s.meta or {}), "spelling_kept": kept}
+            continue
         if k == "speaker":
             v = (v or "").strip() or None
         if k in ("start", "end"):

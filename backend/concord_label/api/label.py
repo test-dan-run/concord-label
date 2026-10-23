@@ -205,6 +205,7 @@ class SegmentPatch(BaseModel):
     status: str | None = None
     flagged: bool | None = None
     flag_note: str | None = None
+    spelling_kept: list[str] | None = None
 
 
 def _commit_or_400(session: Session, fn):
