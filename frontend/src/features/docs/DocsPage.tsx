@@ -156,6 +156,29 @@ const SECTIONS: Section[] = [
     ),
   },
   {
+    id: "lexicons",
+    title: "Lexicons",
+    body: (
+      <>
+        <p className="m-0">
+          A lexicon sets one house spelling for words that get written several ways, such as <span className="num text-fg">lah</span> over{" "}
+          <span className="num text-fg">la</span>. Inconsistent spellings in references show up in Bench as substitution errors that the model
+          never made.
+        </p>
+        <p className="m-0">
+          In Annotate, a variant is underlined <span className="text-fg underline decoration-wavy decoration-warn underline-offset-[3px]">like this</span>.
+          Click it to use the house spelling or keep what you wrote; it is never changed for you. <kbd className="num text-[11px] border border-line rounded px-1 text-fg bg-track">Alt+Enter</kbd> uses
+          the house spelling for the selected segment, and Tab stops at hints as well as low-confidence segments.
+        </p>
+        <p className="m-0">
+          Manage lexicons on <Link to="/lexicons">Lexicons</Link>. Every lexicon applies to every dataset. Edits are a draft until you publish a
+          new version; Annotate keeps the published version until then. A version cannot be published while one variant would get two house
+          spellings. Published lexicons travel in Sync packages.
+        </p>
+      </>
+    ),
+  },
+  {
     id: "eval",
     title: "Live evaluation",
     body: (

@@ -153,6 +153,49 @@ test("annotate: speaker lanes move, trim, draw and add a speaker", async ({ page
   expect(errors).toEqual([]);
 });
 
+test("lexicons: publish house spellings, then use or keep them in Annotate", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/lexicons");
+  await page.getByRole("button", { name: "New lexicon" }).click();
+  await page.getByLabel("Name").fill("House style");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page).toHaveURL(/\/lexicons\/\d+$/);
+  await expect(page.getByRole("heading", { name: "House style" })).toBeVisible();
+  for (const [word, variants] of [["neighbour", "neighbor"], ["midday", "noon"]]) {
+    await page.getByLabel("House spelling").fill(word);
+    await page.getByLabel("Variants to flag (comma-separated)").fill(variants);
+    await page.getByRole("button", { name: "Add entry" }).click();
+    await expect(page.getByRole("cell", { name: word, exact: true })).toBeVisible();
+  }
+  await expect(page.getByText(/Unpublished changes/)).toBeVisible();
+  await page.getByRole("button", { name: "Publish v1" }).click();
+  await expect(page.getByText("Annotate uses v1.")).toBeVisible();
+  // the annotated fixture set's references already say "neighbour"; only the ASR models wrote "neighbor"
+  await expect(page.getByRole("row", { name: /neighbour/ })).toContainText(/[1-9]\d* house · 0 variants/);
+
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 3 });
+  await expect(page.getByRole("heading", { name: "d04" })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  await expect(page.getByRole("link", { name: /House style v1 · 2 spelling hints/ })).toBeVisible();
+  await page.getByRole("button", { name: "neighbor: house spelling is neighbour" }).click();
+  const hint = page.getByRole("group", { name: "Spelling hint" });
+  await hint.getByRole("button", { name: "Use" }).click();
+  // a segment with no hints left is a plain input again
+  const transcripts = () => page.getByLabel(/^Transcript at /).evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value).join("\n"));
+  await expect.poll(transcripts).toContain("my neighbour if I am out?");
+  await expect(page.getByRole("link", { name: /· 1 spelling hint$/ })).toBeVisible();
+  await page.getByRole("button", { name: "noon: house spelling is midday" }).click();
+  await hint.getByRole("button", { name: "Keep" }).click();
+  await expect(page.getByRole("link", { name: /· 0 spelling hints/ })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("link", { name: /· 0 spelling hints/ })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  await expect.poll(transcripts).toContain("before noon.");
+  expect(errors).toEqual([]);
+});
+
 test("live evaluation loads standings and DER; Send to Bench, no locked score without Bench", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/label/live");
@@ -184,7 +227,9 @@ test("import / export: build a package, import it back, see the merge plan", asy
   await page.getByLabel("Label package (.zip)").setInputFiles(file!);
   await expect(page.getByLabel("Merge into")).toHaveValue(/\d+/);
   await expect(page.getByText(/files · Matched by fingerprint/)).toBeVisible();
-  await expect(page.getByRole("cell", { name: "Unchanged" })).toBeVisible();
+  await expect(page.getByRole("table", { name: "Segment outcomes and the rule behind each" }).getByRole("cell", { name: "Unchanged" })).toBeVisible();
+  // published lexicons travel with every package (the one made in the lexicons test)
+  await expect(page.getByRole("table", { name: "Lexicons in the package" }).getByRole("row", { name: /House style/ })).toContainText("Unchanged");
   await page.getByRole("button", { name: "Apply merge" }).click();
   await expect(page.getByText(/Merged into dataset/)).toBeVisible();
   await expect(page.getByRole("row", { name: /Import.*applied/ }).first()).toBeVisible();

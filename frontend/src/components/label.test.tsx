@@ -7,7 +7,7 @@ function seg(id: number, over: Partial<Segment> = {}): Segment {
   return {
     id, uid: `u${id}`, file_id: 1, start: id, end: id + 1, speaker: "spk0", text: "x", status: "pseudo", confidence: 0.6,
     source_run_id: 1, flagged: false, flag_note: null, reviewed: false, edited_at: null, updated_at: null, chosen: null,
-    agreement: null, words: null, created: false, ...over,
+    agreement: null, words: null, created: false, spelling_kept: [], ...over,
   };
 }
 

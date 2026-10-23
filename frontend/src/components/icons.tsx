@@ -84,6 +84,11 @@ export const Doc = (p: P) => (
     <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5" />
   </Svg>
 );
+export const Book = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2zM8 7h8M8 11h6" />
+  </Svg>
+);
 export const Database = (p: P) => (
   <Svg {...p}>
     <ellipse cx="12" cy="5" rx="8" ry="3" />

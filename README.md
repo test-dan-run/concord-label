@@ -87,7 +87,7 @@ backend/concord_label/
   runs/        job queue + worker (ingest, label, export, reference), output cache + the catalog's index
   cuts.py      a dataset's usable files; segmenter output -> merged, padded ASR cuts
   metrics/     normalisers, wer (jiwer), der/jer (pyannote.metrics), vad
-  label/       ensemble fusion, pseudo-label runs, console, annotate edits, live evaluation,
+  label/       ensemble fusion, pseudo-label runs, console, annotate edits, live evaluation, lexicons,
                label packages (sync), reference packages for Bench (refpkg), flags from Bench (flags)
   peer.py      Concord Bench: /api/config probe (cached), locked scores
   api/         FastAPI routers
@@ -167,8 +167,16 @@ both apps dropped them for the catalog's own UI.
   speaker, drag or arrow-key its grips to trim, drag across a lane to draw one, add speakers up to 8;
   saved on release), overlap hatch and a flags lane; segment grid with shift-click multi-select and a bulk
   bar, inline transcript editing with autosave, speaker pill cycling, merge / split / add. Shortcuts:
-  Space, Tab, 1–8, V, M, Enter. Any edit marks the segment as touched by a person; pseudo-labelling never
-  replaces it afterwards. A segment drawn by hand shows as "New · manual" until it is confirmed.
+  Space, Tab, Alt+Enter, 1–8, V, M, Enter. Any edit marks the segment as touched by a person;
+  pseudo-labelling never replaces it afterwards. A segment drawn by hand shows as "New · manual" until it is
+  confirmed. Variants the published lexicons flag are underlined with Use / Keep (Alt+Enter uses the house
+  spelling); a kept one is remembered on the segment (`meta.spelling_kept`) and not shown again.
+- **Lexicons** (Setup): house spellings and the variants to flag, for every dataset. Entries are a draft
+  until published as the next version; Annotate uses each lexicon's latest version. Publishing is refused
+  while a variant would get two house spellings or is another entry's house spelling. Each entry shows how
+  often its house spelling and variants occur in confirmed segments, with a link to the first variant.
+  Matching (case-insensitive whole words, longest first) is `label/lexicon.py` on the server and
+  `lib/lexicon.ts` in the browser, tested on the same cases.
 - **Live evaluation**: WER of each model against confirmed segments (from saved outputs only), "too few
   to rank" below 30, bootstrap 95% intervals, DER on fully reviewed files, the latest confirmations.
   Metrics: WER via jiwer after a normaliser (`basic` default, `whisper_en`, `none`, or any platform
@@ -188,10 +196,11 @@ both apps dropped them for the catalog's own UI.
   file at `t`; `POST /api/flags/import` (or a flags file uploaded on the dataset page) flags segments,
   matched by uid or by overlap, and they show in the annotator's flags lane.
 - **Sync**: label packages between Label installs (`manifest.json`, `files.csv`, `segments.jsonl`,
-  `keywords.jsonl`, optional `runs/` and `audio/`). Import is staged and previewed; files match by
-  SHA-256, segments by `uid` or time overlap. Reviewed work is never overwritten by pseudo-labels,
+  `keywords.jsonl`, `lexicons.json`, optional `runs/` and `audio/`). Import is staged and previewed; files
+  match by SHA-256, segments by `uid` or time overlap. Reviewed work is never overwritten by pseudo-labels,
   reviewed-on-both-sides differences become conflicts to resolve, and a snapshot taken before the merge
-  makes it undoable.
+  makes it undoable. Lexicons match by uid: a newer version is taken, an older one kept, the same version
+  with other entries is a conflict; undo removes what the import added.
 - **`GET /api/config`** reports `app` (`concord-label`), `version`, `contract_version` and `peer`
   (CONTRACTS.md §1): `BENCH_URL`, whether Bench answered `/api/config` (1 s timeout, cached 30 s) and its
   contract version.

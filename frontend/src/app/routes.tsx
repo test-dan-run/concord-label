@@ -6,6 +6,7 @@ import { UploadDataset } from "../features/datasets/UploadDataset";
 import { ModelsPage } from "../features/models/ModelsPage";
 import { DocsPage } from "../features/docs/DocsPage";
 import { JobsPage } from "../features/jobs/JobsPage";
+import { LexiconsPage } from "../features/lexicons/LexiconsPage";
 import { AnnotatePage, OpenFile, OpenFileBySha } from "../features/label/Annotate";
 import { LiveEvalPage } from "../features/label/LiveEval";
 import { PseudoLabelPage } from "../features/label/PseudoLabel";
@@ -60,6 +61,8 @@ export const router = createBrowserRouter([
       { path: "models/add", element: <Navigate to="/models" replace /> },
       { path: "contract", element: <Navigate to="/models" replace /> },
       { path: "jobs", element: <JobsPage /> },
+      { path: "lexicons", element: <LexiconsPage /> },
+      { path: "lexicons/:id", element: <LexiconsPage /> },
       { path: "docs", element: <DocsPage /> },
       { path: "*", element: <Navigate to="/label" replace /> },
     ],

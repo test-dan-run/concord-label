@@ -1,12 +1,15 @@
 // Annotate (annotation only, no metrics): whole-file timeline with editable speaker lanes (SpeakerLanes),
 // segment grid with multi-select and a bulk bar, inline transcript editing with autosave per segment, and
 // the AeroAudio shortcuts:
-// Space play/pause · Tab next low-confidence · 1–8 assign speaker · V split · M merge · Enter confirm.
+// Space play/pause · Tab next low-confidence or lexicon hint · Alt+Enter use house spelling · 1–8 assign
+// speaker · V split · M merge · Enter confirm. Variants the published lexicons flag are underlined in the
+// transcript with a choice to use the house spelling or keep the text; the text never changes on its own.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, qs, type AnnotateView, type LabelFile, type SegStatus, type Segment } from "../../lib/api";
+import { houseSpelled, Matcher, norm, type ActiveLexicon, type Hint } from "../../lib/lexicon";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
 import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS, STATUS_TONE, statusLabel } from "../../lib/label";
@@ -180,6 +183,13 @@ function Annotator({
   const colors = useMemo(() => speakerColors(speakers), [speakers]);
   const high = v?.thresholds.high ?? 0.85;
   const current = segs.find((s) => s.id === cur) ?? null;
+  const active = useQuery({ queryKey: ["lexicons-active"], queryFn: () => api.get<{ lexicons: ActiveLexicon[] }>("/lexicons/active") });
+  const lexicons = useMemo(() => active.data?.lexicons ?? [], [active.data]);
+  const matcher = useMemo(() => new Matcher(lexicons), [lexicons]);
+  const hints = useMemo(() => new Map(segs.map((s) => [s.id, matcher.hints(s.text, s.spelling_kept)])), [segs, matcher]);
+  const hasHint = useCallback((s: Segment) => (hints.get(s.id)?.length ?? 0) > 0, [hints]);
+  const applyHint = useCallback((s: Segment, h: Hint) => s.text !== null && m.patch.mutate({ id: s.id, text: houseSpelled(s.text, h) }), [m.patch]);
+  const keepHint = useCallback((s: Segment, h: Hint) => m.patch.mutate({ id: s.id, spelling_kept: [...s.spelling_kept, norm(h.found)] }), [m.patch]);
 
   // Pick a starting segment once loaded: the requested one, else the one at the requested time (and the
   // playhead goes there), else the first low-confidence one.
@@ -230,6 +240,14 @@ function Annotator({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && e.key === "Enter" && !isTyping(e)) {
+        const h = current && hints.get(current.id)?.[0];
+        if (current && h) {
+          e.preventDefault();
+          applyHint(current, h);
+        }
+        return;
+      }
       if (isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === " ") {
         e.preventDefault();
@@ -238,7 +256,7 @@ function Annotator({
         else ctl.play();
       } else if (e.key === "Tab") {
         e.preventDefault();
-        const n = nextLowConfidence(segs, cur, high);
+        const n = nextLowConfidence(segs, cur, high, hasHint);
         if (n !== null) setCur(n);
       } else if (/^[1-8]$/.test(e.key)) {
         const ids = targets();
@@ -261,7 +279,7 @@ function Annotator({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ctl, current, segs, visible, cur, high, targets, splitAtPlayhead, mergeSel, confirm, speakers]);
+  }, [ctl, current, segs, visible, cur, high, targets, splitAtPlayhead, mergeSel, confirm, speakers, hints, hasHint, applyHint]);
 
   if (q.isLoading || !v) return <Spinner />;
 
@@ -349,7 +367,12 @@ function Annotator({
       </Panel>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
         <Panel
-          title={`Segments · ${num(segs.length)}`}
+          title={
+            <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              Segments · {num(segs.length)}
+              {lexicons.length > 0 && <LexiconLink lexicons={lexicons} hints={[...hints.values()].reduce((a, h) => a + h.length, 0)} />}
+            </span>
+          }
           actions={
             <span role="group" aria-label="Show" className="inline-flex border border-line rounded-md overflow-hidden">
               {SHOW.map((o) => (
@@ -421,6 +444,9 @@ function Annotator({
                       }}
                       onSpeaker={() => m.patch.mutate({ id: s.id, speaker: cycleSpeaker(speakers.length ? speakers : ["spk0"], s.speaker) })}
                       onText={(text) => m.patch.mutate({ id: s.id, text })}
+                      hints={hints.get(s.id) ?? []}
+                      onUseHint={(h) => applyHint(s, h)}
+                      onKeepHint={(h) => keepHint(s, h)}
                       onConfirm={() => m.bulk.mutate({ ids: [s.id], action: "confirm" })}
                       onReject={() => m.bulk.mutate({ ids: [s.id], action: "reject" })}
                     />
@@ -442,6 +468,30 @@ function Annotator({
         />
       </div>
     </>
+  );
+}
+
+/** `text` split around its hints: plain strings, and the index of each hint in between. */
+function pieces(text: string, hints: Hint[]): (string | number)[] {
+  const out: (string | number)[] = [];
+  let at = 0;
+  hints.forEach((h, k) => {
+    if (h.start > at) out.push(text.slice(at, h.start));
+    out.push(k);
+    at = h.end;
+  });
+  if (at < text.length) out.push(text.slice(at));
+  return out;
+}
+
+/** In the segments header: the lexicons in use and how many hints they give in this file. */
+function LexiconLink({ lexicons, hints }: { lexicons: ActiveLexicon[]; hints: number }) {
+  const one = lexicons.length === 1 ? lexicons[0] : null;
+  return (
+    <Link to={one ? `/lexicons/${one.id}` : "/lexicons"} className="inline-flex items-center gap-2 text-xs font-normal !text-muted hover:!text-fg no-underline">
+      <I.Book size={14} />
+      {one ? <>{one.name} <span className="num">v{one.version}</span></> : <>{lexicons.length} lexicons</>} · <span className="num">{num(hints)}</span> spelling hint{hints === 1 ? "" : "s"}
+    </Link>
   );
 }
 
@@ -492,6 +542,9 @@ function SegmentRow({
   onCheck,
   onSpeaker,
   onText,
+  hints,
+  onUseHint,
+  onKeepHint,
   onConfirm,
   onReject,
 }: {
@@ -507,10 +560,17 @@ function SegmentRow({
   onCheck: (shift: boolean) => void;
   onSpeaker: () => void;
   onText: (t: string) => void;
+  hints: Hint[];
+  onUseHint: (h: Hint) => void;
+  onKeepHint: (h: Hint) => void;
   onConfirm: () => void;
   onReject: () => void;
 }) {
   const [draft, setDraft] = useState(s.text ?? "");
+  // With spelling hints the transcript shows as text with the variants underlined; a click elsewhere edits it.
+  const [editing, setEditing] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
+  useEffect(() => setOpen(null), [s.text, s.spelling_kept]);
   useEffect(() => setDraft(s.text ?? ""), [s.text]);
   const save = () => {
     if (draft !== (s.text ?? "")) onText(draft);
@@ -563,16 +623,68 @@ function SegmentRow({
         </button>
       </td>
       <td className="px-2 py-1.5 w-full">
-        <input
-          aria-label={`Transcript at ${clock(s.start)}`}
-          value={draft}
-          placeholder={s.text === null ? "(no transcript)" : ""}
-          onFocus={onFocus}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={save}
-          onKeyDown={onKey}
-          className="w-full bg-transparent border border-transparent hover:border-line focus:border-focus rounded px-1.5 py-1 text-fg text-[13px] outline-none"
-        />
+        {hints.length > 0 && !editing && s.text !== null ? (
+          <div className="flex flex-col gap-1.5">
+            <div onClick={() => setEditing(true)} className="group/t px-1.5 py-1 rounded border border-transparent hover:border-line text-fg text-[13px] cursor-text">
+              {pieces(s.text, hints).map((p, k) =>
+                typeof p === "string" ? (
+                  <span key={k}>{p}</span>
+                ) : (
+                  <button
+                    key={k}
+                    type="button"
+                    aria-expanded={open === p}
+                    aria-label={`${hints[p].found}: house spelling is ${hints[p].word}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onFocus();
+                      setOpen(open === p ? null : p);
+                    }}
+                    className="p-0 border-0 bg-transparent text-fg text-[13px] cursor-pointer underline decoration-wavy decoration-warn underline-offset-[3px]"
+                  >
+                    {hints[p].found}
+                  </button>
+                ),
+              )}
+              <button
+                type="button"
+                aria-label={`Edit transcript at ${clock(s.start)}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditing(true);
+                }}
+                className="ml-1.5 p-0 border-0 bg-transparent text-subtle hover:text-fg cursor-pointer align-middle opacity-0 group-hover/t:opacity-100 focus-visible:opacity-100"
+              >
+                <I.Pen size={12} />
+              </button>
+            </div>
+            {open !== null && hints[open] && (
+              <div role="group" aria-label="Spelling hint" className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded-md border border-line bg-canvas text-xs text-muted" onClick={(e) => e.stopPropagation()}>
+                House spelling <span className="num text-fg">{hints[open].word}</span>
+                <span className="text-subtle">· {hints[open].lexicon}</span>
+                <span className="ml-auto flex gap-1.5">
+                  <Button size="sm" variant="primary" onClick={() => onUseHint(hints[open])}>Use</Button>
+                  <Button size="sm" onClick={() => onKeepHint(hints[open])}>Keep</Button>
+                </span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <input
+            aria-label={`Transcript at ${clock(s.start)}`}
+            value={draft}
+            autoFocus={editing}
+            placeholder={s.text === null ? "(no transcript)" : ""}
+            onFocus={onFocus}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => {
+              save();
+              setEditing(false);
+            }}
+            onKeyDown={onKey}
+            className="w-full bg-transparent border border-transparent hover:border-line focus:border-focus rounded px-1.5 py-1 text-fg text-[13px] outline-none"
+          />
+        )}
       </td>
       <td className="px-2 py-1.5 text-right num text-xs font-semibold" style={{ color: confidenceColor(s.confidence, high, low) }}>
         {s.confidence === null ? "—" : s.confidence.toFixed(2)}

@@ -104,6 +104,7 @@ export function Nav() {
       {/* Improve (Phase 3) is on hold and in no image: no Training group (SPLIT_PLAN.md §3.2). */}
       <Group title="Setup">
         <Item to="/models" icon={<I.Cpu />} prefix>Models</Item>
+        <Item to="/lexicons" icon={<I.Book />} prefix>Lexicons</Item>
         <Item to="/jobs" icon={<I.List />}>Jobs</Item>
       </Group>
       <Group title="Help">

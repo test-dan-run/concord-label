@@ -43,7 +43,8 @@ export function statusLabel(s: Pick<Segment, "status" | "created">): string {
 /** Annotate's keyboard shortcuts: `short` for the strip under the segment table, `does` for the Docs page. */
 export const SHORTCUTS: { key: string; short: string; does: string }[] = [
   { key: "Space", short: "play / pause", does: "Play or pause" },
-  { key: "Tab", short: "next low-confidence", does: "Next low-confidence segment" },
+  { key: "Tab", short: "next low-confidence or lexicon hint", does: "Next low-confidence segment or lexicon hint" },
+  { key: "Alt+Enter", short: "use house spelling", does: "Use the house spelling for the first hint in the segment" },
   { key: "1–8", short: "assign speaker", does: "Assign a speaker to the selected segments" },
   { key: "V", short: "split at playhead", does: "Split the segment at the playhead" },
   { key: "M", short: "merge", does: "Merge the selected segments, or the segment with the next one" },
@@ -112,8 +113,10 @@ export function overlapRegions(segs: Pick<Segment, "start" | "end" | "speaker" |
 }
 
 /** "Tab": the next unreviewed segment below the auto-accept threshold after `fromId` (wraps). */
-export function nextLowConfidence(segs: Segment[], fromId: number | null, high = 0.85): number | null {
-  const want = (s: Segment) => !s.reviewed && s.status !== "confirmed" && (s.confidence === null || s.confidence < high);
+/** The next segment after `fromId` (wrapping) that is unreviewed and below `high`, or that `also` picks
+ * (Annotate: a segment with a spelling hint). */
+export function nextLowConfidence(segs: Segment[], fromId: number | null, high = 0.85, also?: (s: Segment) => boolean): number | null {
+  const want = (s: Segment) => (!s.reviewed && s.status !== "confirmed" && (s.confidence === null || s.confidence < high)) || !!also?.(s);
   const k = fromId === null ? -1 : segs.findIndex((s) => s.id === fromId);
   for (let i = 1; i <= segs.length; i++) {
     const s = segs[(k + i) % segs.length];

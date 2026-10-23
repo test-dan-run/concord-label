@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, qs, type Conflict, type Dataset, type ImportPlan, type ImportStaged, type LabelFile, type SyncPackage } from "../../lib/api";
+import { api, qs, type Conflict, type Dataset, type ImportPlan, type ImportStaged, type LabelFile, type LexiconSide, type SyncPackage } from "../../lib/api";
+import { norm, type LexEntry } from "../../lib/lexicon";
 import { ago, bytes, clock, num } from "../../lib/format";
 import { uploadFiles } from "../../lib/upload";
 import * as I from "../../components/icons";
@@ -118,6 +119,7 @@ function ExportPanel() {
         <label className="flex items-center gap-2"><input type="checkbox" checked={pseudo} onChange={(e) => setPseudo(e.target.checked)} /> Pseudo-labels (unreviewed segments)</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={outputs} onChange={(e) => setOutputs(e.target.checked)} /> Raw model outputs (lets the other install re-fuse without inference)</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={audio} onChange={(e) => setAudio(e.target.checked)} /> Audio (needed where the other install lacks these files)</label>
+        <span className="text-xs text-muted">Published lexicons always travel with the package.</span>
       </fieldset>
       <ErrorNote error={go.error} />
       <div className="flex flex-wrap items-center gap-3">
@@ -286,6 +288,29 @@ function PlanView({ plan, resolutions, onResolve }: { plan: ImportPlan; resoluti
           ))}
         </div>
       )}
+      {plan.lexicons.length > 0 && (
+        <table className="w-full border-collapse text-[13px]">
+          <caption className="sr-only">Lexicons in the package</caption>
+          <thead>
+            <tr className="text-[11px] text-muted uppercase tracking-wider text-left">
+              <th scope="col" className="font-medium px-2 py-1.5 border-b border-line">Lexicon</th>
+              <th scope="col" className="font-medium px-2 py-1.5 border-b border-line">Here</th>
+              <th scope="col" className="font-medium px-2 py-1.5 border-b border-line">Package</th>
+              <th scope="col" className="font-medium px-2 py-1.5 border-b border-line">Outcome</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plan.lexicons.map((l) => (
+              <tr key={l.key} className="border-b border-track">
+                <td className="px-2 py-1.5">{l.name}</td>
+                <td className="px-2 py-1.5 num text-xs text-muted">{l.local ? (l.local.version ? `v${l.local.version}` : "not published") : "—"}</td>
+                <td className="px-2 py-1.5 num text-xs text-muted">v{l.incoming.version} · {l.incoming.entries.length} entries</td>
+                <td className="px-2 py-1.5"><Chip tone={OUTCOME_TONE[l.outcome]}>{OUTCOME_LABELS[l.outcome]}</Chip></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       {plan.conflicts.length > 0 && (
         <ConflictList conflicts={plan.conflicts} choice={(c) => resolutions[c.key] ?? null} onChoose={(c, v) => onResolve(c.key, v)} note="Unresolved conflicts keep this install's version and stay open after the merge." />
       )}
@@ -302,7 +327,25 @@ function ConflictList({ conflicts, choice, onChoose, note }: { conflicts: Confli
         const ch = choice(c);
         return (
           <div key={c.key} className="grid gap-2 sm:grid-cols-2 border border-warn/40 rounded-md p-2">
+            {c.kind === "lexicon" && <span className="sm:col-span-2 text-xs text-muted">Lexicon “{c.name}”: the same version with different entries. The package’s entries would be published as the next version here.</span>}
             {(["local", "incoming"] as const).map((side) => {
+              if (c.kind === "lexicon") {
+                const mine = side === "local" ? c.local : c.incoming;
+                return (
+                  <button
+                    key={side}
+                    type="button"
+                    aria-pressed={ch === side}
+                    onClick={() => onChoose(c, side)}
+                    className={cx("text-left flex flex-col gap-1 rounded-md border p-2 cursor-pointer bg-transparent text-fg", ch === side ? "border-primary bg-active" : "border-line hover:bg-track")}
+                  >
+                    <span className="text-[11px] text-muted">{side === "local" ? "This install" : "Package"} · <span className="num">v{mine.version}</span> · {mine.entries.length} entries</span>
+                    {differing(mine, side === "local" ? c.incoming : c.local).map((e) => (
+                      <span key={e.word} className="text-[13px] num">{e.word}: <span className="text-muted">{e.variants.join(", ") || "no variants"}</span></span>
+                    ))}
+                  </button>
+                );
+              }
               const s = side === "local" ? c.local : c.incoming;
               return (
                 <button
@@ -323,6 +366,13 @@ function ConflictList({ conflicts, choice, onChoose, note }: { conflicts: Confli
       })}
     </div>
   );
+}
+
+/** The entries of `a` that `b` lacks or has with other variants (at most 6). */
+function differing(a: LexiconSide, b: LexiconSide): LexEntry[] {
+  const key = (e: LexEntry) => `${norm(e.word)}=${e.variants.map(norm).sort().join("|")}`;
+  const theirs = new Set(b.entries.map(key));
+  return a.entries.filter((e) => !theirs.has(key(e))).slice(0, 6);
 }
 
 // ---------------------------------------------------------------- history

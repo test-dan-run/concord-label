@@ -1,6 +1,8 @@
 // Thin fetch wrapper + the response shapes the pages use. The backend is the source of truth for
 // field names (backend/concord_label/api/*.py).
 
+import type { LexEntry } from "./lexicon";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -328,6 +330,8 @@ export interface Segment {
   words: { w: string; start: number; end: number }[] | null;
   /** Drawn by hand in Annotate rather than from a model or the references. */
   created: boolean;
+  /** Spelling hints the annotator chose to keep (lower case). */
+  spelling_kept: string[];
   alternatives?: { service: string; model: string; text: string; build_key: string | null; source_app: string | null }[];
   file?: string;
 }
@@ -435,12 +439,41 @@ export interface PkgSegment {
   updated_at: string | null;
 }
 
-export interface Conflict {
+export interface SegmentConflict {
+  kind?: undefined;
   key: string;
   file_sha256: string;
   local: PkgSegment & { id: number };
   incoming: PkgSegment;
   resolution: "incoming" | "local" | null;
+}
+
+/** One lexicon as published here or in a label package. */
+export interface LexiconSide {
+  version: number | null;
+  entries: LexEntry[];
+}
+
+/** The same lexicon at the same version with different entries on both sides. */
+export interface LexiconConflict {
+  kind: "lexicon";
+  key: string;
+  uid: string;
+  name: string;
+  local: LexiconSide & { id: number };
+  incoming: LexiconSide;
+  resolution: "incoming" | "local" | null;
+}
+
+export type Conflict = SegmentConflict | LexiconConflict;
+
+export interface LexiconPlanRow {
+  key: string;
+  uid: string;
+  name: string;
+  outcome: "add" | "unchanged" | "keep_local" | "take_incoming" | "conflict";
+  incoming: LexiconSide;
+  local: (LexiconSide & { id: number }) | null;
 }
 
 export interface ImportStaged extends SyncPackage {
@@ -458,7 +491,41 @@ export interface ImportPlan {
   rows: { outcome: string; reason?: string; incoming: PkgSegment; local?: PkgSegment & { id: number } }[];
   truncated: boolean;
   conflicts: Conflict[];
+  lexicons: LexiconPlanRow[];
   rules: { outcome: string; rule: string }[];
+}
+
+// ---------------------------------------------------------------- Lexicons
+
+export interface LexiconSummary {
+  id: number;
+  uid: string;
+  name: string;
+  description: string | null;
+  /** Latest published version; null before the first publish. */
+  version: number | null;
+  published_at: string | null;
+  /** Entries in the draft. */
+  entries: number;
+  /** The draft differs from the published version. */
+  dirty: boolean;
+  /** Datasets whose confirmed segments use one of its words. */
+  datasets: number;
+}
+
+export interface LexiconEntryRow extends LexEntry {
+  /** Occurrences in confirmed segments, of the house spelling and of the variants. */
+  house: number;
+  variant: number;
+  /** The first confirmed segment holding a variant. */
+  review: { dataset_id: number; file_id: number; segment_id: number } | null;
+}
+
+export interface LexiconDetail extends LexiconSummary {
+  draft: LexiconEntryRow[];
+  /** Clashes with itself or another lexicon that stop it being published. */
+  problems: string[];
+  versions: { version: number; entries: number; published_at: string; imported_from: number | null }[];
 }
 
 // ---------------------------------------------------------------- Send to Bench (CONTRACTS.md §2, §4)
