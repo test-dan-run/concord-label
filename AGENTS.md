@@ -20,7 +20,7 @@ just setup            # uv sync and npm install
 just dev              # API on :8620, the worker, and Vite on :5174
 just test             # pytest, then the frontend unit tests (vitest)
 just lint             # ruff, import-linter, and tsc
-just check-contracts  # contracts/samples, compared with the Concord Bench repository
+just check-contracts  # contracts/samples against docs/CONTRACTS.md
 ```
 
 You can run the Playwright tests without Docker. First, run `npm run build` in `frontend/`. Second, run
@@ -39,7 +39,8 @@ tests, and look at the page in a browser, because several bugs in Annotate only 
   models.
 - `docs/CONTRACTS.md` and `contracts/` must stay identical to the copies in the Concord Bench repository.
   `contracts/check.py` finds the contracts doc in `docs/` or at the repository root, in either app.
-  When you change them, the same change has to land in Bench.
+  When you change them, the same change has to land in Bench. Nothing compares the two repositories, so
+  copy the files across by hand.
 - Some modules are copies of Concord Bench's code, listed under "Code shared with Concord Bench" below.
   When you fix one of them, note the fix for Bench, and keep the adapters' params identical in both
   apps.
@@ -75,8 +76,6 @@ Bench's copies don't have these recent Label changes yet:
   listeners attach even when the element renders after the page loads its data.
 - `Timeline`: the optional `selection` and `onSelection` props, and the exported `LABEL_W`.
 - Models page: the groups by capability.
-- `contracts/check.py`: it finds the contracts doc in `docs/` as well as at the repository root. Until
-  Bench copies the new file, `just check-contracts` reports that `contracts/check.py` differs.
 
 Bench also owns `fixtures/generated` and `fixtures/recorded`. When Bench makes them again (`just fixtures`
 and `just record`), copy both folders into this repository. `just e2e-handoff` tests the round trip

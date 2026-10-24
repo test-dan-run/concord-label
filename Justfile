@@ -85,9 +85,9 @@ lint:
     uv run lint-imports
     cd frontend && npm run lint --silent
 
-# check contracts/samples (CONTRACTS.md) and compare with the other app's repository: just check-contracts [--peer PATH]
-check-contracts *args:
-    {{py}} contracts/check.py {{args}}
+# check contracts/samples against docs/CONTRACTS.md
+check-contracts:
+    {{py}} contracts/check.py
 
 # frontend production build into frontend/dist
 build-web:
