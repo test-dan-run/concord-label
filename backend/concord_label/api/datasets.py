@@ -143,7 +143,7 @@ def dataset_json(session: Session, ds: Dataset, detail: bool = False) -> dict[st
     if detail:
         d["report"] = rep
         d["runs"] = session.scalar(select(func.count(Run.id)).where(Run.dataset_id == ds.id))
-        job = session.scalar(select(Job).where(Job.type == "ingest").order_by(Job.id.desc())
+        job = session.scalar(select(Job).where(Job.type.in_(("ingest", "catalog-dataset"))).order_by(Job.id.desc())
                              .where(Job.payload["dataset_id"].as_integer() == ds.id))
         d["ingest_job"] = job_brief(job) if job else None
     return d

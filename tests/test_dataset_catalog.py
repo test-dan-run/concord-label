@@ -135,6 +135,7 @@ def test_first_publish_makes_a_catalog_dataset_and_a_version_without_audio(clien
     assert cid and ds.catalog_version == 1 and rec["version"] == 1 and rec["catalog_dataset_id"] == cid
     assert rec["catalog_url"] == f"http://127.0.0.1:8700/datasets/{cid}/v/1"
     assert rec["counts"]["created"] is True and rec["counts"]["files"] == 6 and rec["counts"]["uploaded"] == 0
+    assert any(j["label"] == "publish to Dataset Catalog · Synth fixtures" for j in _ok(client.get("/api/jobs")))
     cat = dataset_catalog.dataset(cid)
     assert cat["name"] == "Synth refs" and cat["tags"] == ["calls"] and cat["created_by"] == "concord-label"
     v = dataset_catalog.version(cid, 1)
@@ -293,6 +294,9 @@ def test_a_version_with_audio_only_makes_an_audio_only_dataset(client, session, 
     d = from_catalog(client, ds["id"], 1, name="Raw calls to label")
     assert d["name"] == "Raw calls to label" and d["mode"] == "audio_only" and d["label_types"] == []
     assert d["language"] == "en" and d["tags"] == ["raw"] and d["files"] == 2 and d["usable_files"] == 2
+    assert d["ingest_job"]["type"] == "catalog-dataset" and d["ingest_job"]["status"] == "done"
+    jobs_list = _ok(client.get("/api/jobs"))
+    assert any(j["label"] == "new from Dataset Catalog · v1 · Raw calls to label" for j in jobs_list)
     files = files_of(session, d["id"])
     assert [f.rel_path for f in files] == ["a/one.wav", "b/two.wav"]
     assert [round(f.duration, 2) for f in files] == [1.0, 2.0]
