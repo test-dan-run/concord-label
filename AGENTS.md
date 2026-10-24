@@ -81,6 +81,10 @@ Bench's copies don't have these recent Label changes yet:
   listeners attach even when the element renders after the page loads its data.
 - `Timeline`: the optional `selection` and `onSelection` props, and the exported `LABEL_W`.
 - Models page: the groups by capability.
+- The Dataset Catalog (DATASET_CATALOG_PLAN.md §8): `paths.original` looks in the store first,
+  `datasets/ingest.py` sends originals to the store and holds them, `platform/datasets.py` wraps aicore's
+  client, and `runs/jobs.py` runs publishes and the `catalog-dataset` job. Bench makes its own version of
+  these changes in its D4 work, so compare the two when both branches merge.
 
 Bench also owns `fixtures/generated` and `fixtures/recorded`. When Bench makes them again (`just fixtures`
 and `just record`), copy both folders into this repository. `just e2e-handoff` tests the round trip
