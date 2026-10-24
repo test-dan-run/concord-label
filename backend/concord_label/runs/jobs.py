@@ -3,7 +3,10 @@
 Job types:
 - ingest  {dataset_id, source, cleanup}         copy, decode, derive, parse references
 - label   {run_id}                              ensemble pseudo-labelling (Phase 2), writes segments
-- reference {export_id, dataset_id}             Send to Bench: write a reference package, push it if asked
+- reference {export_id, dataset_id[, force]}   Send to Bench: write a reference package, push it if asked; or
+                                                Publish to Dataset Catalog (destination `catalog`, label/publish.py)
+- catalog-dataset {dataset_id, catalog_dataset_id, version}
+                                                New from Dataset Catalog: a dataset from a catalog version
 
 Models are the model catalog's business (platform/catalog.py). A job that needs models takes leases from
 the catalog itself, one per stage (label/pseudo.py), as `label:job-<id>`; a leased model is never stopped,
@@ -182,7 +185,7 @@ def _handle_label(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]
 
 
 def _handle_reference(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
-    from ..label import refpkg
+    from ..label import publish, refpkg
 
     p = job.payload
     rec = session.get(ReferenceExport, p["export_id"])
@@ -191,7 +194,10 @@ def _handle_reference(session: Session, job: Job, ctx: JobContext) -> dict[str, 
     rec.status, rec.error = "running", None
     session.commit()
     try:
-        refpkg.run(session, rec, ctx.log, ctx.progress)
+        if rec.destination == "catalog":
+            publish.run(session, rec, bool(p.get("force")), ctx.log, ctx.progress)
+        else:
+            refpkg.run(session, rec, ctx.log, ctx.progress)
         session.commit()
     except Exception as exc:
         session.rollback()
@@ -203,7 +209,27 @@ def _handle_reference(session: Session, job: Job, ctx: JobContext) -> dict[str, 
             "bench_import_id": rec.bench_import_id, "counts": rec.counts}
 
 
-HANDLERS = {"ingest": _handle_ingest, "label": _handle_label, "reference": _handle_reference}
+def _handle_catalog_dataset(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]:
+    from ..label import from_catalog
+
+    p = job.payload
+    try:
+        report = from_catalog.ingest_version(session, p["dataset_id"], ctx.progress)
+        session.commit()
+    except Exception:
+        session.rollback()
+        ds = session.get(Dataset, p["dataset_id"])
+        if ds is not None:
+            ds.status = "failed"
+            session.commit()
+        raise
+    ctx.log(f"made from v{p['version']} of {p['catalog_dataset_id']}: {report['files']} files "
+            f"({report['hours'] * 60:.1f} min), {report['segments']} segments")
+    return {"dataset_id": p["dataset_id"]}
+
+
+HANDLERS = {"ingest": _handle_ingest, "label": _handle_label, "reference": _handle_reference,
+            "catalog-dataset": _handle_catalog_dataset}
 RUN_JOBS = ("label",)  # job types whose payload names a `run` that mirrors the job's state
 
 

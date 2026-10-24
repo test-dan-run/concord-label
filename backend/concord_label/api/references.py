@@ -1,5 +1,6 @@
 """Concord Bench links (SPLIT_PLAN.md §4, §5; CONTRACTS.md §2, §3, §5): Send to Bench (reference packages,
-pushed or downloaded), the file lookup by sha256 that Bench's "Open in Label" uses, and flags coming back."""
+pushed or downloaded), the file lookup by sha256 that Bench's "Open in Label" uses, and flags coming back.
+The preview and the history also serve Publish to Dataset Catalog (api/dataset_catalog.py)."""
 
 from __future__ import annotations
 
@@ -15,7 +16,8 @@ from sqlalchemy.orm import Session
 from .. import peer
 from ..core.db import get_session
 from ..core.models import AudioFile, Dataset, ReferenceExport
-from ..label import flags, refpkg
+from ..label import flags, publish, refpkg
+from ..platform import datasets as dataset_catalog
 from ..runs import jobs
 from .datasets import _clean_tags, get_dataset, job_brief
 
@@ -35,8 +37,10 @@ def reference_preview(dataset_id: int, scope: str = "complete", session: Session
     except refpkg.RefPkgError as exc:
         raise HTTPException(400, str(exc)) from None
     st = peer.status()
+    # With the Dataset Catalog set up, the panel publishes there instead (DATASET_CATALOG_PLAN.md §8.2).
+    cat = publish.status(ds) if dataset_catalog.enabled() else None
     return {**pv, "dataset": {"id": ds.id, "name": ds.name, "uid": ds.uid, "tags": ds.tags},
-            "peer": st, "destination": _destination(st), "push_refused": peer.refusal(st)}
+            "peer": st, "destination": _destination(st), "push_refused": peer.refusal(st), "catalog": cat}
 
 
 class SendIn(BaseModel):

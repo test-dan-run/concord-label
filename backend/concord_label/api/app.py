@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from ..core import db
 from ..core.settings import VERSION, get_settings
 from ..platform import catalog
-from . import audio, config, datasets, jobs, label, lexicons, models, outputs, references, sync
+from . import audio, config, dataset_catalog, datasets, jobs, label, lexicons, models, outputs, references, sync
 
 log = logging.getLogger("concord_label")
 
@@ -40,7 +40,7 @@ def create_app(migrate: bool = True) -> FastAPI:
 
     app = FastAPI(title="Concord Label", version=VERSION, lifespan=lifespan)
     for r in (config.router, datasets.router, models.router, jobs.router, audio.router, label.router, sync.router,
-              references.router, outputs.router, lexicons.router):
+              references.router, outputs.router, lexicons.router, dataset_catalog.router):
         app.include_router(r, prefix="/api")
 
     dist = settings.frontend_dist

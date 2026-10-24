@@ -51,6 +51,7 @@ from ..core.models import (
 from ..core.settings import APP
 from ..cuts import usable_files
 from ..metrics import normalisers
+from ..platform import datasets as dataset_catalog
 from ..runs import cache
 from .sync import install_id
 
@@ -252,6 +253,42 @@ def attributes(sel: Selection) -> dict[str, Any]:
     return {"files": files} if files else {}
 
 
+def package_files(session: Session, ds: Dataset, sel: Selection, *, name: str, tags: list[str],
+                  version: int | None, audio_included: str) -> tuple[dict[str, Any], dict[str, str]]:
+    """The manifest, and the text of manifest.json, files.csv and refs/ by their path in the package. Without
+    `version` the manifest has no `source` and `export_version`, which the Dataset Catalog fills in."""
+    if sel.problem:
+        raise RefPkgError(sel.problem)
+    files = [f for f, _ in sel.files]
+    manifest: dict[str, Any] = {
+        "format": FORMAT, "format_version": FORMAT_VERSION, "name": name,
+        "created_at": utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "language": ds.language, "description": ds.description, "tags": list(tags),
+        "source": {"app": APP, "install_id": install_id(), "dataset_uid": ds.uid, "dataset_name": ds.name}
+        if version is not None else None,
+        "export_version": version, "scope": sel.scope, "label_types": sel.label_types,
+        "counts": {"files": len(files), "segments": sel.segments, "hours": round(sel.seconds / 3600, 6)},
+        "audio_included": audio_included,
+        "review": {**sel.stats, "files_left_out": sel.left_out},
+        "models": label_models(session, ds),
+        "normaliser": normalisers.DEFAULT,
+    }
+    manifest = {k: v for k, v in manifest.items() if v is not None}
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(["path", "sha256", "duration", "sample_rate"])
+    for f in files:
+        w.writerow([f.rel_path, f.sha256, "" if f.duration is None else round(f.duration, 3), f.orig_sr or ""])
+    uids = "".join(json.dumps({"file": f.rel_path, "start": _t(s.start), "end": _t(s.end), "uid": s.uid}) + "\n"
+                   for f, ss in sel.files for s in ss)
+    out = {"manifest.json": json.dumps(manifest, indent=1, ensure_ascii=False), "files.csv": buf.getvalue(),
+           f"refs/{sel.refs_file}": refs_text(sel), "refs/uids.jsonl": uids}
+    labels = attributes(sel)
+    if labels:
+        out["refs/attributes.json"] = json.dumps(labels, indent=1, ensure_ascii=False)
+    return manifest, out
+
+
 def write_package(session: Session, ds: Dataset, sel: Selection, out: Path, *, name: str, version: int,
                   tags: list[str], audio_shas: set[str] | None, include_outputs: bool,
                   progress: Progress = lambda p, m: None) -> dict[str, Any]:
@@ -269,38 +306,16 @@ def write_package(session: Session, ds: Dataset, sel: Selection, out: Path, *, n
             raise RefPkgError(f"the original audio of {f.rel_path} is missing from this install's data folder")
     outputs = seg_outputs(session, ds, sorted({f.sha256 for f in files})) if include_outputs else []
     n_audio = len(with_audio)
-    manifest: dict[str, Any] = {
-        "format": FORMAT, "format_version": FORMAT_VERSION, "name": name,
-        "created_at": utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "language": ds.language, "description": ds.description, "tags": list(tags),
-        "source": {"app": APP, "install_id": install_id(), "dataset_uid": ds.uid, "dataset_name": ds.name},
-        "export_version": version, "scope": sel.scope, "label_types": sel.label_types,
-        "counts": {"files": len(files), "segments": sel.segments, "hours": round(sel.seconds / 3600, 6)},
-        "audio_included": "all" if n_audio == len(files) else ("none" if n_audio == 0 else "partial"),
-        "review": {**sel.stats, "files_left_out": sel.left_out},
-        "models": label_models(session, ds),
-        "normaliser": normalisers.DEFAULT,
-    }
-    manifest = {k: v for k, v in manifest.items() if v is not None}
+    manifest, parts = package_files(session, ds, sel, name=name, tags=tags, version=version,
+                                    audio_included="all" if n_audio == len(files) else (
+                                        "none" if n_audio == 0 else "partial"))
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".part")
-    buf = io.StringIO()
-    w = csv.writer(buf, lineterminator="\n")
-    w.writerow(["path", "sha256", "duration", "sample_rate"])
-    for f in files:
-        w.writerow([f.rel_path, f.sha256, "" if f.duration is None else round(f.duration, 3), f.orig_sr or ""])
-    uids = "".join(json.dumps({"file": f.rel_path, "start": _t(s.start), "end": _t(s.end), "uid": s.uid}) + "\n"
-                   for f, ss in sel.files for s in ss)
-    labels = attributes(sel)
     total = sum((f.duration or 0.0) for f in with_audio) or 1.0
     done = 0.0
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr(f"{root}/manifest.json", json.dumps(manifest, indent=1, ensure_ascii=False))
-        z.writestr(f"{root}/files.csv", buf.getvalue())
-        z.writestr(f"{root}/refs/{sel.refs_file}", refs_text(sel))
-        z.writestr(f"{root}/refs/uids.jsonl", uids)
-        if labels:
-            z.writestr(f"{root}/refs/attributes.json", json.dumps(labels, indent=1, ensure_ascii=False))
+        for rel, text in parts.items():
+            z.writestr(f"{root}/{rel}", text)
         if outputs:
             z.writestr(f"{root}/outputs/seg.jsonl", "".join(json.dumps(o) + "\n" for o in outputs))
         for f in with_audio:
@@ -309,9 +324,21 @@ def write_package(session: Session, ds: Dataset, sel: Selection, out: Path, *, n
             progress(0.1 + 0.4 * done / total, f"audio: {f.rel_path}")
     tmp.replace(out)
     counts = {**manifest["counts"], "audio_files": n_audio, "outputs": len(outputs), "left_out": sel.left_out,
-              "labelled_files": len(labels.get("files", {})),
+              "labelled_files": len(attributes(sel).get("files", {})),
               "bytes": out.stat().st_size}
     return {"manifest": manifest, "counts": counts}
+
+
+def write_version(session: Session, ds: Dataset, sel: Selection, folder: Path, *, name: str,
+                  tags: list[str]) -> dict[str, Any]:
+    """A Dataset Catalog version (the platform's contracts/datasets/version.md): the package's manifest.json,
+    files.csv and refs/ in `folder`, without audio/ and outputs/ (DATASET_CATALOG_PLAN.md §5.1, §8.2). Returns
+    the manifest."""
+    manifest, parts = package_files(session, ds, sel, name=name, tags=tags, version=None, audio_included="none")
+    for rel, text in parts.items():
+        (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+        (folder / rel).write_text(text, encoding="utf-8")
+    return manifest
 
 
 # ---------------------------------------------------------------- pushing to Bench (CONTRACTS.md §4)
@@ -430,5 +457,8 @@ def export_json(rec: ReferenceExport) -> dict[str, Any]:
             "download": f"/api/reference-exports/{rec.id}/download" if rec.path and rec.status == "done" else None,
             "bench_url": rec.bench_url, "bench_import_id": rec.bench_import_id,
             "bench_dataset_id": rec.bench_dataset_id, "bench_preview": rec.bench_preview, "error": rec.error,
+            "catalog_dataset_id": rec.catalog_dataset_id,
+            "catalog_url": dataset_catalog.ui_url(rec.catalog_dataset_id, rec.version if rec.status == "done" else None)
+            if rec.catalog_dataset_id else None,
             "job_id": rec.job_id, "created_at": rec.created_at.isoformat(),
             "finished_at": rec.finished_at.isoformat() if rec.finished_at else None}
