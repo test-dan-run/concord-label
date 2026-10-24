@@ -27,7 +27,7 @@ def upload_fixture(client, refs="stm") -> str:
 def test_config_names_the_app(client):
     """CONTRACTS.md §1; the peer (Concord Bench) is filled in by milestone S5."""
     cfg = client.get("/api/config").json()
-    assert cfg["app"] == "concord-label" and cfg["version"] == "0.2.0" and cfg["contract_version"] == 2
+    assert cfg["app"] == "concord-label" and cfg["version"] == "0.2.0" and cfg["contract_version"] == 3
     assert cfg["peer"] == {"url": None, "reachable": False, "contract_version": None}
     assert "features" not in cfg and "variant" not in cfg
 

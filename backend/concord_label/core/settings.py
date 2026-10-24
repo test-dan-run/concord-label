@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP = "concord-label"
 VERSION = "0.2.0"
-CONTRACT_VERSION = 2  # CONTRACTS.md
+CONTRACT_VERSION = 3  # CONTRACTS.md
 
 # The Concord Label checkout (fixtures, frontend/dist, .env). In an image the package is installed into
 # site-packages, so CONCORD_HOME says where the app's files are.
@@ -47,8 +47,8 @@ class Settings(BaseSettings):
     replay_dir: Path | None = None
     # Write every live model response into this folder (to refresh recordings).
     record_dir: Path | None = None
-    # Concord Bench (SPLIT_PLAN.md §5): where "Send to Bench" pushes reference packages and where the
-    # live evaluation reads locked scores. Unset: packages are downloaded and the Locked column is hidden.
+    # Concord Bench (SPLIT_PLAN.md §5, CONTRACTS.md §4): where the live evaluation reads locked scores. Unset, the
+    # Locked column is hidden. Datasets go to Bench through the Dataset Catalog, not from here.
     bench_url: str | None = None
     # The Dataset Catalog's store (DATASET_CATALOG_PLAN.md §4), mounted read-only. Set, Label sends new audio to
     # the store through the catalog service at catalog_url, reads originals from the store, publishes versions to
