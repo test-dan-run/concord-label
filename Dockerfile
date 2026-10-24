@@ -7,9 +7,13 @@
 # The platform's aicore client is a sibling repo, so it comes in through a named build context:
 #   docker build --build-context platform=../../platform --target label -t concord-label:0.2.0 .
 #
-# Running: join ai-net, where the model catalog answers at http://catalog:8700 (it starts and serves every
+# Running: join ai-net, where the Model Catalog answers at http://catalog:8700 (it starts and serves every
 # model; Label only takes leases and calls its gateway). Mount the platform directory at /platform. See
 # README.md.
+#
+# The Dataset Catalog (same service): mount its store read-only and point DATASET_STORE at the mount, e.g.
+#   -v ${AI_DATA:-~/ai-data}/datasets:/datasets:ro -e DATASET_STORE=/datasets
+# Label then keeps new audio in the store and publishes to the catalog. Without it, originals stay in /data.
 
 ARG PYTHON=python:3.12.15-slim-bookworm
 ARG NODE=node:22.23.3-bookworm-slim
