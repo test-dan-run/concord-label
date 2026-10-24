@@ -1,4 +1,4 @@
-"""The model catalog, as Concord Label uses it (platform/catalog/README.md is the contract).
+"""The Model Catalog, as Concord Label uses it (platform/catalog/README.md is the contract).
 
 Label does not register, verify, start or call model services itself. The catalog does, and Label:
 
@@ -169,8 +169,8 @@ def clear_cache() -> None:
 
 def _unavailable(cat: Any, exc: Exception) -> CatalogUnavailable:
     if isinstance(exc, CatalogError):
-        return CatalogUnavailable(f"the model catalog at {cat.url} refused: {exc.message}")
-    return CatalogUnavailable(f"the model catalog at {cat.url} did not answer ({type(exc).__name__})")
+        return CatalogUnavailable(f"the Model Catalog at {cat.url} refused: {exc.message}")
+    return CatalogUnavailable(f"the Model Catalog at {cat.url} did not answer ({type(exc).__name__})")
 
 
 def models(force: bool = False) -> list[dict[str, Any]]:
@@ -205,7 +205,7 @@ def record(model_id: str, force: bool = False) -> dict[str, Any]:
         return cat.model(model_id)  # not registered (or an alias the list did not name)
     except CatalogError as exc:
         if exc.status == 404:
-            raise KeyError(f"the model catalog has no model {model_id!r}") from None
+            raise KeyError(f"the Model Catalog has no model {model_id!r}") from None
         raise _unavailable(cat, exc) from None
     except httpx.HTTPError as exc:
         raise _unavailable(cat, exc) from None
@@ -330,9 +330,9 @@ def leased(holder: str, model_ids: list[str], log: Log = print, on_wait: OnWait 
     except LeaseFailed as exc:
         raise ServicesBlocked(exc.message) from None
     except CatalogError as exc:
-        raise ServicesBlocked(f"the model catalog refused the lease: {exc.message}") from None
+        raise ServicesBlocked(f"the Model Catalog refused the lease: {exc.message}") from None
     except httpx.HTTPError as exc:
-        raise ServicesBlocked(f"the model catalog at {cat.url} did not answer ({type(exc).__name__}); "
+        raise ServicesBlocked(f"the Model Catalog at {cat.url} did not answer ({type(exc).__name__}); "
                               "start it with `just catalog-up` in the platform repository") from None
     log(f"lease {lease.id} active: {', '.join(model_ids)}")
     if on_active:
@@ -352,7 +352,7 @@ def register_app() -> bool:
     try:
         get_catalog().register_app(APP, s.public_base_url)
     except (CatalogError, httpx.HTTPError) as exc:
-        log.warning("could not register %s with the model catalog at %s: %s", s.public_base_url, s.catalog_root, exc)
+        log.warning("could not register %s with the Model Catalog at %s: %s", s.public_base_url, s.catalog_root, exc)
         return False
     return True
 

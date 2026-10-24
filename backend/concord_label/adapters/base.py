@@ -10,7 +10,7 @@ tests still exercise every parser.
 
 Record / replay (settings `record_dir`, `replay_dir`): files at `<dir>/<service>/<key>.json`, keyed
 on (service, audio sha256, span, params hash). The build key is not in it, so a recording replays for any
-build. Calls go through the model catalog's gateway (aicore with AICORE_CATALOG set), which starts a
+build. Calls go through the Model Catalog's gateway (aicore with AICORE_CATALOG set), which starts a
 stopped model and holds the call; a 503 while it starts is retried here.
 
 `params_hash` is aicore's (`aicore.catalog.params_hash`): the catalog's output index needs both Concord

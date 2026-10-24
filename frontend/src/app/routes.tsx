@@ -59,7 +59,7 @@ export const router = createBrowserRouter([
       { path: "datasets/from-catalog", element: <NewFromCatalog /> },
       { path: "datasets/:id", element: <DatasetDetail /> },
       { path: "models", element: <ModelsPage /> },
-      // Registering a model and its contract page moved to the model catalog's own UI.
+      // Registering a model and its contract page moved to the Model Catalog's own UI.
       { path: "models/add", element: <Navigate to="/models" replace /> },
       { path: "contract", element: <Navigate to="/models" replace /> },
       { path: "jobs", element: <JobsPage /> },

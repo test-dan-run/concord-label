@@ -1,4 +1,4 @@
-"""Outputs other apps read through the model catalog's output index (platform/catalog/README.md).
+"""Outputs other apps read through the Model Catalog's output index (platform/catalog/README.md).
 
 The catalog indexes Label's `model_output` rows by build key, audio, span and params; an app that finds one
 of them in the index reads it here by id, as the contract says every app serves:

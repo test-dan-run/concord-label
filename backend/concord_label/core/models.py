@@ -184,7 +184,7 @@ class KeywordEvent(Base):
 
 
 class Model(Base):
-    """A catalog model as Label knows it. Registration, verification and serving live in the model catalog
+    """A catalog model as Label knows it. Registration, verification and serving live in the Model Catalog
     (platform/catalog/README.md); this row exists so runs and outputs can refer to a model by id. It is
     created the first time a model is used and refreshed from the catalog's record whenever the catalog
     answers (platform/catalog.py): capabilities, timing level, protocol and build key are a cache of that

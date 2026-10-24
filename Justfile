@@ -53,7 +53,7 @@ test *args:
     uv run pytest {{args}}
     cd frontend && npm run test --silent
 
-# tests against the running model catalog (`just catalog-up` in the platform repo; it starts what they lease)
+# tests against the running Model Catalog (`just catalog-up` in the platform repo; it starts what they lease)
 test-live *args:
     uv run pytest -m live -o addopts="--import-mode=importlib" {{args}}
 

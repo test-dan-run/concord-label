@@ -1,7 +1,7 @@
 """Server for the Playwright tests: a fresh data dir seeded through Label's own API on recorded responses
 (models from the replay catalog, an annotated dataset, and an audio-only copy of the same audio
 pseudo-labelled by pyannote -> both Whispers), then the API + built frontend on --port. No GPU, platform or
-model catalog needed: in replay mode the catalog is a stand-in built from fixtures/recorded.
+Model Catalog needed: in replay mode the catalog is a stand-in built from fixtures/recorded.
 
 The Dataset Catalog is set up with aicore's FakeDatasetCatalog and a store in the data dir, unless
 E2E_DATASET_CATALOG=0 or the installed aicore has no Dataset Catalog client; Label then sends to Bench as before.

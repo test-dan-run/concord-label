@@ -62,7 +62,7 @@ export interface AppConfig {
   default_collar: number;
   collars: number[];
   replay: boolean;
-  /** The model catalog: registering, verifying and serving models happen there (`ui_url`). */
+  /** The Model Catalog: registering, verifying and serving models happen there (`ui_url`). */
   catalog: { url: string; ui_url: string };
   /** The Dataset Catalog: set up when DATASET_STORE is set. `ui_url` is its list of datasets. */
   dataset_catalog: { enabled: boolean; store: string | null; url: string | null; ui_url: string | null };

@@ -52,7 +52,7 @@ def job_label(session: Session, j: Job) -> str:
         d = session.get(Dataset, p.get("dataset_id"))
         return f"ingest · {d.name}" if d else "ingest"
     if j.type == "check":
-        return f"check · {p.get('service')} (moved to the model catalog)"
+        return f"check · {p.get('service')} (moved to the Model Catalog)"
     if j.type == "label":
         r = session.get(Run, p.get("run_id"))
         return f"pseudo-label · {r.dataset.name}" if r else "pseudo-label"
@@ -67,7 +67,7 @@ def job_label(session: Session, j: Job) -> str:
         what = f"new from Dataset Catalog · v{p.get('version')}"
         return f"{what} · {d.name}" if d else what
     if j.type == "export":
-        return f"offline kit · {', '.join(p.get('services') or [])} (moved to the model catalog)"
+        return f"offline kit · {', '.join(p.get('services') or [])} (moved to the Model Catalog)"
     return j.type
 
 

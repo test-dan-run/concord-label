@@ -24,7 +24,7 @@ test("the app opens on the console; the nav has Label's pages only", async ({ pa
   for (const name of ["Benchmarks", "Error analysis", "Training", "Offline export"]) {
     await expect(nav.getByRole("link", { name })).toHaveCount(0);
   }
-  // pages that moved to Concord Bench or the model catalog (or Improve, on hold) fall back to the console
+  // pages that moved to Concord Bench or the Model Catalog (or Improve, on hold) fall back to the console
   for (const path of ["/benchmarks", "/errors", "/training", "/offline"]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/label$/);
@@ -45,7 +45,7 @@ test("datasets, upload, models and jobs load", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Upload dataset" })).toBeVisible();
   await expect(page.getByRole("link", { name: "asr.jsonl" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Benchmark plan" })).toHaveCount(0);
-  // Models come from the model catalog (the replay stand-in here): read-only, with state, capabilities,
+  // Models come from the Model Catalog (the replay stand-in here): read-only, with state, capabilities,
   // cold start and build; registering moved to the catalog's own UI, so Add model and Contract are gone.
   await page.goto("/models");
   await expect(page.getByText("faster-whisper-large-v3 · openai / audio.transcriptions")).toBeVisible();

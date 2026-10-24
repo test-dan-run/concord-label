@@ -29,8 +29,9 @@ class Settings(BaseSettings):
     # concord-label-full image brings it back when Phase 3 is scoped (SPLIT_PLAN.md §3.2).
     # Platform repo: the aicore endpoint map is generated here.
     platform_dir: Path = Field(default=REPO_ROOT.parent.parent / "platform")
-    # The model catalog (platform/catalog/README.md): models, leases, the output index and the gateway every
-    # inference call goes through. CATALOG_URL, else AICORE_CATALOG; `http://catalog:8700` in a container.
+    # The catalog service (platform/catalog/README.md): the Model Catalog's models, leases, output index and the
+    # gateway every inference call goes through, and the Dataset Catalog. CATALOG_URL, else AICORE_CATALOG;
+    # `http://catalog:8700` in a container.
     catalog_url: str = Field(default="http://127.0.0.1:8700",
                              validation_alias=AliasChoices("catalog_url", "aicore_catalog"))
     # Where people open the catalog's own pages (registering models, verification reports); default catalog_url.

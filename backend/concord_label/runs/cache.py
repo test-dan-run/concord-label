@@ -1,4 +1,4 @@
-"""The inference cache (`model_output`) and the model catalog's output index.
+"""The inference cache (`model_output`) and the Model Catalog's output index.
 
 Rows are keyed on (model, audio sha256, span, params hash, build key). The params are the adapter's own
 (adapters/__init__.py) and never hold the image or build; the build key is the catalog's, so a rebuilt image

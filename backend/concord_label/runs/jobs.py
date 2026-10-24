@@ -8,7 +8,7 @@ Job types:
 - catalog-dataset {dataset_id, catalog_dataset_id, version}
                                                 New from Dataset Catalog: a dataset from a catalog version
 
-Models are the model catalog's business (platform/catalog.py). A job that needs models takes leases from
+Models are the Model Catalog's business (platform/catalog.py). A job that needs models takes leases from
 the catalog itself, one per stage (label/pseudo.py), as `label:job-<id>`; a leased model is never stopped,
 whichever app asks. While a lease waits in the catalog's queue the job is `waiting`, with its queue
 position and what it waits for (`JobContext.waiting`); a lease that fails, or a catalog that does not

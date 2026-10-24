@@ -569,7 +569,7 @@ def _import_outputs(session: Session, root: Path) -> int:
         if not line.strip():
             continue
         r = json.loads(line)
-        build_key = r.get("build_key")  # packages from before the model catalog have none
+        build_key = r.get("build_key")  # packages from before the Model Catalog have none
         if not build_key:
             continue  # such an output could never match a lookup again; segments still carry their text
         exists = session.scalar(select(ModelOutput.id).where(

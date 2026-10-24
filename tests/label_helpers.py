@@ -1,6 +1,6 @@
 """Helpers shared by the Label tests (fixtures `label_flow` / `labelled` are in conftest.py) and by
 tests/e2e_server.py. Everything goes through Label's own HTTP API on recorded responses: models are
-registered in the (replay) model catalog, the way a person registers them in the catalog's UI, and Label lists
+registered in the (replay) Model Catalog, the way a person registers them in the catalog's UI, and Label lists
 them; datasets are uploaded by local path, and pseudo-labelling fills the output cache."""
 
 from __future__ import annotations

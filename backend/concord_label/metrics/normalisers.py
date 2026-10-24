@@ -7,7 +7,7 @@ means bumping its version and old scores stay explainable.
 - `whisper_en`: OpenAI Whisper's English normaliser (spelling, contractions, numbers).
 - `platform:<service>`: any `text.transform` model in the catalog, applied before `basic`. Offered as an
   extra, never the default: the platform's `text-normalizer` adds casing and punctuation, which is
-  the opposite of WER normalisation, so `basic` runs after it. It is called through the model catalog's
+  the opposite of WER normalisation, so `basic` runs after it. It is called through the Model Catalog's
   gateway (aicore with AICORE_CATALOG), which starts it on demand; it takes no lease.
 """
 

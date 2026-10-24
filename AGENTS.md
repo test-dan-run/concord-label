@@ -21,7 +21,17 @@ just dev              # API on :8620, the worker, and Vite on :5174
 just test             # pytest, then the frontend unit tests (vitest)
 just lint             # ruff, import-linter, and tsc
 just check-contracts  # contracts/samples, and the model adapters against the platform's contracts
+just move-originals   # move data/originals/ into the Dataset Catalog's store (DATASET_STORE)
 ```
+
+Until the platform's `dataset-catalog` branch merges, the `aicore` that `uv sync` installs from
+`../../platform` has no `aicore.datasets`. To work against the Dataset Catalog before then, install the
+client from the platform branch's worktree into this app's environment, e.g.
+`uv pip install -e <platform worktree>/clients/aicore`. Then set `UV_NO_SYNC=1` for every `just` and
+`uv run` command, so uv doesn't put the old client back, and set `PLATFORM_DIR` to the same worktree for
+`just build`, `just check-contracts` and `just e2e-handoff`. Never run a plain `uv sync` or `just setup`
+while you work this way. Label runs without the Dataset Catalog on the old client, as long as
+`DATASET_STORE` isn't set.
 
 You can run the Playwright tests without Docker. First, run `npm run build` in `frontend/`. Second, run
 `npx playwright test` there, and the Playwright config starts `tests/e2e_server.py` on port 8621 with a
@@ -59,7 +69,10 @@ tests, and look at the page in a browser, because several bugs in Annotate only 
 - `components/Timeline.tsx` is shared with Bench and draws the waveform and the axis. The speaker lane
   editing in Annotate lives in `features/label/SpeakerLanes.tsx`, the drag maths in `laneDrag.ts`, and
   the zoom maths in `zoom.ts`, and all three are Label's own.
-- Offline kits now belong to the platform's model catalog, so don't add offline export back to Label.
+- Offline kits now belong to the platform's Model Catalog, so don't add offline export back to Label.
+- The Dataset Catalog's store belongs to the catalog service. Label reads audio and version folders from
+  the store's mount but never writes there. It sends audio through `platform/datasets.py`, and it places
+  a hold on every file one of its datasets uses, so the catalog's clean-up never deletes it.
 - Match the style of the code around your change, including how many comments it has.
 
 ## Code shared with Concord Bench
@@ -73,7 +86,7 @@ modules:
 - Frontend: `components/` (`AudioPlayer`, `Timeline`, `timelineMath`, `TagInput`, `icons` and `ui`),
   `lib/`, and the Models, Jobs and Upload pages.
 
-The adapters' params must stay identical in both apps, because the model catalog's output index matches
+The adapters' params must stay identical in both apps, because the Model Catalog's output index matches
 outputs across the apps on the build key, the audio, the span and the params hash
 (`aicore.catalog.params_hash`).
 
@@ -83,14 +96,32 @@ Bench's copies don't have these recent Label changes yet:
   listeners attach even when the element renders after the page loads its data.
 - `Timeline`: the optional `selection` and `onSelection` props, and the exported `LABEL_W`.
 - Models page: the groups by capability.
-- The Dataset Catalog (DATASET_CATALOG_PLAN.md §8): `paths.original` looks in the store first,
-  `datasets/ingest.py` sends originals to the store and holds them, `platform/datasets.py` wraps aicore's
-  client, and `runs/jobs.py` runs publishes and the `catalog-dataset` job. Bench makes its own version of
-  these changes in its D4 work, so compare the two when both branches merge.
-- Contract version 3 (DATASET_CATALOG_PLAN.md §10): Label keeps `CONTRACT_VERSION` in `core/settings.py`
-  and Bench in `concord_bench/__init__.py`. `core/models.py` keeps the `push` rows of `reference_export`
-  only as history, `runs/jobs.py` builds packages for download only, and `lib/api.ts` lost the push fields
-  of the reference preview. Bench's `lib/peer.ts` links to Label by catalog dataset id.
+
+The Dataset Catalog work (the platform's DATASET_CATALOG_PLAN.md, milestones D4 to D6) changed some shared
+modules in both apps, and each app made its own version of the change. These modules now differ on
+purpose, so compare them by hand before you copy a fix from one app to the other:
+
+- `core/paths.py`: both apps read an original from the store first and fall back to their own copy.
+  Bench adds `store()`, `store_version()` and `local_original()`, and it no longer creates `originals/`
+  when the store is set up. Label still creates `data/originals/`, because Sync puts audio there.
+- `core/settings.py`: both have `dataset_store` (`DATASET_STORE`). Label keeps `CONTRACT_VERSION` here,
+  and Bench keeps it in `concord_bench/__init__.py`.
+- `core/models.py`: both datasets have `catalog_dataset_id` and `catalog_version`, from migration
+  `label_0007` here and `bench_0009` in Bench. Label's `reference_export` also has `catalog_dataset_id`,
+  and it keeps its `push` rows only as history.
+- `datasets/ingest.py`: both send each original to the store and hold it. Label uploads and holds each
+  file in the ingest loop. Bench uploads in `_process_audio` and holds the dataset's audio at the end.
+  Bench also refuses a dataset without references.
+- `datasets/`: Bench alone has `catalog.py` (import and publish), `store.py` (`just move-originals`) and
+  `refpackage.py`. Label's versions of these live in `label/publish.py`, `label/from_catalog.py` and
+  `move_originals.py`.
+- `platform/`: each app wraps aicore's `DatasetCatalog` with its own app name, Bench in
+  `platform/dataset_catalog.py` (`concord-bench`) and Label in `platform/datasets.py` (`concord-label`).
+- `runs/jobs.py`: Label runs publishes as `reference` jobs and has the `catalog-dataset` job, and it
+  builds reference packages for download only. Bench's jobs didn't change for the Dataset Catalog.
+- Frontend `lib/api.ts`: each app has its own Dataset Catalog types, and Label's reference preview lost
+  the push fields. Bench's `lib/peer.ts`, which Label doesn't have, links to Label by catalog dataset id.
+- The Models and Jobs pages already differed, and both apps changed them only to say "Model Catalog".
 
 Bench also owns `fixtures/generated` and `fixtures/recorded`. When Bench makes them again (`just fixtures`
 and `just record`), copy both folders into this repository. `just e2e-handoff` tests the round trip
@@ -116,7 +147,7 @@ changed and why. Commit one feature at a time where the files allow it.
 
 These changes came from the updated design canvas and from requests that followed it:
 
-- Offline kits moved to the model catalog. Migration 0005 dropped the `offline_export` table, and
+- Offline kits moved to the Model Catalog. Migration 0005 dropped the `offline_export` table, and
   `CONTRACTS.md` §6 and `contracts/samples/kit` were removed here and in Concord Bench.
 - Annotate gained several timeline features:
   - You can edit segments on the speaker lanes (move, trim, draw, and add speakers up to 8).
@@ -136,6 +167,10 @@ These changes came from the updated design canvas and from requests that followe
 - `just check-contracts` no longer compares `docs/CONTRACTS.md` and `contracts/` with the Bench
   repository. It checks Label's samples, and it checks Label's model adapters against the platform's
   contracts instead.
+- The Dataset Catalog came in (the platform's DATASET_CATALOG_PLAN.md, milestones D5 and D6). With
+  `DATASET_STORE` set, ingest sends originals to the catalog's store and holds them, Publish to Dataset
+  Catalog publishes versions, and New from Dataset Catalog makes a dataset from a version. Migration
+  `label_0007` added the catalog columns. `just move-originals` moves `data/originals/` into the store.
 - Contract version 3 replaced "Send to Bench" with Publish to Dataset Catalog. Without the catalog, the
   panel builds a reference package to download. Earlier sends stay in the history. Flags, "Open in
   Label" and the locked score find a dataset by its `catalog_dataset_id`.

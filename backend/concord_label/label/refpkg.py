@@ -175,7 +175,7 @@ def label_models(session: Session, ds: Dataset) -> list[str]:
 def seg_outputs(session: Session, ds: Dataset, shas: list[str]) -> list[dict[str, Any]]:
     """Whole-file outputs of the label runs' seg models on these files (CONTRACTS.md §2.5). The params are
     the ones the run called the model with, written out in full; a cache row is taken only when its hash is
-    the hash of those params, and only with a build key (rows from before the model catalog have none),
+    the hash of those params, and only with a build key (rows from before the Model Catalog have none),
     which Bench matches on."""
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()

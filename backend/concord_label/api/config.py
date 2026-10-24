@@ -31,7 +31,7 @@ def get_config() -> dict[str, Any]:
         "default_collar": DEFAULT_COLLAR,
         "collars": [0.0, 0.1, 0.25, 0.5],
         "replay": s.replay_dir is not None,
-        # The model catalog: models, leases, the output index and the gateway (platform/catalog/README.md).
+        # The Model Catalog: models, leases, the output index and the gateway (platform/catalog/README.md).
         "catalog": {"url": s.catalog_root, "ui_url": s.catalog_ui},
         # The Dataset Catalog (DATASET_CATALOG_PLAN.md §8): set up when DATASET_STORE is set; `ui_url` is its list.
         "dataset_catalog": dataset_catalog.config(),

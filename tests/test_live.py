@@ -1,4 +1,4 @@
-"""Against the running model catalog (`just test-live`): Label lists the models from it, takes a lease the way
+"""Against the running Model Catalog (`just test-live`): Label lists the models from it, takes a lease the way
 a label run does, and calls a model through the catalog's gateway. The catalog starts what the lease names."""
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ def reachable():
 
     get_settings()  # exports AICORE_CATALOG
     if not catalog.get_catalog().available():
-        pytest.skip(f"no model catalog at {get_settings().catalog_root} (`just catalog-up` in the platform repo)")
+        pytest.skip(f"no Model Catalog at {get_settings().catalog_root} (`just catalog-up` in the platform repo)")
 
 
 def test_catalog_lists_the_speech_models():

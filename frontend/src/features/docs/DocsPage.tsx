@@ -232,6 +232,11 @@ const SECTIONS: Section[] = [
           dataset you published to the catalog or made from it.
         </p>
         <p className="m-0">
+          Bench's flags, the locked score on Live evaluation and <em>Open in Label</em> find your dataset by the catalog dataset it belongs to.
+          A file on a version's page in the Dataset Catalog also has <em>Open in Label</em>. If no dataset here was made from that catalog
+          dataset, Label points you to <em>New from Dataset Catalog</em>.
+        </p>
+        <p className="m-0">
           Either way, the references hold the speakers and the text in SegLST, JSONL or RTTM format, depending on what the segments contain.
           The metadata that came with a file's annotations, e.g., its condition or a NeMo manifest's speaker attributes, goes along as file
           labels, and Bench breaks its scores down by them. Only metadata with the same value on every annotation of the file counts as the

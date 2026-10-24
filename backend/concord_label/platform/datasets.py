@@ -6,9 +6,10 @@ The Dataset Catalog is set up when DATASET_STORE names the store's mount. Label 
   deletes the last dataset that uses the audio (datasets/ingest.py, api/datasets.py);
 - publishes versions of a dataset (label/publish.py) and makes datasets from versions (label/from_catalog.py).
 
-The catalog service is the model catalog's (CATALOG_URL), and the client is aicore's `DatasetCatalog`. Label reads
-audio and version folders from the mount, never over HTTP. Without DATASET_STORE nothing here is called, and
-aicore.datasets is never imported, so Label works with an aicore that has no Dataset Catalog client.
+The catalog service at CATALOG_URL serves both the Model Catalog and the Dataset Catalog, and the client is aicore's
+`DatasetCatalog`. Label reads audio and version folders from the mount, never over HTTP. Without DATASET_STORE
+nothing here is called, and aicore.datasets is never imported, so Label works with an aicore that has no Dataset
+Catalog client.
 
 Tests swap in a `FakeDatasetCatalog` with `set_dataset_catalog`.
 """

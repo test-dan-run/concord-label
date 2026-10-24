@@ -109,7 +109,7 @@ def replay_catalog():
 @pytest.fixture
 def replay(monkeypatch, data_dir, replay_catalog):
     """Recorded responses instead of live services, with the endpoint map they were recorded with, and the
-    replay catalog standing in for the model catalog."""
+    replay catalog standing in for the Model Catalog."""
     from concord_label.core.settings import reset_settings
 
     if not (RECORDED / "endpoints.generated.yaml").is_file():

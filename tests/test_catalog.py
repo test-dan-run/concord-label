@@ -1,4 +1,4 @@
-"""The model catalog as Label uses it, on aicore's FakeCatalog (no catalog, no GPU): models listed from it,
+"""The Model Catalog as Label uses it, on aicore's FakeCatalog (no catalog, no GPU): models listed from it,
 one lease per pipeline stage, waiting in its queue, blocked jobs, the output index (outputs Bench holds are
 copied, not computed; nothing is indexed without a build key), POST /api/outputs/batch and the app's
 registration at startup."""

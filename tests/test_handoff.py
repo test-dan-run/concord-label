@@ -6,7 +6,7 @@ by default, built from the platform's catalog/Dockerfile, with PLATFORM_DIR moun
 `concord-handoff-catalog`, and the two apps (`concord-label` and `concord-bench` images built with `just build`) as
 `concord-handoff-label` and `concord-handoff-bench`. A temporary dataset store is mounted read-write in the catalog
 and read-only in both apps, at the same path. The apps run in replay mode on fixtures/recorded (Label's copy and
-Bench's are the same files), so their model catalog is the replay stand-in, while the Dataset Catalog is the real
+Bench's are the same files), so their Model Catalog is the replay stand-in, while the Dataset Catalog is the real
 service. The test drives everything through the HTTP APIs on random host ports:
 
 1. Bench baseline: the fixture set (fixtures/generated audio + speaker-attributed STM) uploaded to Bench
@@ -121,7 +121,7 @@ class App:
         return ds
 
     def register(self, name: str) -> dict[str, Any]:
-        """A model from the model catalog. In replay mode each app's catalog is the stand-in built from the
+        """A model from the Model Catalog. In replay mode each app's catalog is the stand-in built from the
         recordings, which has the fixture models registered. `id` is what a run request takes."""
         listed = self.get("/models")
         models = listed["models"] if isinstance(listed, dict) else listed
@@ -218,7 +218,7 @@ def asr_cell(bench: App, catalog_id: str, dataset_id: int) -> dict[str, Any]:
 
 
 def benchmark(bench: App, catalog_id: str, dataset_id: int) -> dict[str, Any]:
-    """Bench plans take catalog model ids (`asr_models`) since the model catalog."""
+    """Bench plans take catalog model ids (`asr_models`) since the Model Catalog."""
     bench.post("/benchmarks/plan", 202, json={"dataset_id": dataset_id, "asr_models": [catalog_id], "mode": "stages"})
     bench.idle()
     cell = asr_cell(bench, catalog_id, dataset_id)

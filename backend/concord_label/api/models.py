@@ -1,4 +1,4 @@
-"""Models, read from the model catalog (platform/catalog/README.md).
+"""Models, read from the Model Catalog (platform/catalog/README.md).
 
 Registering, verifying and serving models is the catalog's job, in its own UI (`CATALOG_UI_URL`). Label lists
 the catalog's registered models with their state, capabilities, cold start and build key (and the groups the

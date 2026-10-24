@@ -89,7 +89,7 @@ Canvas artboards: `Main`, `Benchmarks-Pipelines`, `ASR-Errors`, `Diar-Errors`, `
 
 ### 3.2 Register a model (`Add-Model`) — simplified for the platform
 
-> **Moved to the platform's model catalog.** Registering, verifying (the compatibility check) and the
+> **Moved to the platform's Model Catalog.** Registering, verifying (the compatibility check) and the
 > contract page now live in the catalog's own UI (platform `MODEL_CATALOG_REDESIGN.md`); Concord Label lists
 > catalog models read-only and keeps no registration screens. §3.2 and §3.5 are kept as the original brief.
 - **Pick from the platform registry** (searchable list of entries from the platform config). Show what the config says (protocol, server, endpoint) read-only.
@@ -129,7 +129,7 @@ Canvas artboards: `Main`, `Benchmarks-Pipelines`, `ASR-Errors`, `Diar-Errors`, `
 
 ### 3.5 Contract page (`Model-Contract`)
 
-> **Moved to the platform's model catalog** (see the note under §3.2).
+> **Moved to the platform's Model Catalog** (see the note under §3.2).
 Replace the long design page with a short page:
 - what Concord sends and expects;
 - the capability / timing detection rules;
@@ -164,7 +164,7 @@ Canvas artboards: `Label-Console`, `Pseudo-Label`, `Annotate`, `Live-Eval`, `Syn
 > **Updated canvas (2026-10-24, "Concord Label UI"):** adds editing on the speaker lanes in Annotate
 > (move, move to another speaker, trim, draw, add speakers up to 8), **Lexicons** (house spellings applied
 > to every dataset, hints in Annotate, carried in label packages) and a **Docs** page under Help. Offline
-> export left Label: offline kits are the model catalog's. Artboards: `Main`, `PseudoLabelPick`,
+> export left Label: offline kits are the Model Catalog's. Artboards: `Main`, `PseudoLabelPick`,
 > `PseudoLabel`, `Annotate`, `LiveEval`, `Datasets`, `DatasetDetail`, `UploadDataset`, `Sync`, `Models`,
 > `Jobs`, `Lexicons`, `Docs`, `Sidebar`.
 
@@ -236,3 +236,9 @@ Phase 3 adds `TrainingRun`; nothing above may reference it.
 5. Phase 3 scope and how training jobs are launched.
 
 All numbers, model names, dataset names and transcripts in the design are illustrative sample data.
+
+> **Note (Oct 2026, Dataset Catalog).** Datasets now move between Label and Bench through the platform's
+> Dataset Catalog (`platform/DATASET_CATALOG_PLAN.md`, contract version 3). When `DATASET_STORE` is set,
+> original audio is kept once, in the catalog's store. Label publishes a dataset as a catalog version
+> instead of sending it to Bench, and it can make a dataset from a published version. Import and export of
+> progress between installs (Sync) is unchanged. README.md describes the current flow.
