@@ -1,6 +1,9 @@
 """Dataset ingest: scan a source (upload folder, zip, or local path), match annotations to audio by
 stem, then copy originals, derive 16 kHz mono FLAC + peaks, and store reference segments.
 
+With the Dataset Catalog set up (DATASET_STORE), each original goes to the catalog's store instead of
+data/originals/, and Label holds it there (DATASET_CATALOG_PLAN.md §8.1). The derived files stay in data/.
+
 `inspect_source` is cheap (no decoding) and drives the upload page's match counts and previews.
 `ingest` runs as a job and reports progress.
 """
@@ -20,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..core import paths
 from ..core.models import AudioFile, Dataset, FileStatus, LabelType, Segment, SegmentStatus
+from ..platform import datasets as dataset_catalog
 from . import audio as audio_mod
 from .parsers import ANNOTATION_EXTS, ParseResult, RefRecord, parse_file
 
@@ -183,6 +187,7 @@ def ingest(session: Session, dataset_id: int, source: Path, progress: Progress |
     if not s.audio:
         raise ValueError("no audio files found (accepted: " + ", ".join(sorted(audio_mod.AUDIO_EXTS)) + ")")
     existing = {f.rel_path: f for f in session.scalars(select(AudioFile).where(AudioFile.dataset_id == ds.id))}
+    store = dataset_catalog.get() if dataset_catalog.enabled() else None
     total = len(s.audio)
     flagged: dict[str, list[dict[str, Any]]] = {"clipped": [], "undecodable": []}
     sr_hist: Counter[int] = Counter()
@@ -191,6 +196,11 @@ def ingest(session: Session, dataset_id: int, source: Path, progress: Progress |
         progress(0.05 + 0.85 * k / total, f"audio {k + 1}/{total}: {rel}")
         f = existing.get(rel) or AudioFile(dataset_id=ds.id, rel_path=rel, ext=src.suffix.lower())
         f.sha256 = audio_mod.sha256_file(src)
+        if store is not None:
+            # paths.original then finds the file in the store, so _process_audio copies nothing.
+            with dataset_catalog.calls(f"storing {rel}"):
+                store.upload_audio(src, f.sha256)
+                store.hold([f.sha256])
         facts = _process_audio(f, src)
         if f.id is None:
             session.add(f)

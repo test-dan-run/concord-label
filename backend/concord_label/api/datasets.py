@@ -17,6 +17,7 @@ from ..core.db import get_session
 from ..core.models import AudioFile, Dataset, Job, Run, Segment
 from ..core.settings import REPO_ROOT
 from ..datasets.ingest import inspect_source
+from ..platform import datasets as dataset_catalog
 from ..runs import jobs
 
 router = APIRouter(tags=["datasets"])
@@ -136,6 +137,8 @@ def dataset_json(session: Session, ds: Dataset, detail: bool = False) -> dict[st
         "files": rep.get("files"), "usable_files": rep.get("usable_files"), "hours": rep.get("hours"),
         "usable_hours": rep.get("usable_hours"), "has_speaker_text": bool(rep.get("has_speaker_text")),
         "flagged": {k: len(v) for k, v in (rep.get("flagged") or {}).items()},
+        "catalog_dataset_id": ds.catalog_dataset_id, "catalog_version": ds.catalog_version,
+        "catalog_url": dataset_catalog.ui_url(ds.catalog_dataset_id) if ds.catalog_dataset_id else None,
     }
     if detail:
         d["report"] = rep
@@ -210,8 +213,30 @@ def patch_dataset(dataset_id: int, body: DatasetPatch, session: Session = Depend
 
 @router.delete("/datasets/{dataset_id}", status_code=204)
 def delete_dataset(dataset_id: int, session: Session = Depends(get_session)) -> None:
-    session.delete(get_dataset(session, dataset_id))
+    ds = get_dataset(session, dataset_id)
+    if dataset_catalog.enabled():
+        release_catalog_audio(session, ds)
+    session.delete(ds)
     session.commit()
+
+
+def release_catalog_audio(session: Session, ds: Dataset) -> None:
+    """Before deleting `ds`: release the holds on audio no other dataset here uses, and the use of the catalog
+    version it was made from (DATASET_CATALOG_PLAN.md §4.3, §8.1). A catalog that doesn't answer stops the delete,
+    so no hold is left behind."""
+    shas = set(session.scalars(select(AudioFile.sha256).where(AudioFile.dataset_id == ds.id)))
+    shared = set(session.scalars(select(AudioFile.sha256).where(AudioFile.dataset_id != ds.id,
+                                                                AudioFile.sha256.in_(shas)))) if shas else set()
+    made_from = (ds.report or {}).get("catalog") or {}
+    try:
+        dc = dataset_catalog.get()
+        with dataset_catalog.calls("releasing the dataset's audio"):
+            if shas - shared:
+                dc.release(sorted(shas - shared))
+            if made_from.get("dataset_id") and made_from.get("version"):
+                dc.remove_use(made_from["dataset_id"], int(made_from["version"]), ds.uid)
+    except dataset_catalog.Unavailable as exc:
+        raise HTTPException(502, f"{exc}. The dataset was not deleted.") from None
 
 
 @router.get("/datasets/{dataset_id}/files")

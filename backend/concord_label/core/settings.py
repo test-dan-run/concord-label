@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # Concord Bench (SPLIT_PLAN.md §5): where "Send to Bench" pushes reference packages and where the
     # live evaluation reads locked scores. Unset: packages are downloaded and the Locked column is hidden.
     bench_url: str | None = None
+    # The Dataset Catalog's store (DATASET_CATALOG_PLAN.md §4), mounted read-only. Set, Label sends new audio to
+    # the store through the catalog service at catalog_url, reads originals from the store, publishes versions to
+    # the Dataset Catalog and makes datasets from them. Unset, originals stay in data/originals/ as before.
+    dataset_store: Path | None = None
     # Built frontend served by FastAPI; absent in development (Vite serves it).
     frontend_dist: Path = Field(default=REPO_ROOT / "frontend" / "dist")
 

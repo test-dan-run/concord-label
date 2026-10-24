@@ -14,6 +14,7 @@ from ..core.models import Dataset, Model
 from ..core.settings import APP, CONTRACT_VERSION, VERSION, get_settings
 from ..metrics import normalisers
 from ..metrics.der import DEFAULT_COLLAR
+from ..platform import datasets as dataset_catalog
 
 router = APIRouter(tags=["config"])
 
@@ -32,6 +33,8 @@ def get_config() -> dict[str, Any]:
         "replay": s.replay_dir is not None,
         # The model catalog: models, leases, the output index and the gateway (platform/catalog/README.md).
         "catalog": {"url": s.catalog_root, "ui_url": s.catalog_ui},
+        # The Dataset Catalog (DATASET_CATALOG_PLAN.md §8): set up when DATASET_STORE is set; `ui_url` is its list.
+        "dataset_catalog": dataset_catalog.config(),
         "public_url": s.public_base_url,
         "links": {"platform_readme": "dev/README.md", "contracts_readme": "platform/contracts/README.md"},
     }

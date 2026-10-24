@@ -16,7 +16,22 @@ def db_path() -> Path:
 
 
 def original(sha256: str, ext: str) -> Path:
+    """The original bytes: in the Dataset Catalog's store when DATASET_STORE is set and the store has the file,
+    else in data/originals/, where Sync still puts the audio it brings (DATASET_CATALOG_PLAN.md §8.1)."""
+    p = store_audio(sha256)
+    if p is not None and p.is_file():
+        return p
+    return local_original(sha256, ext)
+
+
+def local_original(sha256: str, ext: str) -> Path:
     return data_root() / "originals" / f"{sha256}{ext}"
+
+
+def store_audio(sha256: str) -> Path | None:
+    """Where the store keeps a file (no extension), or None without DATASET_STORE. Only the catalog writes there."""
+    store = get_settings().dataset_store
+    return store.expanduser() / "audio" / sha256[:2] / sha256 if store else None
 
 
 def derived(sha256: str) -> Path:

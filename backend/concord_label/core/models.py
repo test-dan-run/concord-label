@@ -96,6 +96,11 @@ class Dataset(Base):
     status: Mapped[str] = mapped_column(String(16), default="ingesting")  # ingesting | ready | failed
     # Ingest report: counts, hours, sample-rate histogram, flagged files, annotation matches.
     report: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # The Dataset Catalog dataset this one is published as or was made from (DATASET_CATALOG_PLAN.md §8), and the
+    # version it is based on: the last one published from here, or the one it was made from. The next publish
+    # names that version as its parent.
+    catalog_dataset_id: Mapped[str | None] = mapped_column(String(32), index=True)
+    catalog_version: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     files: Mapped[list[AudioFile]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
@@ -264,7 +269,7 @@ class ModelOutput(Base):
 class Job(Base):
     __tablename__ = "job"
     id: Mapped[int] = mapped_column(primary_key=True)
-    type: Mapped[str] = mapped_column(String(32))  # ingest | label | export | reference
+    type: Mapped[str] = mapped_column(String(32))  # ingest | label | reference | catalog-dataset
     payload: Mapped[dict[str, Any]] = mapped_column(default=dict)
     status: Mapped[str] = mapped_column(String(16), default=JobStatus.queued)
     required_services: Mapped[list[str]] = mapped_column(default=list)  # catalog models with work to do
@@ -303,7 +308,9 @@ class SyncPackage(Base):
 
 class ReferenceExport(Base):
     """One reference package sent to Concord Bench, pushed or downloaded (SPLIT_PLAN.md §4.2,
-    CONTRACTS.md §2). `version` is the package's `export_version`, given when the package is written."""
+    CONTRACTS.md §2), or one version published to the Dataset Catalog (destination `catalog`,
+    DATASET_CATALOG_PLAN.md §8.2). `version` is the package's `export_version`, given when the package is
+    written; for a publish it is the catalog's version number."""
 
     __tablename__ = "reference_export"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -314,7 +321,8 @@ class ReferenceExport(Base):
     tags: Mapped[list[str]] = mapped_column(default=list)
     include_audio: Mapped[str] = mapped_column(String(8), default="auto")  # auto | always | never
     include_outputs: Mapped[bool] = mapped_column(Boolean, default=False)
-    destination: Mapped[str] = mapped_column(String(8))  # download | push
+    destination: Mapped[str] = mapped_column(String(8))  # download | push | catalog
+    catalog_dataset_id: Mapped[str | None] = mapped_column(String(32))  # destination catalog: the catalog dataset
     status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | running | done | failed
     # files, segments, hours, audio_files, outputs, left_out (not fully reviewed), bytes
     counts: Mapped[dict[str, Any]] = mapped_column(default=dict)

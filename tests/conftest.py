@@ -47,7 +47,7 @@ def data_dir(tmp_path, monkeypatch):
 
     monkeypatch.setenv("CONCORD_DATA", str(tmp_path / "data"))
     for var in ("REPLAY_DIR", "RECORD_DIR", "AICORE_CATALOG", "CATALOG_URL", "CATALOG_UI_URL", "PUBLIC_URL",
-                "CONCORD_PUBLIC_URL"):
+                "CONCORD_PUBLIC_URL", "DATASET_STORE", "AI_DATA"):
         monkeypatch.delenv(var, raising=False)
     reset_settings()
     db.reset_engines()
@@ -74,6 +74,26 @@ def client(data_dir):
 
     with TestClient(create_app()) as c:
         yield c
+
+
+@pytest.fixture
+def dataset_catalog(data_dir, tmp_path, monkeypatch):
+    """The Dataset Catalog set up: DATASET_STORE is a fresh folder, and a `FakeDatasetCatalog` (aicore.datasets)
+    keeps its store there and stands in for the catalog service. Without this fixture DATASET_STORE is unset, and
+    Label keeps its originals in data/originals/."""
+    from aicore.datasets import FakeDatasetCatalog
+
+    from concord_label.core.settings import APP, reset_settings
+    from concord_label.platform import datasets
+
+    store = tmp_path / "store"
+    dc = FakeDatasetCatalog(store, app=APP)
+    monkeypatch.setenv("DATASET_STORE", str(store))
+    reset_settings()
+    datasets.set_dataset_catalog(dc)
+    yield dc
+    datasets.set_dataset_catalog(None)
+    reset_settings()
 
 
 @pytest.fixture
