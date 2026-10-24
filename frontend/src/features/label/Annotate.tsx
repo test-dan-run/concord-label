@@ -791,8 +791,8 @@ function SidePanel({ s, ctl, onUse, onFlag, onSplit, onDelete, onLive }: { s: Se
               <span className="truncate">
                 {a.model}
                 {s.chosen === a.service && <span className="ml-1.5 text-primary">· starting hypothesis</span>}
-                {a.source_app && <span className="ml-1.5 text-subtle" title={`output read from ${a.source_app} through the model catalog's index`}>· from {a.source_app === "bench" ? "Concord Bench" : a.source_app}</span>}
-                {!a.build_key && <span className="ml-1.5 text-subtle" title="made before the model catalog: not reused by new runs">· older build</span>}
+                {a.source_app && <span className="ml-1.5 text-subtle" title={`output read from ${a.source_app} through the Model Catalog's index`}>· from {a.source_app === "bench" ? "Concord Bench" : a.source_app}</span>}
+                {!a.build_key && <span className="ml-1.5 text-subtle" title="made before the Model Catalog: not reused by new runs">· older build</span>}
               </span>
               {s.agreement?.[a.service] !== undefined && <span className="num text-muted">agrees {(100 * s.agreement[a.service]).toFixed(0)}%</span>}
             </span>

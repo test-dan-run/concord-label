@@ -3,7 +3,7 @@ import { api, type Model, type ModelList } from "../../lib/api";
 import { capLabel, coldStart, timingLabel } from "../../lib/format";
 import { Chip, Empty, ErrorNote, PageHeader, Panel, Spinner, StatusDot } from "../../components/ui";
 
-// Models live in the model catalog: it registers, verifies, starts and serves them. This page lists them
+// Models live in the Model Catalog: it registers, verifies, starts and serves them. This page lists them
 // read-only, grouped by what the catalog's verifier found they do (a model doing two shows in both
 // groups); registering a model or reading its verification report happens in the catalog's own UI.
 
@@ -23,16 +23,16 @@ export function ModelsPage() {
       <PageHeader
         crumbs="Setup"
         title="Models"
-        subtitle="From the model catalog, which registers, verifies and runs them. Capabilities and timing come from its verifier."
-        actions={cat && <a href={cat.ui_url} target="_blank" rel="noreferrer" className="text-[13px]">Open the model catalog ↗</a>}
+        subtitle="From the Model Catalog, which registers, verifies and runs them. Capabilities and timing come from its verifier."
+        actions={cat && <a href={cat.ui_url} target="_blank" rel="noreferrer" className="text-[13px]">Open the Model Catalog ↗</a>}
       />
       {q.isLoading && <Spinner />}
       <ErrorNote error={q.error} />
-      {cat && !cat.reachable && <ErrorNote error={`The model catalog at ${cat.url} is not reachable (${cat.error}). Showing the models Label has used, as last seen.`} />}
+      {cat && !cat.reachable && <ErrorNote error={`The Model Catalog at ${cat.url} is not reachable (${cat.error}). Showing the models Label has used, as last seen.`} />}
       {q.data && models.length === 0 && (
         <Panel>
           <Empty>
-            No models in the catalog yet. Register them in the <a href={cat?.ui_url} target="_blank" rel="noreferrer">model catalog</a>.
+            No models in the catalog yet. Register them in the <a href={cat?.ui_url} target="_blank" rel="noreferrer">Model Catalog</a>.
           </Empty>
         </Panel>
       )}

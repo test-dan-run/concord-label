@@ -56,7 +56,7 @@ test("datasets, upload, models and jobs load", async ({ page }) => {
   await expect(group("VAD / Diarisation").getByRole("link", { name: "silero-vad" })).toBeVisible();
   await expect(group("ASR").getByRole("link", { name: "pyannote-diarization" })).toHaveCount(0);
   await expect(group("Speech enhancement")).toContainText("No speech enhancement models in the catalog.");
-  await expect(page.getByRole("link", { name: "Open the model catalog ↗" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open the Model Catalog ↗" })).toBeVisible();
   await expect(page.getByRole("link", { name: /Add model/ })).toHaveCount(0);
   for (const path of ["/models/add", "/contract"]) {
     await page.goto(path);

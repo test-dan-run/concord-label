@@ -160,13 +160,13 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
                 {pv.seg.bench_files > 0 && <>, <span className="num">{pv.seg.bench_files}</span> in Concord Bench</>}
               </span>
             )}
-            {models.data && !models.data.catalog.reachable && <ErrorNote error={`The model catalog is not reachable: ${models.data.catalog.error}`} />}
-            {!segModels.length && models.data && <Empty>No VAD / diarisation model in the catalog. Register one in the <a href={catalogUi} target="_blank" rel="noreferrer">model catalog</a>.</Empty>}
+            {models.data && !models.data.catalog.reachable && <ErrorNote error={`The Model Catalog is not reachable: ${models.data.catalog.error}`} />}
+            {!segModels.length && models.data && <Empty>No VAD / diarisation model in the catalog. Register one in the <a href={catalogUi} target="_blank" rel="noreferrer">Model Catalog</a>.</Empty>}
           </div>
           {wantAsr && (
             <fieldset className="border-0 p-0 m-0 flex flex-col gap-1.5">
               <legend className="text-[11px] text-muted uppercase tracking-wider mb-1.5">ASR members</legend>
-              {!asrModels.length && models.data && <Empty>No ASR model in the catalog. Register one in the <a href={catalogUi} target="_blank" rel="noreferrer">model catalog</a>.</Empty>}
+              {!asrModels.length && models.data && <Empty>No ASR model in the catalog. Register one in the <a href={catalogUi} target="_blank" rel="noreferrer">Model Catalog</a>.</Empty>}
               {asrModels.map((m) => {
                 const st = pv?.members.find((x) => x.service === m.catalog_id);
                 return (
@@ -238,7 +238,7 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
             <Button variant="primary" disabled={!!problems.length || running || start.isPending || preview.isLoading} onClick={() => start.mutate()}>
               <I.Wand size={14} /> {button}
             </Button>
-            {fresh > 0 && <span className="text-xs text-muted">The model catalog loads one model at a time; the run waits if compute is busy.</span>}
+            {fresh > 0 && <span className="text-xs text-muted">The Model Catalog loads one model at a time; the run waits if compute is busy.</span>}
             {fresh === 0 && wantAsr && pv && <span className="text-xs text-muted">No inference needed: every member's output is saved{fromBench ? ` (${fromBench} copied from Concord Bench)` : ""}.</span>}
           </div>
           {pv?.plan && pv.plan.steps.length > 0 && (
