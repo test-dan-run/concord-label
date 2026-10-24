@@ -94,6 +94,7 @@ export function SendToBench({ datasetId, className }: { datasetId: number; class
           <Fact k="Files" v={<>{num(p.files)}{p.left_out > 0 && <span className="text-muted"> · {num(p.left_out)} left out (not fully reviewed)</span>}</>} />
           <Fact k="Segments" v={`${num(p.segments)} · ${hours(p.hours)}`} />
           <Fact k="References" v={p.refs_file ? REFS_LABELS[p.refs_file] ?? p.refs_file : "—"} />
+          <Fact k="Labels for slicing" v={p.labels.length ? p.labels.join(", ") : "none (no file metadata)"} />
           <Fact k="Version" v={`v${p.next_version}`} />
           <Fact
             k="Destination"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import zipfile
 
@@ -104,3 +105,21 @@ def test_reingest_replaces_references(session, tmp_path):
     n = session.query(Segment).count()
     ingest(session, ds.id, src)
     assert session.query(Segment).count() == n
+
+
+def test_only_metadata_constant_across_a_file_goes_on_the_file(session, tmp_path):
+    """A value that changes within a file is not a file label (CONTRACTS.md §2.7): before, the last one won."""
+    src = tmp_path / "src"
+    (src / "audio").mkdir(parents=True)
+    shutil.copy(GEN / "dataset" / "audio" / "d01.flac", src / "audio" / "d01.flac")
+    (src / "segments.jsonl").write_text("\n".join(json.dumps(x) for x in [
+        {"file": "d01", "start": 0.0, "end": 2.0, "speaker": "A", "text": "hi there", "room": "plaza",
+         "attribute": {"gender": "F"}},
+        {"file": "d01", "start": 2.0, "end": 4.0, "speaker": "B", "text": "hello", "room": "plaza",
+         "attribute": {"gender": "M"}}]))
+    ds = Dataset(name="meeting")
+    session.add(ds)
+    session.flush()
+    ingest(session, ds.id, src)
+    session.commit()
+    assert session.scalar(select(AudioFile)).meta == {"room": "plaza"}

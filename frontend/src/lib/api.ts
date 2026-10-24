@@ -546,6 +546,8 @@ export interface ReferencePreview {
   review: Record<string, number>;
   next_version: number;
   models: string[];
+  /** File labels sent along for Bench to slice by (refs/attributes.json, CONTRACTS.md §2.7). */
+  labels: string[];
   dataset: { id: number; name: string; uid: string; tags: string[] };
   peer: Peer;
   destination: "push" | "download";
@@ -563,7 +565,7 @@ export interface ReferenceExport {
   include_outputs: boolean;
   destination: "push" | "download";
   status: "queued" | "running" | "done" | "failed";
-  counts: { files?: number; segments?: number; hours?: number; audio_files?: number; outputs?: number; left_out?: number; bytes?: number };
+  counts: { files?: number; segments?: number; hours?: number; audio_files?: number; outputs?: number; left_out?: number; labelled_files?: number; bytes?: number };
   label_types: string[] | null;
   audio_included: "all" | "partial" | "none" | null;
   file: string | null;
