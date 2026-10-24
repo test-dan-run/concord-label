@@ -85,9 +85,11 @@ lint:
     uv run lint-imports
     cd frontend && npm run lint --silent
 
-# check contracts/samples (CONTRACTS.md) and compare with the other app's repository: just check-contracts [--peer PATH]
-check-contracts *args:
-    {{py}} contracts/check.py {{args}}
+# check contracts/samples against docs/CONTRACTS.md, and Label's model adapters against the platform's
+# contracts (PLATFORM_DIR/contracts: its registry and conformance checks); `just test` runs both too
+check-contracts:
+    {{py}} contracts/check.py
+    uv run pytest -q tests/test_contracts.py tests/test_platform_contracts.py
 
 # frontend production build into frontend/dist
 build-web:

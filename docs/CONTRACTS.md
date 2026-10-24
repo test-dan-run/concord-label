@@ -1,9 +1,9 @@
 # Concord contracts
 
-**Contract version 1.** This file and `contracts/` are kept identical in the Concord Bench and Concord Label
+**Contract version 1.** This file and `contracts/` started identical in the Concord Bench and Concord Label
 repositories (SPLIT_PLAN.md §2.3). They are the only things the two apps must agree on: the apps share no
-code. `just check-contracts` validates the samples and, when the other repository sits next to this one,
-fails on any difference between the two copies.
+code. In Concord Label, `just check-contracts` validates the samples, and it no longer compares this copy
+with Bench's. How Label talks to models follows the platform's contracts instead (`PLATFORM_DIR/contracts`).
 
 A change to anything below bumps the contract version and lands in both repositories. An app refuses a
 format version it does not know, with a message naming the versions it does know. Fields an app does not

@@ -20,7 +20,7 @@ just setup            # uv sync and npm install
 just dev              # API on :8620, the worker, and Vite on :5174
 just test             # pytest, then the frontend unit tests (vitest)
 just lint             # ruff, import-linter, and tsc
-just check-contracts  # contracts/samples, compared with the Concord Bench repository
+just check-contracts  # contracts/samples, and the model adapters against the platform's contracts
 ```
 
 You can run the Playwright tests without Docker. First, run `npm run build` in `frontend/`. Second, run
@@ -37,9 +37,15 @@ tests, and look at the page in a browser, because several bugs in Annotate only 
   next `label_000N` id (`db.next_revision_id()`). Update the pinned revision ids in
   `tests/test_db_owner.py`, and `tests/test_migrations.py` checks that the head schema matches the ORM
   models.
-- `docs/CONTRACTS.md` and `contracts/` must stay identical to the copies in the Concord Bench repository.
-  `contracts/check.py` finds the contracts doc in `docs/` or at the repository root, in either app.
-  When you change them, the same change has to land in Bench.
+- How Label talks to models follows the platform's contracts in `PLATFORM_DIR/contracts` (the
+  `openai`, `oip-v2` and `openai-inspired` contracts, and the registry in `api_types.yaml`).
+  `tests/test_platform_contracts.py` runs the platform's own conformance checks against the fake services
+  in `tests/platform_fakes.py`, and then runs Label's adapters and its text normaliser against the same
+  fakes. When the platform changes a contract, update the fake until the conformance checks pass, and
+  then fix the adapter the test shows is broken. A new adapter needs a fake and an entry in the test.
+- `docs/CONTRACTS.md` describes the formats Label exchanges with Concord Bench, and `contracts/check.py`
+  checks Label's samples of them. Label no longer compares its copy with Bench's, so tell the owner when
+  you change a format that Bench reads.
 - Some modules are copies of Concord Bench's code, listed under "Code shared with Concord Bench" below.
   When you fix one of them, note the fix for Bench, and keep the adapters' params identical in both
   apps.
@@ -75,8 +81,6 @@ Bench's copies don't have these recent Label changes yet:
   listeners attach even when the element renders after the page loads its data.
 - `Timeline`: the optional `selection` and `onSelection` props, and the exported `LABEL_W`.
 - Models page: the groups by capability.
-- `contracts/check.py`: it finds the contracts doc in `docs/` as well as at the repository root. Until
-  Bench copies the new file, `just check-contracts` reports that `contracts/check.py` differs.
 
 Bench also owns `fixtures/generated` and `fixtures/recorded`. When Bench makes them again (`just fixtures`
 and `just record`), copy both folders into this repository. `just e2e-handoff` tests the round trip
@@ -116,3 +120,6 @@ These changes came from the updated design canvas and from requests that followe
   app's features and its known limitations.
 - CONTRACTS.md, HANDOFF.md, PLAN.md and SPLIT_PLAN.md moved into `docs/`. AGENTS.md stays at the
   repository root, where agent tools look for it.
+- `just check-contracts` no longer compares `docs/CONTRACTS.md` and `contracts/` with the Bench
+  repository. It checks Label's samples, and it checks Label's model adapters against the platform's
+  contracts instead.
