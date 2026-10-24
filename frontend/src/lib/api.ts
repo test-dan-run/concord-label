@@ -64,6 +64,8 @@ export interface AppConfig {
   replay: boolean;
   /** The model catalog: registering, verifying and serving models happen there (`ui_url`). */
   catalog: { url: string; ui_url: string };
+  /** The Dataset Catalog: set up when DATASET_STORE is set. `ui_url` is its list of datasets. */
+  dataset_catalog: { enabled: boolean; store: string | null; url: string | null; ui_url: string | null };
   public_url: string;
 }
 
@@ -114,6 +116,10 @@ export interface Dataset {
   report?: DatasetReport;
   runs?: number;
   ingest_job?: Job | null;
+  /** The Dataset Catalog dataset this one is published as or was made from, and the version it is based on. */
+  catalog_dataset_id: string | null;
+  catalog_version: number | null;
+  catalog_url: string | null;
 }
 
 export interface TaskMatch {
@@ -552,6 +558,46 @@ export interface ReferencePreview {
   peer: Peer;
   destination: "push" | "download";
   push_refused: string | null;
+  /** Publish to Dataset Catalog; null when the Dataset Catalog is not set up. */
+  catalog: CatalogPublishState | null;
+}
+
+export interface CatalogPublishState {
+  dataset_id: string | null;
+  name: string | null;
+  /** The version this dataset is based on: made from, or last published. */
+  based_on: number | null;
+  latest: CatalogVersion | null;
+  /** Someone published after `based_on`: ask before publishing. */
+  stale: boolean;
+  /** The catalog dataset was deleted; the next publish makes a new one. */
+  deleted: boolean;
+  error: string | null;
+  url: string | null;
+}
+
+export interface CatalogVersion {
+  n: number;
+  parent_n: number | null;
+  published_by: string | null;
+  published_at: string | null;
+  label_types: string[];
+  counts: { files?: number; segments?: number; hours?: number };
+  url: string;
+}
+
+export interface CatalogDataset {
+  id: string;
+  name: string;
+  language: string | null;
+  description: string | null;
+  tags: string[];
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  latest: CatalogVersion | null;
+  url: string;
+  versions?: CatalogVersion[];
 }
 
 export interface ReferenceExport {
@@ -563,9 +609,13 @@ export interface ReferenceExport {
   tags: string[];
   include_audio: "auto" | "always" | "never";
   include_outputs: boolean;
-  destination: "push" | "download";
+  destination: "push" | "download" | "catalog";
   status: "queued" | "running" | "done" | "failed";
-  counts: { files?: number; segments?: number; hours?: number; audio_files?: number; outputs?: number; left_out?: number; labelled_files?: number; bytes?: number };
+  counts: {
+    files?: number; segments?: number; hours?: number; audio_files?: number; outputs?: number; left_out?: number; labelled_files?: number; bytes?: number;
+    /** Publish to Dataset Catalog: files uploaded to the store, whether a new version was made, and its parent. */
+    uploaded?: number; created?: boolean; parent?: number | null;
+  };
   label_types: string[] | null;
   audio_included: "all" | "partial" | "none" | null;
   file: string | null;
@@ -574,6 +624,9 @@ export interface ReferenceExport {
   bench_import_id: number | null;
   bench_dataset_id: number | null;
   bench_preview: Record<string, unknown>;
+  catalog_dataset_id: string | null;
+  /** The version's page in the Dataset Catalog UI (the dataset's page until it is published). */
+  catalog_url: string | null;
   error: string | null;
   job_id: number | null;
   created_at: string;

@@ -12,7 +12,7 @@ export function JobsPage() {
   const retry = useMutation({ mutationFn: (id: number) => api.post(`/jobs/${id}/retry`), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
   return (
     <>
-      <PageHeader crumbs="Concord Label" title="Jobs" subtitle="Ingests, pseudo-label runs and Send to Bench. One worker runs them in order; a pseudo-label run leases its models from the model catalog one stage at a time, and waits for compute when the catalog queues it." />
+      <PageHeader crumbs="Concord Label" title="Jobs" subtitle="Ingests, pseudo-label runs, publishes to the Dataset Catalog and sends to Bench. One worker runs them in order; a pseudo-label run leases its models from the Model Catalog one stage at a time, and waits for compute when the catalog queues it." />
       <div className="flex flex-col xl:flex-row gap-5 items-start">
         <Panel className="flex-1 w-full">
           {q.isLoading && <Spinner />}

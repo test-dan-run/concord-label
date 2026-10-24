@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, Outlet, useRouteError } from "react-rout
 import { Nav } from "./Nav";
 import { DatasetDetail } from "../features/datasets/DatasetDetail";
 import { DatasetsPage } from "../features/datasets/DatasetsPage";
+import { NewFromCatalog } from "../features/datasets/NewFromCatalog";
 import { UploadDataset } from "../features/datasets/UploadDataset";
 import { ModelsPage } from "../features/models/ModelsPage";
 import { DocsPage } from "../features/docs/DocsPage";
@@ -55,6 +56,7 @@ export const router = createBrowserRouter([
       { path: "label/sync", element: <SyncPage /> },
       { path: "datasets", element: <DatasetsPage /> },
       { path: "datasets/upload", element: <UploadDataset /> },
+      { path: "datasets/from-catalog", element: <NewFromCatalog /> },
       { path: "datasets/:id", element: <DatasetDetail /> },
       { path: "models", element: <ModelsPage /> },
       // Registering a model and its contract page moved to the model catalog's own UI.

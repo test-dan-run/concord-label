@@ -1,11 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, type Dataset } from "../../lib/api";
+import { useConfig } from "../../lib/config";
 import { ago, hours, num } from "../../lib/format";
 import * as I from "../../components/icons";
 import { Chip, Empty, ErrorNote, JobPill, LinkButton, PageHeader, Panel, Spinner } from "../../components/ui";
 
 export function DatasetsPage() {
+  const cfg = useConfig();
   const q = useQuery({
     queryKey: ["datasets"],
     queryFn: () => api.get<Dataset[]>("/datasets"),
@@ -18,9 +20,12 @@ export function DatasetsPage() {
         title="Datasets"
         subtitle="Every upload is its own dataset. No train/dev/test splits inside a dataset."
         actions={
-          <LinkButton to="/datasets/upload" variant="primary">
-            <I.Upload /> Upload dataset
-          </LinkButton>
+          <>
+            {cfg.data?.dataset_catalog.enabled && <LinkButton to="/datasets/from-catalog">New from Dataset Catalog</LinkButton>}
+            <LinkButton to="/datasets/upload" variant="primary">
+              <I.Upload /> Upload dataset
+            </LinkButton>
+          </>
         }
       />
       <Panel>

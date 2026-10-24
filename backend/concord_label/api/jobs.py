@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.db import get_session
-from ..core.models import Dataset, Job, JobStatus, Run
+from ..core.models import Dataset, Job, JobStatus, ReferenceExport, Run
 from ..runs import jobs
 from .datasets import job_brief
 
@@ -58,7 +58,13 @@ def job_label(session: Session, j: Job) -> str:
         return f"pseudo-label · {r.dataset.name}" if r else "pseudo-label"
     if j.type == "reference":
         d = session.get(Dataset, p.get("dataset_id"))
-        return f"send to Bench · {d.name}" if d else "send to Bench"
+        rec = session.get(ReferenceExport, p.get("export_id"))
+        what = "publish to Dataset Catalog" if rec is not None and rec.destination == "catalog" else "send to Bench"
+        return f"{what} · {d.name}" if d else what
+    if j.type == "catalog-dataset":
+        d = session.get(Dataset, p.get("dataset_id"))
+        what = f"new from Dataset Catalog · v{p.get('version')}"
+        return f"{what} · {d.name}" if d else what
     if j.type == "export":
         return f"offline kit · {', '.join(p.get('services') or [])} (moved to the model catalog)"
     return j.type

@@ -14,7 +14,7 @@ const STEPS: { n: number; to: string; title: string; text: string }[] = [
   { n: 2, to: "/label/pseudo", title: "Pseudo-label", text: "A group of models labels the audio and marks where the models disagree." },
   { n: 3, to: "/label/annotate", title: "Annotate", text: "You fix and confirm the text, the speakers and the timing." },
   { n: 4, to: "/label/live", title: "Evaluate", text: "You score the models against the segments you confirmed." },
-  { n: 5, to: "#bench", title: "Send to Bench", text: "You package the confirmed segments as a reference set." },
+  { n: 5, to: "#bench", title: "Publish", text: "You publish the confirmed segments as a version in the Dataset Catalog, or send them to Bench." },
 ];
 
 const STATUSES: { status: SegStatus; created?: boolean; text: string }[] = [
@@ -69,6 +69,11 @@ const SECTIONS: Section[] = [
         <p className="m-0">
           Uploads run in the background as jobs, and you can follow them on <Link to="/jobs">Jobs</Link>.
         </p>
+        <p className="m-0">
+          When the Dataset Catalog is set up, the audio you upload goes to the catalog's store, which Concord Bench reads too. <em>New from
+          Dataset Catalog</em> on Datasets makes a dataset from a version that someone published. Its references become confirmed segments, and
+          a version with audio only becomes a dataset that is ready to pseudo-label.
+        </p>
       </>
     ),
   },
@@ -79,7 +84,7 @@ const SECTIONS: Section[] = [
       <>
         <p className="m-0">
           To pseudo-label a dataset, you pick the dataset and the models to run. A diarisation model splits the audio into speaker turns, and
-          several ASR models transcribe each segment. The models come from the model catalog, and you can see them on{" "}
+          several ASR models transcribe each segment. The models come from the Model Catalog, and you can see them on{" "}
           <Link to="/models">Models</Link>.
         </p>
         <p className="m-0">
@@ -211,15 +216,26 @@ const SECTIONS: Section[] = [
   },
   {
     id: "bench",
-    title: "Sending references to Concord Bench",
+    title: "Publishing references",
     body: (
-      <p className="m-0">
-        On a dataset's page or on Live evaluation, <em>Send to Bench</em> packages the confirmed segments as a reference set for Concord Bench. The
-        package holds the speakers and the text in SegLST, JSONL or RTTM format, depending on what the segments contain, and it can also include
-        the audio and model outputs. Each package gets a new version number, so a later send doesn't overwrite an earlier one. The metadata
-        that came with a file's annotations, e.g., its condition or a NeMo manifest's speaker attributes, goes along as file labels, and
-        Bench breaks its scores down by them. Only metadata with the same value on every annotation of the file counts as the file's.
-      </p>
+      <>
+        <p className="m-0">
+          On a dataset's page or on Live evaluation, <em>Publish to Dataset Catalog</em> publishes the confirmed segments as a new version of
+          the dataset in the Dataset Catalog. Concord Bench imports versions from there. The first publish makes the dataset in the catalog,
+          and each later publish makes the next version. The history on the dataset's page links to each version in the catalog. If someone
+          published a newer version after the one your dataset is based on, the panel says who and when, and it asks before you publish anyway.
+        </p>
+        <p className="m-0">
+          Without the Dataset Catalog, the same panel is <em>Send to Bench</em>, which packages the confirmed segments as a reference set for
+          Concord Bench. The package can also include the audio and model outputs, and each send gets a new version number.
+        </p>
+        <p className="m-0">
+          Either way, the references hold the speakers and the text in SegLST, JSONL or RTTM format, depending on what the segments contain.
+          The metadata that came with a file's annotations, e.g., its condition or a NeMo manifest's speaker attributes, goes along as file
+          labels, and Bench breaks its scores down by them. Only metadata with the same value on every annotation of the file counts as the
+          file's.
+        </p>
+      </>
     ),
   },
   {

@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, qs, type FlagsImport, type Job, type ReferenceExport, type ReferencePreview } from "../../lib/api";
+import { useConfig } from "../../lib/config";
 import { ago, bytes, hours, num } from "../../lib/format";
 import { TagInput } from "../../components/TagInput";
 import * as I from "../../components/icons";
@@ -136,6 +137,7 @@ function SendResult({ r }: { r: ReferenceExport }) {
 }
 
 export function SendHistory({ datasetId }: { datasetId: number }) {
+  const catalog = useConfig().data?.dataset_catalog.enabled ?? false;
   const q = useQuery({
     queryKey: ["reference-exports", datasetId],
     queryFn: () => api.get<ReferenceExport[]>(`/datasets/${datasetId}/reference-exports`),
@@ -143,9 +145,12 @@ export function SendHistory({ datasetId }: { datasetId: number }) {
   });
   const rows = q.data ?? [];
   return (
-    <Panel title="Sent to Bench" subtitle="Each send is a new version of this dataset in Concord Bench.">
+    <Panel
+      title={catalog ? "Published versions" : "Sent to Bench"}
+      subtitle={catalog ? "Versions published to the Dataset Catalog, and any earlier sends to Concord Bench." : "Each send is a new version of this dataset in Concord Bench."}
+    >
       <ErrorNote error={q.error} />
-      {rows.length === 0 && <Empty>Nothing sent yet.</Empty>}
+      {rows.length === 0 && <Empty>{catalog ? "Nothing published yet." : "Nothing sent yet."}</Empty>}
       {rows.length > 0 && (
         <div className="overflow-x-auto scroll-thin">
           <table className="w-full border-collapse text-[13px]">
@@ -168,7 +173,19 @@ export function SendHistory({ datasetId }: { datasetId: number }) {
                   <td className="px-2 py-1.5 num text-right">{num(r.counts.files)}</td>
                   <td className="px-2 py-1.5 num text-right">{num(r.counts.segments)}</td>
                   <td className="px-2 py-1.5">
-                    {r.destination === "push" ? (
+                    {r.destination === "catalog" ? (
+                      <span>
+                        Dataset Catalog
+                        {r.catalog_url && (
+                          <span className="block text-xs">
+                            <a href={r.catalog_url} target="_blank" rel="noreferrer">
+                              {r.status === "done" ? `Open v${r.version}` : "Open the dataset"} ↗
+                            </a>
+                            {r.status === "done" && r.counts.created === false && <span className="text-muted"> · same as before</span>}
+                          </span>
+                        )}
+                      </span>
+                    ) : r.destination === "push" ? (
                       <span>
                         Bench{r.bench_import_id !== null && <span className="num"> · import #{r.bench_import_id}</span>}
                         {r.bench_url && <span className="block text-xs text-muted truncate max-w-[220px]"><a href={r.bench_url} target="_blank" rel="noreferrer">{r.bench_url}</a></span>}

@@ -5,7 +5,8 @@ import { api, type Dataset, type Run } from "../../lib/api";
 import { ago, clock, hours, num } from "../../lib/format";
 import { TagInput } from "../../components/TagInput";
 import { Button, Chip, Empty, ErrorNote, Fact, JobPill, LinkButton, PageHeader, Panel, Spinner, StatusDot } from "../../components/ui";
-import { ImportFlags, SendHistory, SendToBench } from "../label/SendToBench";
+import { PublishOrSend } from "../label/PublishToCatalog";
+import { ImportFlags, SendHistory } from "../label/SendToBench";
 
 interface FileRow {
   id: number;
@@ -88,6 +89,16 @@ export function DatasetDetail() {
                 <Fact k="Labels" v={d.label_types.length ? d.label_types.map((l) => (l === "asr" ? "ASR" : "Diarisation")).join(" + ") : "audio only"} />
                 <Fact k="Speaker-attributed text" v={rep.has_speaker_text ? "yes" : "no"} />
                 <Fact k="Language" v={d.language ?? "—"} />
+                {d.catalog_dataset_id && (
+                  <Fact
+                    k="Dataset Catalog"
+                    v={
+                      <a href={d.catalog_url ?? undefined} target="_blank" rel="noreferrer">
+                        {d.catalog_version ? `based on v${d.catalog_version}` : "not published yet"} ↗
+                      </a>
+                    }
+                  />
+                )}
                 <div className="flex flex-col gap-1.5 pt-1">
                   <span className="text-[11px] text-muted uppercase tracking-wider">Sample rates</span>
                   {Object.entries(rep.sample_rates).map(([sr, c]) => (
@@ -180,7 +191,7 @@ export function DatasetDetail() {
                 </>
               )}
             </Panel>
-            <SendToBench datasetId={d.id} />
+            <PublishOrSend datasetId={d.id} />
             <ImportFlags datasetId={d.id} />
           </aside>
         </div>
