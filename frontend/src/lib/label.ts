@@ -42,18 +42,18 @@ export function statusLabel(s: Pick<Segment, "status" | "created">): string {
 
 /** Annotate's keyboard shortcuts: `short` for the strip under the segment table, `does` for the Docs page. */
 export const SHORTCUTS: { key: string; short: string; does: string }[] = [
-  { key: "Space", short: "play / pause", does: "Play or pause the stretch selected on the waveform, else the selected segment" },
-  { key: "Tab", short: "next low-confidence or lexicon hint", does: "Next low-confidence segment or lexicon hint" },
-  { key: "Alt+Enter", short: "use house spelling", does: "Use the house spelling for the first hint in the segment" },
-  { key: "1–8", short: "assign speaker", does: "Assign a speaker to the selected segments" },
-  { key: "V", short: "split at playhead", does: "Split the segment at the playhead" },
-  { key: "M", short: "merge", does: "Merge the selected segments, or the segment with the next one" },
-  { key: "Enter", short: "confirm", does: "Confirm the selected segments" },
-  { key: "↑ ↓", short: "move", does: "Move between segments" },
-  { key: "= −", short: "zoom", does: "Zoom the timeline in or out around the playhead (or Ctrl + scroll at the pointer)" },
-  { key: "0", short: "whole file", does: "Show the whole file on the timeline" },
-  { key: "Esc", short: "clear selection", does: "Clear the selected rows and the waveform selection" },
-  { key: "Shift-click", short: "select range", does: "Select a range of segments" },
+  { key: "Space", short: "play / pause", does: "Plays or pauses the stretch selected on the waveform, or the selected segment when no stretch is selected." },
+  { key: "Tab", short: "next low-confidence or spelling hint", does: "Moves to the next low-confidence segment or spelling hint." },
+  { key: "Alt+Enter", short: "use house spelling", does: "Uses the house spelling for the first spelling hint in the selected segment." },
+  { key: "1 to 8", short: "assign speaker", does: "Gives the selected segments to that speaker." },
+  { key: "V", short: "split at playhead", does: "Splits the selected segment at the playhead." },
+  { key: "M", short: "merge", does: "Merges the selected segments, or merges the selected segment with the next one." },
+  { key: "Enter", short: "confirm", does: "Confirms the selected segments." },
+  { key: "↑ ↓", short: "move", does: "Moves the selection to the previous or next segment." },
+  { key: "= and -", short: "zoom", does: "Zooms the timeline in or out around the playhead, and Ctrl with the scroll wheel zooms at the pointer." },
+  { key: "0", short: "whole file", does: "Shows the whole file on the timeline." },
+  { key: "Esc", short: "clear selection", does: "Clears the selected rows and the waveform selection." },
+  { key: "Shift-click", short: "select range", does: "Selects a range of segments in the table." },
 ];
 
 /** Confidence colour (AeroAudio): >= high emerald, >= low amber, below rose, none slate. */

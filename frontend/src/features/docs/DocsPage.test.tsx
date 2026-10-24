@@ -30,6 +30,6 @@ describe("DocsPage", () => {
   it("says so when nothing matches", () => {
     page();
     act(() => { fireEvent.change(screen.getByLabelText("Search the docs"), { target: { value: "zebra" } }); });
-    expect(screen.getByText("No section mentions “zebra”.")).toBeTruthy();
+    expect(screen.getByText(`No section mentions "zebra".`)).toBeTruthy();
   });
 });
