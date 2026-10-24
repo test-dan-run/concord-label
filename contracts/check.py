@@ -1,4 +1,5 @@
-"""Check the contract samples, and compare this repository's contracts with the other app's (CONTRACTS.md).
+"""Check the contract samples, and compare this repository's contracts with the other app's (CONTRACTS.md, at
+the repository root or in Docs/).
 
     python contracts/check.py [--peer PATH]
 
@@ -169,16 +170,22 @@ def check_samples() -> list[str]:
             continue
         if f.name.startswith("config.") and body.get("contract_version") != CONTRACT_VERSION:
             problems.append(f"api/{f.name}: contract_version {body.get('contract_version')}")
-    text = (REPO / "CONTRACTS.md").read_text(encoding="utf-8")
+    text = contracts_doc(REPO).read_text(encoding="utf-8")
     if f"**Contract version {CONTRACT_VERSION}.**" not in text:
         problems.append(f"CONTRACTS.md does not say contract version {CONTRACT_VERSION}")
     return problems
 
 
+def contracts_doc(root: Path) -> Path:
+    """A repository's CONTRACTS.md: in Docs/ where the repository keeps its docs there, else at the root."""
+    docs = root / "Docs" / "CONTRACTS.md"
+    return docs if docs.is_file() else root / "CONTRACTS.md"
+
+
 def compare(peer: Path) -> list[str]:
     """Differences between this repository's CONTRACTS.md + contracts/ and the peer's."""
     problems = []
-    if not filecmp.cmp(REPO / "CONTRACTS.md", peer / "CONTRACTS.md", shallow=False):
+    if not filecmp.cmp(contracts_doc(REPO), contracts_doc(peer), shallow=False):
         problems.append("CONTRACTS.md differs")
     mine = {p.relative_to(REPO).as_posix() for p in (REPO / "contracts").rglob("*")
             if p.is_file() and "__pycache__" not in p.parts}
@@ -194,7 +201,7 @@ def compare(peer: Path) -> list[str]:
 def find_peer() -> Path | None:
     for name in ("Concord", "concord-label", "concord-bench"):
         cand = REPO.parent / name
-        if cand.resolve() != REPO and (cand / "CONTRACTS.md").is_file():
+        if cand.resolve() != REPO and contracts_doc(cand).is_file():
             return cand
     return None
 

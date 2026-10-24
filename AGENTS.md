@@ -1,9 +1,17 @@
 # Notes for coding agents
 
 Concord Label is a web app for labelling speech audio, with a FastAPI backend in `backend/concord_label`
-and a React frontend in `frontend/src`. Read [README.md](README.md) for how the app works, and read
-[HANDOFF.md](HANDOFF.md) for the behaviour the owner asked for. The design canvas that HANDOFF.md links
-shows every screen, and where the canvas and HANDOFF.md disagree, HANDOFF.md wins.
+and a React frontend in `frontend/src`. [README.md](README.md) describes the app's features for its
+users, and it leaves out the developer details that this file covers.
+
+The other docs are in `Docs/`, and code comments cite them by file name, e.g., "CONTRACTS.md §2":
+
+- [Docs/HANDOFF.md](Docs/HANDOFF.md) describes the behaviour the owner asked for. The design canvas it
+  links shows every screen, and where the canvas and HANDOFF.md disagree, HANDOFF.md wins.
+- [Docs/CONTRACTS.md](Docs/CONTRACTS.md) holds the formats and endpoints that Concord Label and Concord
+  Bench agree on.
+- [Docs/PLAN.md](Docs/PLAN.md) and [Docs/SPLIT_PLAN.md](Docs/SPLIT_PLAN.md) are the original build plans,
+  kept for history.
 
 ## Commands
 
@@ -29,11 +37,12 @@ tests, and look at the page in a browser, because several bugs in Annotate only 
   next `label_000N` id (`db.next_revision_id()`). Update the pinned revision ids in
   `tests/test_db_owner.py`, and `tests/test_migrations.py` checks that the head schema matches the ORM
   models.
-- `CONTRACTS.md` and `contracts/` must stay identical to the copies in the Concord Bench repository.
+- `Docs/CONTRACTS.md` and `contracts/` must stay identical to the copies in the Concord Bench repository.
+  `contracts/check.py` finds the contracts doc in `Docs/` or at the repository root, in either app.
   When you change them, the same change has to land in Bench.
-- Some modules are copies of Concord Bench's code, and README.md lists them under "Code copied from
-  Concord Bench". When you fix one of them, note the fix for Bench, and keep the adapters' params
-  identical in both apps.
+- Some modules are copies of Concord Bench's code, listed under "Code shared with Concord Bench" below.
+  When you fix one of them, note the fix for Bench, and keep the adapters' params identical in both
+  apps.
 - The lexicon matcher exists twice, as `backend/concord_label/label/lexicon.py` and
   `frontend/src/lib/lexicon.ts`. Change both together, and keep `tests/test_lexicons.py` and
   `frontend/src/lib/lexicon.test.ts` on the same cases.
@@ -44,6 +53,34 @@ tests, and look at the page in a browser, because several bugs in Annotate only 
   the zoom maths in `zoom.ts`, and all three are Label's own.
 - Offline kits now belong to the platform's model catalog, so don't add offline export back to Label.
 - Match the style of the code around your change, including how many comments it has.
+
+## Code shared with Concord Bench
+
+Concord Label and Concord Bench started from the same code, and each app keeps its own copy of these
+modules:
+
+- Backend: `core/`, `datasets/`, `platform/`, `adapters/`, `runs/cache.py`, `runs/jobs.py`,
+  `runs/worker.py`, `cuts.py` (`prepare_cuts` and `usable_files`), and `metrics/` (`wer`, `der`,
+  `normalisers` and `vad`).
+- Frontend: `components/` (`AudioPlayer`, `Timeline`, `timelineMath`, `TagInput`, `icons` and `ui`),
+  `lib/`, and the Models, Jobs and Upload pages.
+
+The adapters' params must stay identical in both apps, because the model catalog's output index matches
+outputs across the apps on the build key, the audio, the span and the params hash
+(`aicore.catalog.params_hash`).
+
+Bench's copies don't have these recent Label changes yet:
+
+- `AudioPlayer`: `useAudio` takes the `<audio>` element through a callback ref, so its play and pause
+  listeners attach even when the element renders after the page loads its data.
+- `Timeline`: the optional `selection` and `onSelection` props, and the exported `LABEL_W`.
+- Models page: the groups by capability.
+- `contracts/check.py`: it finds the contracts doc in `Docs/` as well as at the repository root. Until
+  Bench copies the new file, `just check-contracts` reports that `contracts/check.py` differs.
+
+Bench also owns `fixtures/generated` and `fixtures/recorded`. When Bench makes them again (`just fixtures`
+and `just record`), copy both folders into this repository. `just e2e-handoff` tests the round trip
+between the two apps, with both Docker images on one network.
 
 ## Writing style for docs
 
@@ -63,8 +100,7 @@ changed and why. Commit one feature at a time where the files allow it.
 These changes came from the updated design canvas and from requests that followed it:
 
 - Offline kits moved to the model catalog. Migration 0005 dropped the `offline_export` table, and
-  `CONTRACTS.md` §6 and `contracts/samples/kit` were removed. `just check-contracts` reports a
-  difference until Concord Bench removes them too.
+  `CONTRACTS.md` §6 and `contracts/samples/kit` were removed here and in Concord Bench.
 - Annotate gained several timeline features:
   - You can edit segments on the speaker lanes (move, trim, draw, and add speakers up to 8).
   - You can zoom the timeline down to a one-second window, with an overview strip for panning.
@@ -76,4 +112,7 @@ These changes came from the updated design canvas and from requests that followe
   the tables from migration 0006, and they travel in label packages as `lexicons.json`.
 - A Docs page sits under Help in the sidebar, and the Models page groups the models into ASR, VAD and
   diarisation, and speech enhancement.
-- The Docs page and README.md were rewritten in the plain style above.
+- The Docs page and README.md were rewritten in the plain style above, and README.md now covers only the
+  app's features and its known limitations.
+- CONTRACTS.md, HANDOFF.md, PLAN.md and SPLIT_PLAN.md moved into `Docs/`. AGENTS.md stays at the
+  repository root, where agent tools look for it.
