@@ -5,7 +5,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 // annotated fixture set ("Synth fixtures") and an audio-only copy of its audio ("Unlabelled calls"), and
 // pseudo-labels the copy with pyannote -> both Whispers. Console errors fail the test.
 // With the Dataset Catalog set up (a FakeDatasetCatalog, unless E2E_DATASET_CATALOG=0), the dataset pages publish to
-// it instead of sending to Bench, and the catalog also holds "Raw calls" (v1 audio only, made into a Label dataset,
+// it; without it they build reference packages to download. The catalog also holds "Raw calls" (v1 audio only, made into a Label dataset,
 // then v2 from Concord Bench). The tests of the path that isn't set up are skipped.
 
 async function catalogOn(request: APIRequestContext): Promise<boolean> {
@@ -328,7 +328,7 @@ test("lexicons: publish house spellings, then use or keep them in Annotate", asy
   expect(errors).toEqual([]);
 });
 
-test("live evaluation loads standings and DER; Send to Bench or Publish, no locked score without Bench", async ({ page, request }) => {
+test("live evaluation loads standings and DER; Publish or Download, no locked score without Bench", async ({ page, request }) => {
   const errors = watchErrors(page);
   const catalog = await catalogOn(request);
   await page.goto("/label/live");
@@ -337,15 +337,11 @@ test("live evaluation loads standings and DER; Send to Bench or Publish, no lock
   await expect(page.getByRole("heading", { name: "WER vs confirmed segments" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Standings" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Diarisation (DER)" })).toBeVisible();
-  // Send to Bench replaces Promote; without BENCH_URL the package is a download and the locked score is hidden
+  // Publish to Dataset Catalog replaces Promote and Send to Bench; without the catalog the panel builds a package to
+  // download. Without BENCH_URL the locked score is hidden.
   await expect(page.getByRole("heading", { name: "Promote to benchmark dataset" })).toHaveCount(0);
-  if (catalog) {
-    await expect(page.getByRole("heading", { name: "Publish to Dataset Catalog" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Send to Bench" })).toHaveCount(0);
-  } else {
-    await expect(page.getByRole("heading", { name: "Send to Bench" })).toBeVisible();
-    await expect(page.getByText("Download (zip)")).toBeVisible();
-  }
+  await expect(page.getByRole("heading", { name: "Send to Bench" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: catalog ? "Publish to Dataset Catalog" : "Download references" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Locked" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Use for retraining" })).toHaveCount(0);
   expect(errors).toEqual([]);
@@ -374,18 +370,17 @@ test("import / export: build a package, import it back, see the merge plan", asy
   expect(errors).toEqual([]);
 });
 
-test("send to Bench without Bench: download a reference package, listed in the history", async ({ page, request }) => {
+test("without the Dataset Catalog: download a reference package, listed in the history", async ({ page, request }) => {
   test.skip(await catalogOn(request), "the Dataset Catalog is set up, so the panel publishes there");
   const errors = watchErrors(page);
   await page.goto("/datasets");
   await page.getByRole("link", { name: "Synth fixtures" }).click();
-  const panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "Send to Bench" }) });
+  const panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "Download references" }) });
   await expect(panel.getByLabel("Package name")).toHaveValue("Synth fixtures");
-  await expect(panel.getByText("Download (zip)")).toBeVisible();
   await expect(panel.getByText("speaker + text (SegLST)")).toBeVisible();
   await expect(panel.getByText("condition", { exact: true })).toBeVisible(); // file labels for Bench (CONTRACTS.md §2.7)
   await panel.getByLabel("Package name").fill("Synth refs");
-  await panel.getByRole("button", { name: "Send to Bench" }).click();
+  await panel.getByRole("button", { name: "Build package" }).click();
   const link = panel.getByRole("link", { name: /^Download synth-refs-refs-v\d+\.zip/ });
   await expect(link).toBeVisible({ timeout: 30_000 });
   const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
@@ -393,7 +388,7 @@ test("send to Bench without Bench: download a reference package, listed in the h
   const file = await download.path();
   expect(fs.statSync(file!).size).toBeGreaterThan(1000);
   expect(fs.readFileSync(file!).subarray(0, 2).toString()).toBe("PK");
-  const history = page.locator("section").filter({ has: page.getByRole("heading", { name: "Sent to Bench" }) });
+  const history = page.locator("section").filter({ has: page.getByRole("heading", { name: "Reference packages" }) });
   await expect(history.getByRole("row", { name: /v\d+ complete .*download done/ }).first()).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -454,19 +449,26 @@ test("publish asks first when someone published a newer version", async ({ page,
 
 test("open in Label by sha256: the annotator opens on the file at t", async ({ page, request }) => {
   const errors = watchErrors(page);
-  const datasets = (await (await request.get("/api/datasets")).json()) as { id: number; uid: string; name: string }[];
+  const datasets = (await (await request.get("/api/datasets")).json()) as { id: number; name: string; catalog_dataset_id: string | null }[];
   const ds = datasets.find((d) => d.name === "Synth fixtures")!;
   const files = (await (await request.get(`/api/datasets/${ds.id}/files`)).json()) as { id: number; sha256: string; status: string; stem: string }[];
   const f = files.find((x) => x.status === "ok")!;
-  const view = (await (await request.get(`/api/label/files/${f.id}`)).json()) as { segments: { start: number; end: number; text: string | null }[] };
+  // Bench and the Dataset Catalog UI link with the catalog dataset id (published above when the catalog is set up)
+  const q = ds.catalog_dataset_id ? `catalog_dataset_id=${ds.catalog_dataset_id}&` : "";
+  const hit = (await (await request.get(`/api/files/by-sha/${f.sha256}?${q}`)).json()) as { file_id: number; dataset_id: number };
+  const view = (await (await request.get(`/api/label/files/${hit.file_id}`)).json()) as { segments: { start: number; end: number; text: string | null }[] };
   const seg = view.segments[1];
   const t = Math.round(((seg.start + seg.end) / 2) * 100) / 100;
-  await page.goto(`/label/file/by-sha/${f.sha256}?dataset_uid=${ds.uid}&t=${t}`);
-  await expect(page).toHaveURL(new RegExp(`/label/annotate/${ds.id}\\?file=${f.id}&t=`));
+  await page.goto(`/label/file/by-sha/${f.sha256}?${q}t=${t}`);
+  await expect(page).toHaveURL(new RegExp(`/label/annotate/${hit.dataset_id}\\?file=${hit.file_id}&t=`));
   await expect(page.getByRole("heading", { name: f.stem, exact: true })).toBeVisible();
   await expect(page.locator('tbody tr[aria-current="true"]').getByLabel(/^Transcript at /)).toHaveValue(seg.text ?? "");
   // an unknown fingerprint says so
-  await page.goto(`/label/file/by-sha/${"0".repeat(64)}?dataset_uid=${ds.uid}`);
+  await page.goto(`/label/file/by-sha/${"0".repeat(64)}`);
   await expect(page.getByText(/This audio is not in Concord Label/)).toBeVisible();
+  // a catalog dataset no Label dataset was made from points at New from Dataset Catalog
+  await page.goto(`/label/file/by-sha/${f.sha256}?catalog_dataset_id=${"f".repeat(32)}`);
+  await expect(page.getByText(/in a dataset made from that Dataset Catalog dataset/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "New from Dataset Catalog" })).toBeVisible();
   expect(errors.filter((e) => !e.includes("404"))).toEqual([]);
 });

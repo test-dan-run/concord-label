@@ -8,9 +8,10 @@
   percentile bootstrap over segments (corpus WER of each resample).
 - DER uses only fully reviewed files (every segment reviewed), so missing labels never count as misses.
 - The locked benchmark score comes from Concord Bench (SPLIT_PLAN.md §5.3, CONTRACTS.md §4): one request
-  per page load, for the newest version Bench holds of this dataset, matched to models by catalog model id
-  (the platform service name, the same in both apps).
-  Without a reachable Bench (or with no package of this dataset there) it is None and the page hides it.
+  per page load, for the newest version Bench holds of this dataset's Dataset Catalog dataset, matched to models
+  by catalog model id (the platform service name, the same in both apps).
+  Without a reachable Bench, or for a dataset that has no catalog dataset or no version in Bench, it is None
+  and the page hides it.
   A model with a locked score but no outputs here for the confirmed segments (a dataset uploaded with its
   references) is listed with the locked score alone.
 """
@@ -55,10 +56,12 @@ def _confirmed(session: Session, files: list[AudioFile]) -> list[Segment]:
 
 
 def _locked(ds: Dataset, nkey: str) -> dict[str, dict[str, Any]]:
-    """Each model's locked benchmark score in Concord Bench, by catalog model id ({} without Bench)."""
-    from .sync import install_id
-
-    return peer.locked_scores(ds.uid, install_id(), nkey) or {}
+    """Each model's locked benchmark score in Concord Bench, by catalog model id: Bench finds the dataset by its
+    Dataset Catalog id (DATASET_CATALOG_PLAN.md §8.4). {} without Bench, or for a dataset never published to
+    the catalog or made from it."""
+    if not ds.catalog_dataset_id:
+        return {}
+    return peer.locked_scores(ds.catalog_dataset_id, nkey) or {}
 
 
 def asr_standings(session: Session, ds: Dataset, files: list[AudioFile], normaliser: str | None) -> dict[str, Any]:

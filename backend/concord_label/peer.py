@@ -1,9 +1,10 @@
 """Concord Bench, the peer app (SPLIT_PLAN.md §5, CONTRACTS.md §1 and §4).
 
 Everything Label asks of Bench goes through here: whether it answers (`status`, cached for
-`STATUS_TTL_S` so pages never wait on it twice), the endpoints a push uses, and the locked scores the
-live evaluation shows. Label calls Bench only when `BENCH_URL` is set, Bench answers `/api/config` as
-`concord-bench`, and its contract version is ours (`usable`).
+`STATUS_TTL_S` so pages never wait on it twice), and the locked scores the live evaluation shows. Label
+calls Bench only when `BENCH_URL` is set, Bench answers `/api/config` as `concord-bench`, and its contract
+version is ours (`usable`). Datasets reach Bench through the Dataset Catalog (contract version 3), so Label
+pushes nothing to Bench.
 
 Tests swap the HTTP transport with `use_transport` (an `httpx.MockTransport` or an ASGI app).
 """
@@ -21,7 +22,6 @@ from .core.settings import CONTRACT_VERSION, get_settings
 STATUS_TIMEOUT_S = 1.0
 STATUS_TTL_S = 30.0
 SCORES_TIMEOUT_S = 2.0
-PUSH_TIMEOUT_S = 120.0
 
 _transport: httpx.BaseTransport | None = None
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -124,15 +124,14 @@ def detail(r: httpx.Response) -> str:
 
 # ---------------------------------------------------------------- locked scores (CONTRACTS.md §4)
 
-def locked_scores(dataset_uid: str, install_id: str, normaliser: str) -> dict[str, dict[str, Any]] | None:
-    """Bench's latest score per model (by catalog model id) on the newest version of this dataset, or None
-    when Bench is not linked, has no dataset from this source (404), or does not answer in time."""
+def locked_scores(catalog_dataset_id: str, normaliser: str) -> dict[str, dict[str, Any]] | None:
+    """Bench's latest score per model (by catalog model id) on the newest version Bench has of this Dataset
+    Catalog dataset, or None when Bench is not linked, has no version of it (404), or does not answer in time."""
     if not usable():
         return None
     try:
         with client(SCORES_TIMEOUT_S) as c:
-            r = c.get(f"/api/datasets/by-source/{dataset_uid}/scores",
-                      params={"install_id": install_id, "normaliser": normaliser})
+            r = c.get(f"/api/datasets/by-catalog/{catalog_dataset_id}/scores", params={"normaliser": normaliser})
     except httpx.HTTPError:
         mark_unreachable()
         return None
@@ -146,7 +145,7 @@ def locked_scores(dataset_uid: str, install_id: str, normaliser: str) -> dict[st
             out[s["model"]] = {"wer": s.get("wer"), "run_id": s.get("run_id"), "score_id": s.get("score_id"),
                                "normaliser": s.get("normaliser"), "created_at": s.get("created_at"),
                                "dataset": ds.get("name"), "dataset_id": ds.get("id"),
-                               "export_version": ds.get("export_version")}
+                               "catalog_version": ds.get("catalog_version")}
         return out
     except (ValueError, AttributeError, KeyError, TypeError):
         return None

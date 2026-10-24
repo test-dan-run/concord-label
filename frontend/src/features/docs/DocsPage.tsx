@@ -14,7 +14,7 @@ const STEPS: { n: number; to: string; title: string; text: string }[] = [
   { n: 2, to: "/label/pseudo", title: "Pseudo-label", text: "A group of models labels the audio and marks where the models disagree." },
   { n: 3, to: "/label/annotate", title: "Annotate", text: "You fix and confirm the text, the speakers and the timing." },
   { n: 4, to: "/label/live", title: "Evaluate", text: "You score the models against the segments you confirmed." },
-  { n: 5, to: "#bench", title: "Publish", text: "You publish the confirmed segments as a version in the Dataset Catalog, or send them to Bench." },
+  { n: 5, to: "#bench", title: "Publish", text: "You publish the confirmed segments as a version in the Dataset Catalog, where Bench imports them." },
 ];
 
 const STATUSES: { status: SegStatus; created?: boolean; text: string }[] = [
@@ -22,7 +22,7 @@ const STATUSES: { status: SegStatus; created?: boolean; text: string }[] = [
   { status: "auto", text: "The models agree on the segment, but nobody has confirmed it yet." },
   { status: "pseudo", created: true, text: "Someone drew the segment by hand on a speaker lane, and it needs a transcript." },
   { status: "rejected", text: "The segment isn't speech or isn't usable, so it's left out of scoring and packages." },
-  { status: "confirmed", text: "A person checked the segment, so it's used for evaluation and sent to Bench." },
+  { status: "confirmed", text: "A person checked the segment, so it's used for evaluation and published as a reference." },
 ];
 
 const kbd = "num text-[11px] border border-line rounded px-1 text-fg bg-track";
@@ -226,8 +226,10 @@ const SECTIONS: Section[] = [
           published a newer version after the one your dataset is based on, the panel says who and when, and it asks before you publish anyway.
         </p>
         <p className="m-0">
-          Without the Dataset Catalog, the same panel is <em>Send to Bench</em>, which packages the confirmed segments as a reference set for
-          Concord Bench. The package can also include the audio and model outputs, and each send gets a new version number.
+          Without the Dataset Catalog, the same panel is <em>Download references</em>, which builds the confirmed segments into a reference
+          package zip. The package can also include the audio and model outputs, and each package gets a new version number. Label no longer
+          sends datasets to Bench directly, so set up the Dataset Catalog to get them there. Scores and flags from Bench come back only for a
+          dataset you published to the catalog or made from it.
         </p>
         <p className="m-0">
           Either way, the references hold the speakers and the text in SegLST, JSONL or RTTM format, depending on what the segments contain.
@@ -287,7 +289,7 @@ export function DocsPage() {
       <PageHeader
         crumbs="Help"
         title="Docs"
-        subtitle="How to go from raw audio to reviewed references that you can score and send to Concord Bench."
+        subtitle="How to go from raw audio to reviewed references that you can score and publish for Concord Bench."
         actions={
           <label className="relative flex items-center">
             <span className="absolute left-2.5 text-subtle"><I.Search size={14} /></span>

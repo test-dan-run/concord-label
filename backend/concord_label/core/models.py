@@ -307,10 +307,10 @@ class SyncPackage(Base):
 
 
 class ReferenceExport(Base):
-    """One reference package sent to Concord Bench, pushed or downloaded (SPLIT_PLAN.md §4.2,
-    CONTRACTS.md §2), or one version published to the Dataset Catalog (destination `catalog`,
-    DATASET_CATALOG_PLAN.md §8.2). `version` is the package's `export_version`, given when the package is
-    written; for a publish it is the catalog's version number."""
+    """One reference package built for download (SPLIT_PLAN.md §4.2, CONTRACTS.md §2), or one version published to
+    the Dataset Catalog (destination `catalog`, DATASET_CATALOG_PLAN.md §8.2). Rows with destination `push` are
+    sends to Concord Bench from before contract version 3, kept for the history. `version` is the package's
+    `export_version`, given when the package is written; for a publish it is the catalog's version number."""
 
     __tablename__ = "reference_export"
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -1,5 +1,5 @@
 // Publish to Dataset Catalog (DATASET_CATALOG_PLAN.md §8.2): a dataset's confirmed segments as a new version in the
-// Dataset Catalog, which replaces Send to Bench when the catalog is set up (DATASET_STORE). The audio is in the
+// Dataset Catalog, which replaced Send to Bench (contract version 3; set up with DATASET_STORE). The audio is in the
 // catalog's store already, and model outputs are in the Model Catalog's output index, so there is nothing to choose
 // about either. When someone published after the version this dataset is based on, the panel asks first.
 
@@ -11,7 +11,7 @@ import { ago, hours, num } from "../../lib/format";
 import { TagInput } from "../../components/TagInput";
 import * as I from "../../components/icons";
 import { Button, ErrorNote, Fact, JobPill, Panel, Select } from "../../components/ui";
-import { SendToBench, useReferenceExport } from "./SendToBench";
+import { DownloadPackage, useReferenceExport } from "./ReferencePackages";
 
 const SCOPE_LABELS = { complete: "Fully reviewed files (ASR + DER)", any: "Any file with confirmed segments (ASR only)" };
 const REFS_LABELS: Record<string, string> = {
@@ -20,11 +20,11 @@ const REFS_LABELS: Record<string, string> = {
   "refs.rttm": "speakers (RTTM)",
 };
 
-/** Publish to Dataset Catalog when the catalog is set up, else Send to Bench. */
-export function PublishOrSend({ datasetId, className }: { datasetId: number; className?: string }) {
+/** Publish to Dataset Catalog when the catalog is set up, else a reference package to download. */
+export function PublishOrDownload({ datasetId, className }: { datasetId: number; className?: string }) {
   const cfg = useConfig();
   if (!cfg.data) return null;
-  return cfg.data.dataset_catalog.enabled ? <PublishToCatalog datasetId={datasetId} className={className} /> : <SendToBench datasetId={datasetId} className={className} />;
+  return cfg.data.dataset_catalog.enabled ? <PublishToCatalog datasetId={datasetId} className={className} /> : <DownloadPackage datasetId={datasetId} className={className} />;
 }
 
 function when(iso: string | null | undefined): string {

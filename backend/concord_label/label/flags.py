@@ -1,10 +1,12 @@
 """Flags back from Concord Bench (CONTRACTS.md §3, SPLIT_PLAN.md §4.5).
 
-Bench's "Flag reference as wrong" comes back as a flags file. The dataset is the one whose uid is the
-file's `source.dataset_uid`, and only when `source.install_id` is this install's. Each flag is matched
-by segment uid, else by audio sha256 and time overlap (IoU >= 0.5) within the dataset. Matched segments
-get `flagged` and the note, and show in the annotator's flags lane. A flag is not a review: the segment's
-status and `edited_at` stay as they are.
+Bench's "Flag reference as wrong" comes back as a flags file. Format version 2 (contract version 3) names the
+Dataset Catalog dataset, and the working dataset is the Label dataset with that `catalog_dataset_id`
+(`working_dataset`). Format version 1, from before the catalog, named the dataset by its uid in
+`source.dataset_uid`, and only when `source.install_id` is this install's. Each flag is matched by segment
+uid, else by audio sha256 and time overlap (IoU >= 0.5) within the dataset. Matched segments get `flagged`
+and the note, and show in the annotator's flags lane. A flag is not a review: the segment's status and
+`edited_at` stay as they are.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from ..core.models import AudioFile, Dataset, Segment, SegmentStatus
 from .sync import install_id
 
 FORMAT = "concord-flags"
-FORMAT_VERSION = 1
+FORMAT_VERSIONS = (1, 2)
 IOU_MATCH = 0.5
 
 
@@ -36,7 +38,24 @@ def _iou(a0: float, a1: float, b0: float, b1: float) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def find_dataset(session: Session, source: dict[str, Any]) -> Dataset:
+def working_dataset(session: Session, catalog_dataset_id: str) -> Dataset | None:
+    """The Label dataset that works on this Dataset Catalog dataset (made from one of its versions or published
+    to it): the one based on the highest version, then the newest (CONTRACTS.md §3). Failed ones don't count."""
+    return session.scalars(select(Dataset).where(Dataset.catalog_dataset_id == catalog_dataset_id,
+                                                 Dataset.status != "failed")
+                           .order_by(Dataset.catalog_version.desc().nulls_last(), Dataset.id.desc())).first()
+
+
+def find_dataset(session: Session, body: dict[str, Any]) -> Dataset:
+    if body.get("format_version") == 2:
+        cid = body.get("catalog_dataset_id")
+        ds = working_dataset(session, cid) if isinstance(cid, str) and cid else None
+        if ds is None:
+            name = body.get("dataset_name")
+            raise UnknownSource(f"no dataset here was made from or published to the Dataset Catalog dataset {cid!r}"
+                                + (f" ({name!r})" if name else ""))
+        return ds
+    source = body.get("source") or {}
     uid, inst = source.get("dataset_uid"), source.get("install_id")
     if inst and inst != install_id():
         raise UnknownSource(f"these flags are for install {inst}; this Concord Label is install {install_id()}")
@@ -52,13 +71,13 @@ def import_flags(session: Session, body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict) or body.get("format") != FORMAT:
         raise FlagsError(f"not a flags file (format {body.get('format') if isinstance(body, dict) else None!r}; "
                          f"expected {FORMAT!r})")
-    if body.get("format_version") != FORMAT_VERSION:
+    if body.get("format_version") not in FORMAT_VERSIONS:
         raise FlagsError(f"flags format version {body.get('format_version')!r} is not known here "
-                         f"(known: {FORMAT_VERSION})")
+                         f"(known: {', '.join(map(str, FORMAT_VERSIONS))})")
     flags = body.get("flags")
     if not isinstance(flags, list):
         raise FlagsError("flags must be a list")
-    ds = find_dataset(session, body.get("source") or {})
+    ds = find_dataset(session, body)
     files = list(session.scalars(select(AudioFile).where(AudioFile.dataset_id == ds.id)))
     by_sha: dict[str, list[AudioFile]] = {}
     for f in files:

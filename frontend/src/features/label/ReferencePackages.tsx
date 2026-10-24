@@ -1,6 +1,7 @@
-// Send to Bench (SPLIT_PLAN.md §4.2, CONTRACTS.md §2): a dataset's confirmed segments as a reference package,
-// pushed to Concord Bench when BENCH_URL answers with our contract version, else built as a zip to download.
-// Also the history of sends and the import of a flags file from Bench (CONTRACTS.md §3, offline case).
+// Reference packages (CONTRACTS.md §2): a dataset's confirmed segments as a zip to download, which is what the
+// dataset panel offers when the Dataset Catalog is not set up. Contract version 3 removed "Send to Bench": datasets
+// reach Concord Bench through the Dataset Catalog (PublishToCatalog.tsx). Also the history of packages, publishes
+// and earlier sends, and the import of a flags file from Bench (CONTRACTS.md §3, offline case).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -28,7 +29,7 @@ export function useReferenceExport(id: number | null) {
   });
 }
 
-export function SendToBench({ datasetId, className }: { datasetId: number; className?: string }) {
+export function DownloadPackage({ datasetId, className }: { datasetId: number; className?: string }) {
   const qc = useQueryClient();
   const [scope, setScope] = useState<"complete" | "any">("complete");
   const [name, setName] = useState<string | null>(null);
@@ -67,10 +68,13 @@ export function SendToBench({ datasetId, className }: { datasetId: number; class
       void qc.invalidateQueries({ queryKey: ["reference-preview", datasetId] });
     }
   }, [finished, qc, datasetId]);
-  const push = p?.destination === "push";
   const busy = go.isPending || (rec.data !== undefined && !finished);
   return (
-    <Panel title="Send to Bench" subtitle="Confirmed segments only, as a reference package for Concord Bench." className={className}>
+    <Panel
+      title="Download references"
+      subtitle="Confirmed segments only, as a reference package (zip). To send a dataset to Concord Bench, set up the Dataset Catalog and publish it there."
+      className={className}
+    >
       <label className="flex flex-col gap-1 text-xs text-muted">
         Package name
         <input value={name ?? ""} onChange={(e) => setName(e.target.value)} className="bg-canvas border border-line rounded px-2 min-h-9 text-fg text-[13px]" />
@@ -81,13 +85,12 @@ export function SendToBench({ datasetId, className }: { datasetId: number; class
       </Select>
       <TagInput value={tags ?? []} onChange={setTags} />
       <Select label="Include audio" value={audio} onChange={(e) => setAudio(e.target.value)}>
-        <option value="auto">{push ? "Auto: only files Bench does not have" : "Auto: all files (download)"}</option>
-        <option value="always">Always: every file</option>
-        <option value="never">Never: Bench must already have every file</option>
+        <option value="auto">Every file</option>
+        <option value="never">None: the receiver must already have the audio</option>
       </Select>
       <label className="flex items-center gap-2 text-[13px]">
         <input type="checkbox" checked={outputs} onChange={(e) => setOutputs(e.target.checked)} />
-        Include model outputs (the segmenter's, so Bench need not run it again)
+        Include model outputs (the segmenter's, so the receiver need not run it again)
       </label>
       <ErrorNote error={pv.error} />
       {p && (
@@ -97,36 +100,25 @@ export function SendToBench({ datasetId, className }: { datasetId: number; class
           <Fact k="References" v={p.refs_file ? REFS_LABELS[p.refs_file] ?? p.refs_file : "—"} />
           <Fact k="Labels for slicing" v={p.labels.length ? p.labels.join(", ") : "none (no file metadata)"} />
           <Fact k="Version" v={`v${p.next_version}`} />
-          <Fact
-            k="Destination"
-            v={push ? <span title={p.peer.url ?? ""}>Push to Concord Bench at {p.peer.url}</span> : <span>Download (zip)</span>}
-          />
-          {!push && p.peer.url && <span className="text-xs text-warn">{p.push_refused}; the package is built for download.</span>}
           {p.problem && <span className="text-xs text-warn">{p.problem}</span>}
         </div>
       )}
       <ErrorNote error={go.error} />
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary" disabled={!p || !!p.problem || !(name ?? "").trim() || busy} onClick={() => go.mutate()}>
-          {push ? <I.Upload size={14} /> : <I.Download size={14} />} Send to Bench
+          <I.Download size={14} /> Build package
         </Button>
         {rec.data && !finished && <JobPill status={rec.data.status} />}
       </div>
-      {rec.data && finished && <SendResult r={rec.data} />}
+      {rec.data && finished && <PackageResult r={rec.data} />}
     </Panel>
   );
 }
 
-function SendResult({ r }: { r: ReferenceExport }) {
-  if (r.status === "failed") return <ErrorNote error={`Send to Bench failed: ${r.error}`} />;
+function PackageResult({ r }: { r: ReferenceExport }) {
+  if (r.status === "failed") return <ErrorNote error={`The package failed: ${r.error}`} />;
   return (
     <div className="flex flex-col gap-1 text-[13px]">
-      {r.destination === "push" && (
-        <span>
-          Staged in Concord Bench as reference import <span className="num">#{r.bench_import_id}</span>: accept it there
-          {r.bench_url && <> (<a href={r.bench_url} target="_blank" rel="noreferrer">{r.bench_url}</a>)</>}.
-        </span>
-      )}
       {r.download && (
         <a href={r.download} download>
           Download {r.file} <span className="num text-muted">({bytes(Number(r.counts.bytes ?? 0))}, {num(r.counts.files)} files, {num(r.counts.segments)} segments)</span>
@@ -136,7 +128,7 @@ function SendResult({ r }: { r: ReferenceExport }) {
   );
 }
 
-export function SendHistory({ datasetId }: { datasetId: number }) {
+export function PackageHistory({ datasetId }: { datasetId: number }) {
   const catalog = useConfig().data?.dataset_catalog.enabled ?? false;
   const q = useQuery({
     queryKey: ["reference-exports", datasetId],
@@ -146,11 +138,15 @@ export function SendHistory({ datasetId }: { datasetId: number }) {
   const rows = q.data ?? [];
   return (
     <Panel
-      title={catalog ? "Published versions" : "Sent to Bench"}
-      subtitle={catalog ? "Versions published to the Dataset Catalog, and any earlier sends to Concord Bench." : "Each send is a new version of this dataset in Concord Bench."}
+      title={catalog ? "Published versions" : "Reference packages"}
+      subtitle={
+        catalog
+          ? "Versions published to the Dataset Catalog, packages built for download, and any earlier sends to Concord Bench."
+          : "Packages built for download, and any earlier sends to Concord Bench."
+      }
     >
       <ErrorNote error={q.error} />
-      {rows.length === 0 && <Empty>{catalog ? "Nothing published yet." : "Nothing sent yet."}</Empty>}
+      {rows.length === 0 && <Empty>{catalog ? "Nothing published yet." : "No packages yet."}</Empty>}
       {rows.length > 0 && (
         <div className="overflow-x-auto scroll-thin">
           <table className="w-full border-collapse text-[13px]">

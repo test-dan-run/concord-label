@@ -7,7 +7,7 @@ import { useNormaliser, useNormalisers } from "../../lib/config";
 import { ago, clock, deltaPts, num, pct } from "../../lib/format";
 import { Empty, ErrorNote, Fact, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 import { Crumbs, DatasetChooser, LabelTabs } from "./common";
-import { PublishOrSend } from "./PublishToCatalog";
+import { PublishOrDownload } from "./PublishToCatalog";
 
 export function LiveEvalPage() {
   const { datasetId } = useParams();
@@ -83,7 +83,7 @@ function Live({ datasetId }: { datasetId: number }) {
             <Panel title="Keyword spotting">
               <span className="text-[13px] text-muted">Not built yet (Q6). Package files keep an empty keywords.jsonl so progress stays forward-compatible.</span>
             </Panel>
-            <PublishOrSend datasetId={datasetId} />
+            <PublishOrDownload datasetId={datasetId} />
           </div>
           <Panel title="Latest confirmations">
             {d.feed.length === 0 && <span className="text-[13px] text-muted">Nothing confirmed by hand yet.</span>}
@@ -140,7 +140,7 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
                   {showLocked && (
                     <td className="px-2 py-2 text-right num">
                       {m.locked ? (
-                        <span title={`Concord Bench · ${m.locked.dataset ?? "dataset"}${m.locked.export_version ? ` (v${m.locked.export_version})` : ""} · run ${m.locked.run_id} · ${m.locked.normaliser}`}>
+                        <span title={`Concord Bench · ${m.locked.dataset ?? "dataset"}${m.locked.catalog_version ? ` (v${m.locked.catalog_version})` : ""} · run ${m.locked.run_id} · ${m.locked.normaliser}`}>
                           {pct(m.locked.wer)}
                           {m.wer !== null && m.locked.wer !== null && <span className="text-[11px] text-muted"> ({deltaPts(m.wer - m.locked.wer)})</span>}
                         </span>

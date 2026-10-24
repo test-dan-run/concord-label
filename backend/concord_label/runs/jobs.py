@@ -3,7 +3,7 @@
 Job types:
 - ingest  {dataset_id, source, cleanup}         copy, decode, derive, parse references
 - label   {run_id}                              ensemble pseudo-labelling (Phase 2), writes segments
-- reference {export_id, dataset_id[, force]}   Send to Bench: write a reference package, push it if asked; or
+- reference {export_id, dataset_id[, force]}   write a reference package for download (label/refpkg.py), or
                                                 Publish to Dataset Catalog (destination `catalog`, label/publish.py)
 - catalog-dataset {dataset_id, catalog_dataset_id, version}
                                                 New from Dataset Catalog: a dataset from a catalog version

@@ -402,8 +402,9 @@ export interface LiveModel {
   wer: number | null;
   ci: [number, number] | null;
   curve: { confirmed: number; wer: number | null }[];
-  /** The model's locked benchmark score in Concord Bench (newest version of this dataset there); null without Bench. */
-  locked: { wer: number | null; run_id: number; normaliser: string; dataset: string | null; export_version: number | null } | null;
+  /** The model's locked benchmark score in Concord Bench (the newest version of this dataset's catalog dataset there);
+   *  null without Bench, or when the dataset has no catalog dataset. */
+  locked: { wer: number | null; run_id: number; normaliser: string; dataset: string | null; catalog_version: number | null } | null;
   rank: number | null;
 }
 
@@ -536,9 +537,7 @@ export interface LexiconDetail extends LexiconSummary {
   versions: { version: number; entries: number; published_at: string; imported_from: number | null }[];
 }
 
-// ---------------------------------------------------------------- Send to Bench (CONTRACTS.md §2, §4)
-
-export type Peer = AppConfig["peer"];
+// ---------------------------------------------------------------- reference packages and publishing (CONTRACTS.md §2)
 
 export interface ReferencePreview {
   scope: "complete" | "any";
@@ -555,9 +554,6 @@ export interface ReferencePreview {
   /** File labels sent along for Bench to slice by (refs/attributes.json, CONTRACTS.md §2.7). */
   labels: string[];
   dataset: { id: number; name: string; uid: string; tags: string[] };
-  peer: Peer;
-  destination: "push" | "download";
-  push_refused: string | null;
   /** Publish to Dataset Catalog; null when the Dataset Catalog is not set up. */
   catalog: CatalogPublishState | null;
 }
@@ -609,6 +605,7 @@ export interface ReferenceExport {
   tags: string[];
   include_audio: "auto" | "always" | "never";
   include_outputs: boolean;
+  /** `push`: a send to Concord Bench from before contract version 3, kept for the history. */
   destination: "push" | "download" | "catalog";
   status: "queued" | "running" | "done" | "failed";
   counts: {

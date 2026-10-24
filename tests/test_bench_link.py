@@ -1,4 +1,5 @@
-"""Send to Bench (reference packages, CONTRACTS.md §2 and §4) and the links back from Bench (§1, §3, §5).
+"""Reference packages for download (CONTRACTS.md §2), the push to Bench gone (contract version 3), and the links
+back from Bench by Dataset Catalog dataset (§1, §3, §4, §5).
 
 Concord Bench is faked with an httpx.MockTransport that answers the contract endpoints with the sample
 bodies from contracts/samples/api/."""
@@ -90,14 +91,8 @@ def no_bench(monkeypatch):
 class FakeBench:
     """Bench's side of CONTRACTS.md §1 and §4, in memory."""
 
-    def __init__(self, have: set[str] | None = None):
-        self.have = set(have or ())
-        self.uploads: dict[str, bytearray] = {}
+    def __init__(self):
         self.calls: list[str] = []
-        self.import_status = 201
-        self.drop_once_at_chunk: int | None = None  # lose the tail of the upload once, at this chunk number
-        self.chunks = 0
-        self.conflicts = 0
         self.scores_status = 200
         self.config = sample("config.bench.json")
         self.scores_query: dict | None = None
@@ -110,40 +105,13 @@ class FakeBench:
         self.calls.append(f"{req.method} {p}")
         if p == "/api/config":
             return httpx.Response(200, json=self.config)
-        if p == "/api/fingerprints/missing":
-            shas = json.loads(req.content)["sha256"]
-            return httpx.Response(200, json={"missing": [s for s in shas if s not in self.have]})
-        if p == "/api/uploads" and req.method == "POST":
-            uid = f"up{len(self.uploads) + 1}"
-            self.uploads[uid] = bytearray()
-            return httpx.Response(200, json={"upload_id": uid})
-        if p.endswith("/chunk"):
-            buf = self.uploads[p.split("/")[3]]
-            off = int(req.url.params["offset"])
-            if off != len(buf):
-                self.conflicts += 1
-                return httpx.Response(409, json={"detail": f"expected offset {len(buf)}, got {off}"})
-            buf.extend(req.content)
-            self.chunks += 1
-            size = len(buf)
-            if self.chunks == self.drop_once_at_chunk:
-                del buf[-1000:]  # the end of this chunk got lost after the answer: the next PUT gets a 409
-            return httpx.Response(200, json={"path": req.url.params["path"], "size": size})
-        if p == "/api/reference-imports":
-            if self.import_status == 400:
-                return httpx.Response(400, json={"detail": "files.csv lists 1 file Bench has no audio for: x.wav"})
-            assert json.loads(req.content)["upload_id"] in self.uploads
-            return httpx.Response(201, json=sample("bench.reference-imports.response.json"))
-        if p.startswith("/api/datasets/by-source/"):
-            self.scores_query = {"uid": p.split("/")[4], **dict(req.url.params)}
+        if p.startswith("/api/datasets/by-catalog/") and p.endswith("/scores"):
+            self.scores_query = {"id": p.split("/")[4], **dict(req.url.params)}
             if self.scores_status != 200:
-                return httpx.Response(self.scores_status, json={"detail": "Concord Bench has no dataset from that source"})
-            return httpx.Response(200, json=sample("bench.scores-by-source.response.json"))
+                return httpx.Response(self.scores_status,
+                                      json={"detail": "Concord Bench has no version of that Dataset Catalog dataset"})
+            return httpx.Response(200, json=sample("bench.scores-by-catalog.response.json"))
         return httpx.Response(404, json={"detail": "Not Found"})
-
-    def zip_bytes(self) -> bytes:
-        (buf,) = self.uploads.values()
-        return bytes(buf)
 
 
 @pytest.fixture
@@ -182,7 +150,7 @@ def test_reference_package_of_uploaded_references(label_flow, client, tmp_path, 
     """The annotated dataset: every segment is a confirmed reference with speaker and text -> SegLST."""
     ds = label_flow["dataset"]
     pv = _ok(client.get(f"/api/datasets/{ds['id']}/reference-preview"))
-    assert pv["destination"] == "download" and pv["problem"] is None and pv["left_out"] == 0
+    assert pv["problem"] is None and pv["left_out"] == 0 and pv["catalog"] is None
     assert pv["refs_file"] == "segments.seglst.json" and pv["label_types"] == ["asr", "diar"]
     assert pv["next_version"] == 1 and pv["labels"] == ["condition"]
     rec = send(client, ds["id"], tags=["call-centre", "#en"])
@@ -313,68 +281,34 @@ def test_pseudo_labelled_dataset_complete_and_any(labelled, client, tmp_path, no
         {(s["start"], s["end"]) for s in confirmed_2}
 
 
-# ---------------------------------------------------------------- push to a fake Bench
+# ---------------------------------------------------------------- the push to Bench is gone
 
-def test_push_honours_missing_audio_and_resumes(labelled, client, tmp_path, bench, monkeypatch, session):
+def test_push_is_refused_and_earlier_sends_stay_listed(labelled, client, bench, session):
+    """Contract version 3: datasets reach Bench through the Dataset Catalog, so Label builds packages for
+    download only, even with Bench linked. Sends from before stay in the history."""
     ds = labelled["unlabelled"]
     review_files(client, ds)
-    files = [f for f in _ok(client.get(f"/api/label/datasets/{ds}/files")) if f["usable"]][:2]
-    shas = {f["id"]: session.get(AudioFile, f["id"]).sha256 for f in files}
-    bench.have = {shas[files[0]["id"]]}  # Bench already has the first file
-    bench.drop_once_at_chunk = 2
-    monkeypatch.setattr(refpkg, "CHUNK_BYTES", 64 * 1024)
-    pv = _ok(client.get(f"/api/datasets/{ds}/reference-preview?scope=any"))
-    assert pv["destination"] == "push" and pv["peer"] == {"url": BENCH, "reachable": True, "contract_version": CONTRACT_VERSION}
+    r = client.post(f"/api/datasets/{ds}/reference-exports", json={"name": "x", "scope": "any", "destination": "push"})
+    assert r.status_code == 422 and "Dataset Catalog" in r.json()["detail"]
     rec = send(client, ds, scope="any")
-    assert rec["status"] == "done", rec["error"]
-    assert rec["destination"] == "push" and rec["bench_url"] == BENCH
-    assert rec["bench_import_id"] == 4 and rec["bench_preview"]["export_version"] == 1
-    assert rec["audio_included"] == "partial" and rec["counts"]["audio_files"] == 1
-    assert bench.calls[0] == "GET /api/config"  # the peer check, again in the job before anything is sent
-    assert [c for c in bench.calls if c != "GET /api/config"][:2] == ["POST /api/fingerprints/missing",
-                                                                      "POST /api/uploads"]
-    assert bench.calls[-1] == "POST /api/reference-imports"
-    assert bench.chunks > 3 and bench.conflicts == 1  # several chunks; one sent again after the 409
-    local = Path(session.get(refpkg.ReferenceExport, rec["id"]).path).read_bytes()
-    assert bench.zip_bytes() == local  # the chunks reassemble to the same zip
-    root = unzip(bench.zip_bytes(), tmp_path / "pushed")
-    assert CHECK.check_package(root) == []
-    audio = [p.name for p in (root / "audio").rglob("*.*")]
-    assert len(audio) == 1 and audio[0] == Path(files[1]["path"]).name
-
-
-def test_push_refused_by_bench_marks_the_export_failed(labelled, client, bench):
-    ds = labelled["unlabelled"]
-    review_files(client, ds)
-    bench.import_status = 400
-    rec = send(client, ds, scope="any", include_audio="never")
-    assert rec["status"] == "failed" and "Bench has no audio for: x.wav" in rec["error"]
-    job = _ok(client.get(f"/api/jobs/{rec['job_id']}"))
-    assert job["status"] == "failed" and job["label"].startswith("send to Bench")
-
-
-def test_push_refused_before_upload_when_bench_is_down(labelled, client, bench):
-    ds = labelled["unlabelled"]
-    review_files(client, ds)
-    bench.down = True
-    peer.forget()
-    r = client.post(f"/api/datasets/{ds}/reference-exports", json={"name": "x", "scope": "any",
-                                                                   "destination": "push"})
-    assert r.status_code == 409 and "not reachable" in r.json()["detail"]
-    # without a destination it falls back to a download
-    assert send(client, ds, scope="any")["destination"] == "download"
-
-
-def test_push_refused_on_another_contract_version(labelled, client, bench):
-    other = CONTRACT_VERSION + 1
-    bench.config = {**bench.config, "contract_version": other}
-    st = _ok(client.get("/api/config"))["peer"]
-    assert st == {"url": BENCH, "reachable": True, "contract_version": other}
-    ds = labelled["unlabelled"]
-    review_files(client, ds)
-    r = client.post(f"/api/datasets/{ds}/reference-exports", json={"name": "x", "scope": "any",
-                                                                   "destination": "push"})
-    assert r.status_code == 409 and f"contract version {other}" in r.json()["detail"]
+    assert rec["status"] == "done" and rec["destination"] == "download" and rec["audio_included"] == "all"
+    assert not any(c.startswith(("POST", "PUT")) for c in bench.calls)  # nothing sent to Bench
+    old = refpkg.ReferenceExport(dataset_id=ds, name="x", scope="any", tags=[], destination="push", status="done",
+                                 version=1, bench_url=BENCH, bench_import_id=4, counts={"files": 2, "segments": 5})
+    session.add(old)
+    session.commit()
+    listed = {h["id"]: h for h in _ok(client.get(f"/api/datasets/{ds}/reference-exports"))}
+    assert (listed[old.id]["destination"], listed[old.id]["bench_import_id"]) == ("push", 4)
+    # a push queued before the upgrade fails with the reason
+    queued = refpkg.ReferenceExport(dataset_id=ds, name="x", scope="any", tags=[], destination="push", status="queued")
+    session.add(queued)
+    session.flush()
+    queued.job_id = jobs.enqueue(session, "reference", {"export_id": queued.id, "dataset_id": ds}).id
+    session.commit()
+    jobs.run_pending()
+    failed = _ok(client.get(f"/api/reference-exports/{queued.id}"))
+    assert failed["status"] == "failed" and "contract version 3" in failed["error"]
+    assert _ok(client.get(f"/api/jobs/{queued.job_id}"))["label"].startswith("send to Bench")
 
 
 # ---------------------------------------------------------------- config peer, locked score, by-sha
@@ -392,17 +326,30 @@ def test_config_peer_reachable_cached_and_unreachable(client, bench):
     assert _ok(client.get("/api/config"))["peer"]["reachable"] is False
 
 
+CATALOG_ID = "8d4e2b6a1c9f4e3a9b7c5d1e2f3a4b5c"
+
+
+def in_catalog(session, dataset_id: int, catalog_id: str = CATALOG_ID, version: int = 2) -> None:
+    """The dataset as published to the Dataset Catalog (or made from it): Bench finds it by the catalog id."""
+    ds = session.get(Dataset, dataset_id)
+    ds.catalog_dataset_id, ds.catalog_version = catalog_id, version
+    session.commit()
+
+
 def test_locked_score_from_bench(labelled, client, bench, session):
     ds = labelled["unlabelled"]
     review_files(client, ds)
-    uid = session.get(Dataset, ds).uid
+    # never published to the Dataset Catalog: Bench has no version of it, so it isn't asked
+    live = _ok(client.get(f"/api/label/datasets/{ds}/live"))
+    assert all(m["locked"] is None for m in live["asr"]["models"]) and bench.scores_query is None
+    in_catalog(session, ds)
     live = _ok(client.get(f"/api/label/datasets/{ds}/live"))
     by = {m["service"]: m["locked"] for m in live["asr"]["models"]}
     assert by["whisper-large-v3"]["wer"] == 0.052 and by["whisper-large-v3"]["run_id"] == 31
-    assert by["whisper-large-v3"]["normaliser"] == "basic@1" and by["whisper-large-v3"]["export_version"] == 2
+    assert by["whisper-large-v3"]["normaliser"] == "basic@1" and by["whisper-large-v3"]["catalog_version"] == 2
     assert by["faster-whisper-large-v3"] is None
-    assert bench.scores_query == {"uid": uid, "install_id": _install_id(), "normaliser": "basic@1"}
-    assert sum(c.startswith("GET /api/datasets/by-source/") for c in bench.calls) == 1  # once per page, not per model
+    assert bench.scores_query == {"id": CATALOG_ID, "normaliser": "basic@1"}
+    assert sum(c.startswith("GET /api/datasets/by-catalog/") for c in bench.calls) == 1  # once per page, not per model
     bench.scores_status = 404
     live = _ok(client.get(f"/api/label/datasets/{ds}/live"))
     assert all(m["locked"] is None for m in live["asr"]["models"])
@@ -413,14 +360,15 @@ def test_locked_score_from_bench(labelled, client, bench, session):
     assert all(m["locked"] is None for m in live["asr"]["models"])
 
 
-def test_locked_score_of_a_model_with_no_outputs_here(label_flow, client, bench):
+def test_locked_score_of_a_model_with_no_outputs_here(label_flow, client, bench, session):
     """An annotated dataset: its references were uploaded, so no model has outputs for them in Label. A model
     Bench has a locked score for is still listed, with that score alone; one it has none for is not."""
     ds = label_flow["dataset"]["id"]
+    in_catalog(session, ds)
     live = _ok(client.get(f"/api/label/datasets/{ds}/live"))
     assert live["asr"]["confirmed"] > 0
     (m,) = live["asr"]["models"]
-    assert m["service"] == "whisper-large-v3" and m["locked"]["wer"] == 0.052 and m["locked"]["export_version"] == 2
+    assert m["service"] == "whisper-large-v3" and m["locked"]["wer"] == 0.052 and m["locked"]["catalog_version"] == 2
     assert (m["coverage"], m["wer"], m["curve"], m["rank"]) == (0, None, [], None)
     bench.down = True
     peer.forget()
@@ -434,14 +382,21 @@ def test_no_bench_no_locked_score(labelled, client, no_bench):
 
 def test_file_by_sha(label_flow, client, session):
     ds = label_flow["dataset"]
+    other = session.get(Dataset, label_flow["unlabelled"])  # the same audio, in the audio-only copy
     f = session.query(AudioFile).filter_by(dataset_id=ds["id"]).order_by(AudioFile.rel_path).first()
-    assert _ok(client.get(f"/api/files/by-sha/{f.sha256}?dataset_uid={ds['uid']}")) == \
+    in_catalog(session, ds["id"], version=1)
+    in_catalog(session, other.id, "e" * 32, version=1)
+    assert _ok(client.get(f"/api/files/by-sha/{f.sha256}?catalog_dataset_id={CATALOG_ID}")) == \
         {"file_id": f.id, "dataset_id": ds["id"]}
-    # the same audio is also in the audio-only copy: dataset_uid picks the dataset
-    other = session.get(Dataset, label_flow["unlabelled"])
-    hit = _ok(client.get(f"/api/files/by-sha/{f.sha256}?dataset_uid={other.uid}"))
+    # catalog_dataset_id picks the dataset
+    hit = _ok(client.get(f"/api/files/by-sha/{f.sha256}?catalog_dataset_id={'e' * 32}"))
     assert hit["dataset_id"] == other.id and hit["file_id"] != f.id
-    assert client.get(f"/api/files/by-sha/{f.sha256}?dataset_uid=nope").status_code == 404
+    # two datasets of one catalog dataset: the one based on the higher version is the working dataset
+    in_catalog(session, other.id, CATALOG_ID, version=2)
+    assert _ok(client.get(f"/api/files/by-sha/{f.sha256}?catalog_dataset_id={CATALOG_ID}"))["dataset_id"] == other.id
+    r = client.get(f"/api/files/by-sha/{f.sha256}?catalog_dataset_id={'f' * 32}")
+    assert r.status_code == 404 and "Dataset Catalog dataset" in r.json()["detail"]
+    assert _ok(client.get(f"/api/files/by-sha/{f.sha256}"))["dataset_id"] in (ds["id"], other.id)
     assert client.get(f"/api/files/by-sha/{'0' * 64}").status_code == 404
 
 
@@ -449,11 +404,10 @@ def test_file_by_sha(label_flow, client, session):
 
 @pytest.fixture
 def flagged_source(session, data_dir):
-    """A dataset that is the sample flags file's source: same install id, dataset uid and audio."""
+    """The working dataset of the sample flags file's catalog dataset, with the same audio and segment uids."""
     flags = json.loads((SAMPLES / "flags.json").read_text())
-    src = flags["source"]
-    (data_dir / "install_id").write_text(src["install_id"])
-    ds = Dataset(name=src["dataset_name"], uid=src["dataset_uid"], status="ready", mode="annotated")
+    ds = Dataset(name=flags["dataset_name"], status="ready", mode="annotated",
+                 catalog_dataset_id=flags["catalog_dataset_id"], catalog_version=flags["catalog_version"])
     session.add(ds)
     session.flush()
     f = AudioFile(dataset_id=ds.id, rel_path="check_clip.wav", sha256=flags["flags"][0]["file_sha256"], ext=".wav",
@@ -486,16 +440,44 @@ def test_flags_import_by_uid_and_overlap(client, flagged_source, session):
     assert sum(s["flagged"] for s in view["segments"]) == 2  # the annotator's flags lane
 
 
-def test_flags_for_another_dataset_or_install_are_404(client, flagged_source):
+def test_flags_go_to_the_working_dataset_of_the_catalog_dataset(client, flagged_source, session):
+    flags, ds, segs = flagged_source
+    # an older Label dataset of the same catalog dataset, based on an earlier version, doesn't get them
+    older = Dataset(name="older", status="ready", mode="annotated", catalog_dataset_id=flags["catalog_dataset_id"],
+                    catalog_version=None)
+    session.add(older)
+    session.commit()
+    assert _ok(client.post("/api/flags/import", json=flags))["dataset_id"] == ds.id
+
+
+def test_flags_for_another_dataset_are_404(client, flagged_source):
     flags, _, _ = flagged_source
-    other = {**flags, "source": {**flags["source"], "dataset_uid": "f" * 32}}
-    r = client.post("/api/flags/import", json=other)
-    assert r.status_code == 404 and "no dataset here has uid" in r.json()["detail"]
-    other = {**flags, "source": {**flags["source"], "install_id": "0000000000000000"}}
-    r = client.post("/api/flags/import", json=other)
-    assert r.status_code == 404 and "install" in r.json()["detail"]
+    r = client.post("/api/flags/import", json={**flags, "catalog_dataset_id": "f" * 32})
+    assert r.status_code == 404 and "Dataset Catalog dataset" in r.json()["detail"]
     r = client.post("/api/flags/import", json={**flags, "format_version": 9})
-    assert r.status_code == 400 and "known: 1" in r.json()["detail"]
+    assert r.status_code == 400 and "known: 1, 2" in r.json()["detail"]
+
+
+def test_flags_format_version_1_still_reads(client, session, data_dir):
+    """A flags file from before contract version 3 names the dataset by its uid and this install's id."""
+    flags = json.loads((SAMPLES / "flags.json").read_text())
+    (data_dir / "install_id").write_text("3f2a9c1e5b7d4a60")
+    ds = Dataset(name="Help desk calls", uid="a" * 32, status="ready", mode="annotated")
+    session.add(ds)
+    session.flush()
+    f = AudioFile(dataset_id=ds.id, rel_path="check_clip.wav", sha256=flags["flags"][0]["file_sha256"], ext=".wav",
+                  duration=10.56, orig_sr=16000, channels=1)
+    session.add(f)
+    session.flush()
+    session.add(Segment(audio_file_id=f.id, start=2.9, end=6.81, speaker="caller", text="x", uid="u1",
+                        status=SegmentStatus.confirmed))
+    session.commit()
+    src = {"app": "concord-label", "install_id": "3f2a9c1e5b7d4a60", "dataset_uid": ds.uid, "dataset_name": ds.name}
+    v1 = {"format": "concord-flags", "format_version": 1, "created_at": flags["created_at"], "source": src,
+          "export_version": 1, "flags": flags["flags"][:1]}
+    assert _ok(client.post("/api/flags/import", json=v1))["matched"] == 1
+    r = client.post("/api/flags/import", json={**v1, "source": {**src, "install_id": "0000000000000000"}})
+    assert r.status_code == 404 and "install" in r.json()["detail"]
 
 
 def test_unmatched_flags_are_counted(client, flagged_source):

@@ -1,6 +1,9 @@
-"""Concord Bench links (SPLIT_PLAN.md §4, §5; CONTRACTS.md §2, §3, §5): Send to Bench (reference packages,
-pushed or downloaded), the file lookup by sha256 that Bench's "Open in Label" uses, and flags coming back.
-The preview and the history also serve Publish to Dataset Catalog (api/dataset_catalog.py)."""
+"""Reference packages and the links from Concord Bench (SPLIT_PLAN.md §4, §5; CONTRACTS.md §2, §3, §5): reference
+packages built for download, the file lookup by sha256 that "Open in Label" uses, and flags coming back. The preview
+and the history also serve Publish to Dataset Catalog (api/dataset_catalog.py).
+
+Contract version 3 removed the push to Bench ("Send to Bench"): datasets reach Bench through the Dataset Catalog.
+Sends from before stay in the history as `push` rows."""
 
 from __future__ import annotations
 
@@ -13,7 +16,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import peer
 from ..core.db import get_session
 from ..core.models import AudioFile, Dataset, ReferenceExport
 from ..label import flags, publish, refpkg
@@ -24,53 +26,47 @@ from .datasets import _clean_tags, get_dataset, job_brief
 router = APIRouter(tags=["bench"])
 
 
-def _destination(st: dict[str, Any]) -> str:
-    return "push" if peer.usable(st) else "download"
-
-
 @router.get("/datasets/{dataset_id}/reference-preview")
 def reference_preview(dataset_id: int, scope: str = "complete", session: Session = Depends(get_session)) -> dict:
-    """What "Send to Bench" would send: counts, the references file, files left out, and where it would go."""
+    """What a package or a published version would hold: counts, the references file and the files left out."""
     ds = get_dataset(session, dataset_id)
     try:
         pv = refpkg.preview(session, ds, scope)
     except refpkg.RefPkgError as exc:
         raise HTTPException(400, str(exc)) from None
-    st = peer.status()
-    # With the Dataset Catalog set up, the panel publishes there instead (DATASET_CATALOG_PLAN.md §8.2).
+    # With the Dataset Catalog set up, the panel publishes there (DATASET_CATALOG_PLAN.md §8.2).
     cat = publish.status(ds) if dataset_catalog.enabled() else None
-    return {**pv, "dataset": {"id": ds.id, "name": ds.name, "uid": ds.uid, "tags": ds.tags},
-            "peer": st, "destination": _destination(st), "push_refused": peer.refusal(st), "catalog": cat}
+    return {**pv, "dataset": {"id": ds.id, "name": ds.name, "uid": ds.uid, "tags": ds.tags}, "catalog": cat}
 
 
 class SendIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     scope: str = "complete"
     tags: list[str] = Field(default_factory=list)
-    include_audio: str = "auto"  # auto | always | never
+    include_audio: str = "auto"  # auto (every file) | always | never
     include_outputs: bool = False
-    destination: str | None = None  # push | download; default: push when Bench is linked
+    destination: str | None = None  # download (the only one since contract version 3)
 
 
 @router.post("/datasets/{dataset_id}/reference-exports", status_code=202)
-def send_to_bench(dataset_id: int, body: SendIn, session: Session = Depends(get_session)) -> dict[str, Any]:
+def build_package(dataset_id: int, body: SendIn, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """A reference package zip to download (CONTRACTS.md §2)."""
     ds = get_dataset(session, dataset_id)
     if body.scope not in refpkg.SCOPES:
         raise HTTPException(422, f"scope must be one of {', '.join(refpkg.SCOPES)}")
     if body.include_audio not in refpkg.AUDIO_CHOICES:
         raise HTTPException(422, f"include_audio must be one of {', '.join(refpkg.AUDIO_CHOICES)}")
-    st = peer.status()
-    dest = body.destination or _destination(st)
-    if dest not in ("push", "download"):
-        raise HTTPException(422, "destination must be push or download")
-    if dest == "push" and (why := peer.refusal(st)):
-        raise HTTPException(409, f"cannot push: {why}")
+    if body.destination == "push":
+        raise HTTPException(422, "Concord Label no longer pushes packages to Concord Bench (contract version 3): "
+                                 "publish the dataset to the Dataset Catalog, and import the version in Bench")
+    if body.destination not in (None, "download"):
+        raise HTTPException(422, "destination must be download")
     sel = refpkg.select_files(session, ds, body.scope)
     if sel.problem:
         raise HTTPException(422, sel.problem)
     rec = ReferenceExport(dataset_id=ds.id, name=body.name.strip(), scope=body.scope, tags=_clean_tags(body.tags),
-                          include_audio=body.include_audio, include_outputs=body.include_outputs, destination=dest,
-                          status="queued", bench_url=st["url"] if dest == "push" else None)
+                          include_audio=body.include_audio, include_outputs=body.include_outputs,
+                          destination="download", status="queued")
     session.add(rec)
     session.flush()
     job = jobs.enqueue(session, "reference", {"export_id": rec.id, "dataset_id": ds.id})
@@ -110,14 +106,19 @@ def download_reference_export(export_id: int, session: Session = Depends(get_ses
 # ---------------------------------------------------------------- CONTRACTS.md §5
 
 @router.get("/files/by-sha/{sha256}")
-def file_by_sha(sha256: str, dataset_uid: str | None = None, session: Session = Depends(get_session)) -> dict:
-    """The file with these original bytes, within the dataset `dataset_uid` (any dataset when omitted)."""
-    stmt = select(AudioFile).where(AudioFile.sha256 == sha256.lower()).order_by(AudioFile.id.desc())
-    if dataset_uid:
-        stmt = stmt.join(Dataset).where(Dataset.uid == dataset_uid)
+def file_by_sha(sha256: str, catalog_dataset_id: str | None = None, session: Session = Depends(get_session)) -> dict:
+    """The file with these original bytes. With `catalog_dataset_id`, within the Label datasets of that Dataset
+    Catalog dataset, the working dataset first (CONTRACTS.md §3, §5); else in any dataset, the newest first."""
+    stmt = select(AudioFile).where(AudioFile.sha256 == sha256.lower())
+    if catalog_dataset_id:
+        stmt = stmt.join(Dataset).where(Dataset.catalog_dataset_id == catalog_dataset_id, Dataset.status != "failed") \
+            .order_by(Dataset.catalog_version.desc().nulls_last(), Dataset.id.desc(), AudioFile.id.desc())
+    else:
+        stmt = stmt.order_by(AudioFile.id.desc())
     f = session.scalars(stmt).first()
     if f is None:
-        where = f" in dataset {dataset_uid}" if dataset_uid else ""
+        where = (f" in a dataset made from or published to the Dataset Catalog dataset {catalog_dataset_id}"
+                 if catalog_dataset_id else "")
         raise HTTPException(404, f"no file with sha256 {sha256[:12]}…{where}")
     return {"file_id": f.id, "dataset_id": f.dataset_id}
 

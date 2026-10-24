@@ -1,4 +1,5 @@
-"""Send to Bench: a dataset's reviewed labels as a reference package (CONTRACTS.md §2, SPLIT_PLAN.md §4).
+"""Reference packages: a dataset's reviewed labels as a package (CONTRACTS.md §2, SPLIT_PLAN.md §4), and the version
+folder Publish to Dataset Catalog sends (label/publish.py).
 
 What goes in follows the old Promote rules (PLAN.md §6.6):
 - only **confirmed** segments; auto-accepted ones never become references;
@@ -13,8 +14,9 @@ metadata (from the annotations it was uploaded with) as file labels for Bench to
 whole-file outputs of the label runs' seg model, with their params written out in full and the catalog
 build key that made them (§2.5).
 
-A package is one zip with a single top folder `<name>-refs-v<N>/`. It is either downloaded, or pushed to
-Bench with its chunked upload API and staged there as a reference import (`push`).
+A package is one zip with a single top folder `<name>-refs-v<N>/`, built for download. Contract version 3
+removed the push to Bench's upload API: datasets reach Bench through the Dataset Catalog, and the `push` rows of
+earlier sends stay in the history.
 """
 
 from __future__ import annotations
@@ -29,11 +31,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import peer
 from ..adapters.base import params_hash
 from ..core import paths
 from ..core.models import (
@@ -58,9 +58,7 @@ from .sync import install_id
 FORMAT = "concord-reference-package"
 FORMAT_VERSION = 2
 SCOPES = ("complete", "any")
-AUDIO_CHOICES = ("auto", "always", "never")
-CHUNK_BYTES = 8 * 1024 * 1024
-MAX_RESUMES = 5
+AUDIO_CHOICES = ("auto", "always", "never")  # auto and always: every file's audio goes in
 
 REFS_SEGLST = "segments.seglst.json"
 REFS_JSONL = "segments.jsonl"
@@ -341,93 +339,20 @@ def write_version(session: Session, ds: Dataset, sel: Selection, folder: Path, *
     return manifest
 
 
-# ---------------------------------------------------------------- pushing to Bench (CONTRACTS.md §4)
-
-def _bench_call(fn):
-    try:
-        return fn()
-    except httpx.HTTPError as exc:
-        peer.mark_unreachable()
-        raise peer.PeerError(f"Concord Bench at {peer.bench_url()} did not answer: {type(exc).__name__}: {exc}") \
-            from None
-
-
-def missing_audio(shas: list[str]) -> set[str]:
-    """The sha256s Bench has no original for."""
-    def call():
-        with peer.client(peer.PUSH_TIMEOUT_S) as c:
-            return c.post("/api/fingerprints/missing", json={"sha256": shas})
-    r = _bench_call(call)
-    if r.status_code != 200:
-        raise peer.PeerError(f"Concord Bench refused the fingerprint check: {peer.detail(r)}")
-    return set(r.json().get("missing") or [])
-
-
-def push(zip_path: Path, log: Log = print, progress: Progress = lambda p, m: None) -> dict[str, Any]:
-    """Upload the zip in chunks (resuming at the offset Bench expects after a 409) and stage it as a
-    reference import. Returns Bench's answer: {"id", "status", "preview"}."""
-    size = zip_path.stat().st_size
-
-    def call():
-        with peer.client(peer.PUSH_TIMEOUT_S) as c:
-            r = c.post("/api/uploads")
-            if r.status_code not in (200, 201):
-                raise peer.PeerError(f"Concord Bench refused the upload: {peer.detail(r)}")
-            upload_id = r.json()["upload_id"]
-            log(f"uploading {zip_path.name} ({size / 1e6:.1f} MB) as upload {upload_id}")
-            off = resumes = 0
-            with open(zip_path, "rb") as fh:
-                while off < size:
-                    fh.seek(off)
-                    chunk = fh.read(CHUNK_BYTES)
-                    r = c.put(f"/api/uploads/{upload_id}/chunk", params={"path": zip_path.name, "offset": off},
-                              content=chunk)
-                    if r.status_code == 409:
-                        m = re.search(r"expected offset (\d+)", peer.detail(r))
-                        if not m or resumes >= MAX_RESUMES:
-                            raise peer.PeerError(f"upload out of step at byte {off}: {peer.detail(r)}")
-                        resumes += 1
-                        off = int(m.group(1))
-                        log(f"resuming the upload at byte {off}")
-                        continue
-                    if r.status_code != 200:
-                        raise peer.PeerError(f"upload failed at byte {off}: {peer.detail(r)}")
-                    off = int(r.json().get("size", off + len(chunk)))
-                    progress(0.5 + 0.45 * off / size, f"uploaded {off / 1e6:.1f} of {size / 1e6:.1f} MB")
-            r = c.post("/api/reference-imports", json={"upload_id": upload_id})
-            if r.status_code not in (200, 201):
-                raise peer.PeerError(f"Concord Bench refused the package: {peer.detail(r)}")
-            return r.json()
-
-    return _bench_call(call)
-
-
 # ---------------------------------------------------------------- the job
 
 def run(session: Session, rec: ReferenceExport, log: Log = print, progress: Progress = lambda p, m: None) -> None:
-    """Write the package of `rec` and, for a push, send it to Bench. Fills in `rec`; raises on failure."""
+    """Write the package of `rec` for download. Fills in `rec`; raises on failure."""
     ds = session.get(Dataset, rec.dataset_id)
     if ds is None:
         raise RefPkgError("the dataset no longer exists")
     if rec.destination == "push":
-        st = peer.status(force=True)
-        why = peer.refusal(st)
-        if why:
-            raise peer.PeerError(f"not pushed: {why}")
-        rec.bench_url = st["url"]
+        raise RefPkgError("Concord Label no longer pushes packages to Concord Bench (contract version 3)")
     sel = select_files(session, ds, rec.scope)
     if sel.problem:
         raise RefPkgError(sel.problem)
     version = next_version(session, ds)
-    shas = sorted({f.sha256 for f, _ in sel.files})
-    audio: set[str] | None
-    if rec.include_audio == "never":
-        audio = set()
-    elif rec.include_audio == "auto" and rec.destination == "push":
-        audio = missing_audio(shas)
-        log(f"Concord Bench already has {len(shas) - len(audio)} of {len(shas)} files; leaving their audio out")
-    else:
-        audio = None
+    audio: set[str] | None = set() if rec.include_audio == "never" else None
     progress(0.1, "writing the package")
     out = paths.reference_packages() / str(rec.id) / f"{package_name(rec.name, version)}.zip"
     res = write_package(session, ds, sel, out, name=rec.name, version=version, tags=rec.tags, audio_shas=audio,
@@ -436,13 +361,6 @@ def run(session: Session, rec: ReferenceExport, log: Log = print, progress: Prog
     c = res["counts"]
     log(f"wrote {out.name}: v{version}, {c['files']} files, {c['segments']} segments, {c['audio_files']} with audio, "
         f"{c['outputs']} seg outputs, labels on {c['labelled_files']} files, {c['bytes'] / 1e6:.1f} MB")
-    if rec.destination == "push":
-        ans = push(out, log, progress)
-        rec.bench_import_id = ans.get("id")
-        rec.bench_preview = ans.get("preview") or {}
-        if isinstance(rec.bench_preview.get("dataset_id"), int):
-            rec.bench_dataset_id = rec.bench_preview["dataset_id"]
-        log(f"staged in Concord Bench as reference import {rec.bench_import_id} ({ans.get('status')})")
     rec.status, rec.error, rec.finished_at = "done", None, utcnow()
     progress(1.0, "done")
 

@@ -59,7 +59,8 @@ def job_label(session: Session, j: Job) -> str:
     if j.type == "reference":
         d = session.get(Dataset, p.get("dataset_id"))
         rec = session.get(ReferenceExport, p.get("export_id"))
-        what = "publish to Dataset Catalog" if rec is not None and rec.destination == "catalog" else "send to Bench"
+        what = {"catalog": "publish to Dataset Catalog", "push": "send to Bench"}.get(
+            rec.destination if rec is not None else "", "reference package")
         return f"{what} · {d.name}" if d else what
     if j.type == "catalog-dataset":
         d = session.get(Dataset, p.get("dataset_id"))

@@ -43,22 +43,28 @@ export function OpenFile() {
   return <Navigate replace to={`/label/annotate/${q.data.dataset_id}?file=${fileId}${seg ? `&segment=${seg}` : ""}`} />;
 }
 
-/** `/label/file/by-sha/:sha256?dataset_uid=&t=` (Concord Bench's "Open in Label", CONTRACTS.md §5): find the
- * file by its audio fingerprint within the source dataset, then open the annotator on it at `t`. */
+/** `/label/file/by-sha/:sha256?catalog_dataset_id=&t=` ("Open in Label" in Concord Bench and in the Dataset Catalog UI,
+ * CONTRACTS.md §5): find the file by its audio fingerprint within the working dataset of that catalog dataset, then
+ * open the annotator on it at `t`. */
 export function OpenFileBySha() {
   const { sha256 } = useParams();
   const [params] = useSearchParams();
-  const datasetUid = params.get("dataset_uid");
+  const catalogId = params.get("catalog_dataset_id");
   const q = useQuery({
-    queryKey: ["file-by-sha", sha256, datasetUid],
-    queryFn: () => api.get<{ file_id: number; dataset_id: number }>(`/files/by-sha/${sha256}${qs({ dataset_uid: datasetUid })}`),
+    queryKey: ["file-by-sha", sha256, catalogId],
+    queryFn: () => api.get<{ file_id: number; dataset_id: number }>(`/files/by-sha/${sha256}${qs({ catalog_dataset_id: catalogId })}`),
     retry: false,
   });
   if (q.error) {
     return (
       <>
         <PageHeader title="Open in Label" />
-        <ErrorNote error={`This audio is not in Concord Label${datasetUid ? " in the dataset it was sent from" : ""}: ${(q.error as Error).message}`} />
+        <ErrorNote error={`This audio is not in Concord Label${catalogId ? " in a dataset made from that Dataset Catalog dataset" : ""}: ${(q.error as Error).message}`} />
+        {catalogId && (
+          <p className="text-[13px] text-muted">
+            To label it here, make a dataset from the catalog with <Link to="/datasets/from-catalog">New from Dataset Catalog</Link>.
+          </p>
+        )}
       </>
     );
   }

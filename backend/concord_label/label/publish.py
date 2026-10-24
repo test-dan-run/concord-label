@@ -1,7 +1,7 @@
-"""Publish to Dataset Catalog (DATASET_CATALOG_PLAN.md §8.2), which replaces Send to Bench when the Dataset Catalog
-is set up.
+"""Publish to Dataset Catalog (DATASET_CATALOG_PLAN.md §8.2), which replaced Send to Bench in contract version 3:
+Concord Bench imports the published versions.
 
-A publish is a `reference_export` row with destination `catalog`, run as a `reference` job like a send:
+A publish is a `reference_export` row with destination `catalog`, run as a `reference` job like a package:
 
 1. The first publish of a dataset makes a catalog dataset and keeps its id in `dataset.catalog_dataset_id`.
 2. The store gets any audio it lacks (audio that came through Sync is still in data/originals/), and Label holds
@@ -9,7 +9,7 @@ A publish is a `reference_export` row with destination `catalog`, run as a `refe
 3. Label writes the version folder with refpkg's code, without audio/ and outputs/, and publishes it with the
    version the dataset is based on (`dataset.catalog_version`) as its parent.
 
-The scope, the references file and the labels follow refpkg.select_files, as for Send to Bench. When someone
+The scope, the references file and the labels follow refpkg.select_files, as for a reference package. When someone
 published a newer version than the dataset is based on, the catalog refuses the parent (409). The API checks that
 first and asks the person (`stale`), and a publish they confirm goes with `force`.
 """
