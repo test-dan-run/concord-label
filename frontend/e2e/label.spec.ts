@@ -368,6 +368,7 @@ test("send to Bench without Bench: download a reference package, listed in the h
   await expect(panel.getByLabel("Package name")).toHaveValue("Synth fixtures");
   await expect(panel.getByText("Download (zip)")).toBeVisible();
   await expect(panel.getByText("speaker + text (SegLST)")).toBeVisible();
+  await expect(panel.getByText("condition", { exact: true })).toBeVisible(); // file labels for Bench (CONTRACTS.md §2.7)
   await panel.getByLabel("Package name").fill("Synth refs");
   await panel.getByRole("button", { name: "Send to Bench" }).click();
   const link = panel.getByRole("link", { name: /^Download synth-refs-refs-v\d+\.zip/ });

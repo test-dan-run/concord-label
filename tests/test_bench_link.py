@@ -17,7 +17,7 @@ import pytest
 
 from concord_label import adapters, peer
 from concord_label.core.models import AudioFile, Dataset, Model, ModelOutput, Run, Segment, SegmentStatus
-from concord_label.core.settings import reset_settings
+from concord_label.core.settings import CONTRACT_VERSION, reset_settings
 from concord_label.label import refpkg
 from concord_label.runs import jobs
 from label_helpers import _ok
@@ -184,7 +184,7 @@ def test_reference_package_of_uploaded_references(label_flow, client, tmp_path, 
     pv = _ok(client.get(f"/api/datasets/{ds['id']}/reference-preview"))
     assert pv["destination"] == "download" and pv["problem"] is None and pv["left_out"] == 0
     assert pv["refs_file"] == "segments.seglst.json" and pv["label_types"] == ["asr", "diar"]
-    assert pv["next_version"] == 1
+    assert pv["next_version"] == 1 and pv["labels"] == ["condition"]
     rec = send(client, ds["id"], tags=["call-centre", "#en"])
     assert rec["status"] == "done", rec["error"]
     assert rec["destination"] == "download" and rec["version"] == 1
@@ -196,6 +196,7 @@ def test_reference_package_of_uploaded_references(label_flow, client, tmp_path, 
     n_segs = sum(len(f.segments) for f in usable)
     assert m["source"] == {"app": "concord-label", "install_id": _install_id(),
                            "dataset_uid": ds["uid"], "dataset_name": ds["name"]}
+    assert m["format_version"] == 2
     assert m["export_version"] == 1 and m["scope"] == "complete" and m["tags"] == ["call-centre", "en"]
     assert m["counts"]["files"] == len(usable) == pv["files"] and m["counts"]["segments"] == n_segs
     assert m["counts"]["hours"] == pytest.approx(sum(f.duration for f in usable) / 3600, abs=1e-5)
@@ -211,6 +212,11 @@ def test_reference_package_of_uploaded_references(label_flow, client, tmp_path, 
     uids = jsonl(root / "refs" / "uids.jsonl")
     assert len(uids) == n_segs and {u["uid"] for u in uids} == {s.uid for f in usable for s in f.segments}
     assert not (root / "outputs").exists()
+    # the files' metadata goes as file labels (CONTRACTS.md §2.7)
+    attrs = json.loads((root / "refs" / "attributes.json").read_text())
+    assert attrs == {"files": {f.rel_path: f.meta for f in usable}} and "speakers" not in attrs
+    assert {lb["condition"] for lb in attrs["files"].values()} == {"clean", "noisy", "meeting", "telephony", "clipped"}
+    assert rec["counts"]["labelled_files"] == len(usable)
     # a second package from the same dataset is version 2
     assert send(client, ds["id"], include_audio="never")["version"] == 2
     hist = _ok(client.get(f"/api/datasets/{ds['id']}/reference-exports"))
@@ -268,6 +274,7 @@ def test_pseudo_labelled_dataset_complete_and_any(labelled, client, tmp_path, no
     assert rec["status"] == "done", rec["error"]
     root = unpack(client, rec, tmp_path)
     assert CHECK.check_package(root) == []
+    assert not (root / "refs" / "attributes.json").exists() and pv["labels"] == []  # audio only: no metadata
     m = manifest(root)
     assert m["counts"] == {"files": 1, "segments": len(confirmed_1),
                            "hours": round(first["file"]["duration"] / 3600, 6)}
@@ -317,7 +324,7 @@ def test_push_honours_missing_audio_and_resumes(labelled, client, tmp_path, benc
     bench.drop_once_at_chunk = 2
     monkeypatch.setattr(refpkg, "CHUNK_BYTES", 64 * 1024)
     pv = _ok(client.get(f"/api/datasets/{ds}/reference-preview?scope=any"))
-    assert pv["destination"] == "push" and pv["peer"] == {"url": BENCH, "reachable": True, "contract_version": 1}
+    assert pv["destination"] == "push" and pv["peer"] == {"url": BENCH, "reachable": True, "contract_version": CONTRACT_VERSION}
     rec = send(client, ds, scope="any")
     assert rec["status"] == "done", rec["error"]
     assert rec["destination"] == "push" and rec["bench_url"] == BENCH
@@ -359,20 +366,21 @@ def test_push_refused_before_upload_when_bench_is_down(labelled, client, bench):
 
 
 def test_push_refused_on_another_contract_version(labelled, client, bench):
-    bench.config = {**bench.config, "contract_version": 2}
+    other = CONTRACT_VERSION + 1
+    bench.config = {**bench.config, "contract_version": other}
     st = _ok(client.get("/api/config"))["peer"]
-    assert st == {"url": BENCH, "reachable": True, "contract_version": 2}
+    assert st == {"url": BENCH, "reachable": True, "contract_version": other}
     ds = labelled["unlabelled"]
     review_files(client, ds)
     r = client.post(f"/api/datasets/{ds}/reference-exports", json={"name": "x", "scope": "any",
                                                                    "destination": "push"})
-    assert r.status_code == 409 and "contract version 2" in r.json()["detail"]
+    assert r.status_code == 409 and f"contract version {other}" in r.json()["detail"]
 
 
 # ---------------------------------------------------------------- config peer, locked score, by-sha
 
 def test_config_peer_reachable_cached_and_unreachable(client, bench):
-    assert _ok(client.get("/api/config"))["peer"] == {"url": BENCH, "reachable": True, "contract_version": 1}
+    assert _ok(client.get("/api/config"))["peer"] == {"url": BENCH, "reachable": True, "contract_version": CONTRACT_VERSION}
     _ok(client.get("/api/config"))
     assert bench.calls.count("GET /api/config") == 1  # cached
     bench.down = True

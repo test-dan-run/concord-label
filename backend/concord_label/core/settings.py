@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP = "concord-label"
 VERSION = "0.2.0"
-CONTRACT_VERSION = 1  # CONTRACTS.md
+CONTRACT_VERSION = 2  # CONTRACTS.md
 
 # The Concord Label checkout (fixtures, frontend/dist, .env). In an image the package is installed into
 # site-packages, so CONCORD_HOME says where the app's files are.

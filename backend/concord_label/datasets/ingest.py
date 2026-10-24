@@ -207,15 +207,17 @@ def ingest(session: Session, dataset_id: int, source: Path, progress: Progress |
         for seg in list(f.segments):
             if seg.status == SegmentStatus.confirmed and seg.source_run_id is None:
                 session.delete(seg)
-        meta: dict[str, Any] = {}
-        for rec in m["matched"].get(rel, []):
+        recs = m["matched"].get(rel, [])
+        for rec in recs:
             if rec.start is None:
                 start, end = 0.0, f.duration or 0.0
             else:
                 start, end = rec.start, rec.end
             session.add(Segment(audio_file_id=f.id, start=start, end=end, speaker=rec.speaker, text=rec.text,
                                 status=SegmentStatus.confirmed))
-            meta.update(rec.meta)
+        # Only metadata with the same value on every record describes the file (and is sent to Bench as a
+        # file label, CONTRACTS.md §2.7); a value that changes within the file belongs to its segments.
+        meta = {k: v for k, v in recs[0].meta.items() if all(r.meta.get(k) == v for r in recs[1:])} if recs else {}
         if meta:
             f.meta = {**(f.meta or {}), **meta}
         session.commit()  # short write transactions: the API shares this SQLite file

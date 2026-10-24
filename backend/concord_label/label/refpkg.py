@@ -8,7 +8,8 @@ What goes in follows the old Promote rules (PLAN.md §6.6):
 
 The references file follows what the segments carry: speaker and text -> `refs/segments.seglst.json`,
 text only (or scope `any`) -> `refs/segments.jsonl`, speaker only -> `refs/refs.rttm`. `refs/uids.jsonl`
-carries every segment's uid so flags can come back (§3). `outputs/seg.jsonl` optionally carries the
+carries every segment's uid so flags can come back (§3). `refs/attributes.json` carries each file's
+metadata (from the annotations it was uploaded with) as file labels for Bench to slice by (§2.7). `outputs/seg.jsonl` optionally carries the
 whole-file outputs of the label runs' seg model, with their params written out in full and the catalog
 build key that made them (§2.5).
 
@@ -54,7 +55,7 @@ from ..runs import cache
 from .sync import install_id
 
 FORMAT = "concord-reference-package"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 SCOPES = ("complete", "any")
 AUDIO_CHOICES = ("auto", "always", "never")
 CHUNK_BYTES = 8 * 1024 * 1024
@@ -207,7 +208,8 @@ def preview(session: Session, ds: Dataset, scope: str = "complete") -> dict[str,
     return {"scope": scope, "files": len(sel.files), "segments": sel.segments, "hours": sel.seconds / 3600,
             "left_out": sel.left_out, "label_types": sel.label_types, "refs_file": sel.refs_file,
             "problem": sel.problem, "review": sel.stats, "next_version": next_version(session, ds),
-            "models": label_models(session, ds)}
+            "models": label_models(session, ds),
+            "labels": sorted({k for f in (attributes(sel).get("files") or {}).values() for k in f})}
 
 
 # ---------------------------------------------------------------- writing
@@ -241,6 +243,13 @@ def refs_text(sel: Selection) -> str:
         return "".join(f"SPEAKER {f.stem} 1 {s.start:.3f} {s.end - s.start:.3f} <NA> <NA> {_rttm_token(s.speaker or '')} "
                        "<NA> <NA>\n" for f, s in rows)
     raise RefPkgError(sel.problem or "nothing to write")
+
+
+def attributes(sel: Selection) -> dict[str, Any]:
+    """refs/attributes.json (CONTRACTS.md §2.7): the files' metadata as file labels; empty when no file has
+    any. Label keeps no labels per speaker or per segment, so `speakers` and record `attributes` stay out."""
+    files = {f.rel_path: dict(f.meta) for f, _ in sel.files if f.meta}
+    return {"files": files} if files else {}
 
 
 def write_package(session: Session, ds: Dataset, sel: Selection, out: Path, *, name: str, version: int,
@@ -282,6 +291,7 @@ def write_package(session: Session, ds: Dataset, sel: Selection, out: Path, *, n
         w.writerow([f.rel_path, f.sha256, "" if f.duration is None else round(f.duration, 3), f.orig_sr or ""])
     uids = "".join(json.dumps({"file": f.rel_path, "start": _t(s.start), "end": _t(s.end), "uid": s.uid}) + "\n"
                    for f, ss in sel.files for s in ss)
+    labels = attributes(sel)
     total = sum((f.duration or 0.0) for f in with_audio) or 1.0
     done = 0.0
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
@@ -289,6 +299,8 @@ def write_package(session: Session, ds: Dataset, sel: Selection, out: Path, *, n
         z.writestr(f"{root}/files.csv", buf.getvalue())
         z.writestr(f"{root}/refs/{sel.refs_file}", refs_text(sel))
         z.writestr(f"{root}/refs/uids.jsonl", uids)
+        if labels:
+            z.writestr(f"{root}/refs/attributes.json", json.dumps(labels, indent=1, ensure_ascii=False))
         if outputs:
             z.writestr(f"{root}/outputs/seg.jsonl", "".join(json.dumps(o) + "\n" for o in outputs))
         for f in with_audio:
@@ -297,6 +309,7 @@ def write_package(session: Session, ds: Dataset, sel: Selection, out: Path, *, n
             progress(0.1 + 0.4 * done / total, f"audio: {f.rel_path}")
     tmp.replace(out)
     counts = {**manifest["counts"], "audio_files": n_audio, "outputs": len(outputs), "left_out": sel.left_out,
+              "labelled_files": len(labels.get("files", {})),
               "bytes": out.stat().st_size}
     return {"manifest": manifest, "counts": counts}
 
@@ -395,7 +408,7 @@ def run(session: Session, rec: ReferenceExport, log: Log = print, progress: Prog
     rec.version, rec.path, rec.manifest, rec.counts = version, str(out), res["manifest"], res["counts"]
     c = res["counts"]
     log(f"wrote {out.name}: v{version}, {c['files']} files, {c['segments']} segments, {c['audio_files']} with audio, "
-        f"{c['outputs']} seg outputs, {c['bytes'] / 1e6:.1f} MB")
+        f"{c['outputs']} seg outputs, labels on {c['labelled_files']} files, {c['bytes'] / 1e6:.1f} MB")
     if rec.destination == "push":
         ans = push(out, log, progress)
         rec.bench_import_id = ans.get("id")

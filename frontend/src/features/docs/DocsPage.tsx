@@ -216,7 +216,9 @@ const SECTIONS: Section[] = [
       <p className="m-0">
         On a dataset's page or on Live evaluation, <em>Send to Bench</em> packages the confirmed segments as a reference set for Concord Bench. The
         package holds the speakers and the text in SegLST, JSONL or RTTM format, depending on what the segments contain, and it can also include
-        the audio and model outputs. Each package gets a new version number, so a later send doesn't overwrite an earlier one.
+        the audio and model outputs. Each package gets a new version number, so a later send doesn't overwrite an earlier one. The metadata
+        that came with a file's annotations, e.g., its condition or a NeMo manifest's speaker attributes, goes along as file labels, and
+        Bench breaks its scores down by them. Only metadata with the same value on every annotation of the file counts as the file's.
       </p>
     ),
   },

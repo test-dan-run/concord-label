@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from concord_label.datasets.parsers import parse_file
+from concord_label.datasets.parsers import flatten, parse_file
 from conftest import GEN, truth
 
 REFS = GEN / "refs"
@@ -58,6 +58,20 @@ def test_jsonl_extra_fields_become_metadata():
     recs = records("asr-jsonl")
     d01 = next(r for r in recs if r.stem == "d01")
     assert d01.meta == {"condition": "clean"}
+
+
+def test_nested_objects_are_flattened_and_lists_dropped():
+    assert flatten({"a": 1, "attribute": {"gender": "F", "device": {"mic": "far"}, "tags": [1]}, "e": ""}) == {
+        "a": 1, "attribute.gender": "F", "attribute.device.mic": "far"}
+
+
+def test_an_attributes_object_is_read_without_its_name(tmp_path):
+    """CONTRACTS.md §2.3: a record's labels; they win over a plain field of the same name."""
+    (tmp_path / "refs.jsonl").write_text(json.dumps(
+        {"file": "a.wav", "start": 0, "end": 1, "text": "hi", "noise": "low", "room": "b",
+         "attributes": {"noise": "high", "accent": {"region": "north"}}}) + "\n")
+    meta = parse_file(tmp_path / "refs.jsonl").records[0].meta
+    assert meta == {"noise": "high", "room": "b", "accent.region": "north"}
 
 
 def test_stm_condition_label():

@@ -13,7 +13,7 @@ address (BENCH_URL, LABEL_URL). The test drives both through their HTTP APIs on 
    recordings were made on (the reference segments and pipeline cuts), which is why the references come
    from the fixture set and not from pseudo-labels.
 3. Send to Bench by push: Bench already has every file, so the package carries no audio; staged, accepted,
-   benchmarked: the WER equals the baseline.
+   benchmarked: the WER equals the baseline. The files' `condition` arrives as a file label.
 4. Download: a second package downloaded from Label and uploaded to Bench stages as export version 2 linked
    to version 1; accepted, it is a new dataset and version 1's dataset and score are unchanged.
 5. Links: Label's live evaluation shows Bench's locked score for the model (its WER on version 2); a
@@ -33,6 +33,8 @@ from typing import Any
 
 import httpx
 import pytest
+
+from concord_label.core.settings import CONTRACT_VERSION
 
 pytestmark = pytest.mark.handoff
 
@@ -155,8 +157,8 @@ def apps(request, tmp_path_factory):
         bench, label = App(BENCH, 8600), App(LABEL, 8620)
         for app, peer_url in ((bench, f"http://{LABEL}:8620"), (label, f"http://{BENCH}:8600")):
             cfg = wait_up(app)
-            assert cfg["replay"] is True and cfg["contract_version"] == 1
-            assert cfg["peer"] == {"url": peer_url, "reachable": True, "contract_version": 1}
+            assert cfg["replay"] is True and cfg["contract_version"] == CONTRACT_VERSION
+            assert cfg["peer"] == {"url": peer_url, "reachable": True, "contract_version": CONTRACT_VERSION}
         yield bench, label
     finally:
         if request.session.testsfailed:
@@ -166,17 +168,18 @@ def apps(request, tmp_path_factory):
         teardown(work)
 
 
-def asr_cell(bench: App, model_id: int, dataset_id: int) -> dict[str, Any]:
-    (cell,) = [c for c in bench.get("/benchmarks/asr")["cells"]
-               if c["model_id"] == model_id and c["dataset_id"] == dataset_id]
+def asr_cell(bench: App, catalog_id: str, dataset_id: int) -> dict[str, Any]:
+    table = bench.get("/benchmarks/asr")
+    model_id = next(m["id"] for m in table["models"] if m["catalog_id"] == catalog_id)  # Bench's own id
+    (cell,) = [c for c in table["cells"] if c["model_id"] == model_id and c["dataset_id"] == dataset_id]
     return cell
 
 
-def benchmark(bench: App, model_id: int, dataset_id: int) -> dict[str, Any]:
-    bench.post("/benchmarks/plan", 202, json={"dataset_id": dataset_id, "seg_model_ids": [],
-                                              "asr_model_ids": [model_id], "mode": "stages"})
+def benchmark(bench: App, catalog_id: str, dataset_id: int) -> dict[str, Any]:
+    """Bench plans take catalog model ids (`asr_models`) since the model catalog."""
+    bench.post("/benchmarks/plan", 202, json={"dataset_id": dataset_id, "asr_models": [catalog_id], "mode": "stages"})
     bench.idle()
-    cell = asr_cell(bench, model_id, dataset_id)
+    cell = asr_cell(bench, catalog_id, dataset_id)
     assert cell["status"] == "done" and cell["value"] is not None, cell
     return cell
 
@@ -243,8 +246,12 @@ def test_round_trip_label_to_bench_and_back(apps):
     assert (p["export_version"], p["new_files"], p["previous_version"]) == (1, 0, None), p
     assert p["files"] == base_ds["usable_files"] and p["segments"] == refs and p["audio_included"] == "none"
     assert p["source"]["app"] == "concord-label" and p["source"]["dataset_uid"] == lds["uid"]
+    assert p["labels"] == ["condition"], p  # the files' metadata, as file labels (CONTRACTS.md §2.7)
     v1 = accept(bench, imp["id"])
     assert v1["export_version"] == 1 and v1["id"] != base_ds["id"]
+    base_cond, v1_cond = ({lb["key"]: lb for lb in d["report"]["labels"]}["condition"] for d in (base_ds, v1))
+    counts = ({v["value"]: v["n"] for v in c["values"]} for c in (v1_cond, base_cond))
+    assert v1_cond["level"] == "file" and next(counts).items() <= next(counts).items(), (v1_cond, base_cond)
     pushed = benchmark(bench, model["id"], v1["id"])
     print(f"3. pushed package v1 -> Bench dataset {v1['id']}: {ASR} WER {pushed['value']!r} "
           f"(baseline {baseline['value']!r})")
