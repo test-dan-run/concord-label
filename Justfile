@@ -78,9 +78,11 @@ e2e: build-web
     docker run --rm --network concord-label-e2e --ipc=host -v "$PWD/frontend":/work -w /work \
       -e E2E_BASE_URL=http://concord-label-e2e-api:8621 mcr.microsoft.com/playwright:v1.64.1-noble npx playwright test
 
-# round trip with Concord Bench (SPLIT_PLAN.md §10): the concord-label and concord-bench images (`just build` in
-# each repository) on one Docker network, replaying fixtures/recorded (each app's catalog is its replay stand-in);
-# push and download, versions, locked score, flags
+# round trip with Concord Bench through the Dataset Catalog (contract version 3): the catalog service image (built from
+# the platform's catalog/Dockerfile as aiplatform-catalog:dataset-catalog) and the concord-label and concord-bench
+# images (`just build` in each repository) on one Docker network, with a temporary dataset store, replaying
+# fixtures/recorded; publish, import, versions, locked score, Open in Label, flags. HANDOFF_CATALOG_IMAGE,
+# HANDOFF_BENCH_IMAGE and HANDOFF_LABEL_IMAGE pick other images; PLATFORM_DIR is mounted in the catalog
 e2e-handoff *args:
     uv run pytest -m handoff -o addopts="--import-mode=importlib" -s tests/test_handoff.py {{args}}
 

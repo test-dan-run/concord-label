@@ -44,8 +44,10 @@ tests, and look at the page in a browser, because several bugs in Annotate only 
   fakes. When the platform changes a contract, update the fake until the conformance checks pass, and
   then fix the adapter the test shows is broken. A new adapter needs a fake and an entry in the test.
 - `docs/CONTRACTS.md` describes the formats Label exchanges with Concord Bench, and `contracts/check.py`
-  checks Label's samples of them. Label no longer compares its copy with Bench's, so tell the owner when
-  you change a format that Bench reads.
+  checks Label's samples of them. The file and `contracts/` must stay identical to Bench's `CONTRACTS.md`
+  and `contracts/`, but no check compares them, so copy a change to Bench by hand and tell the owner.
+  Contract version 3 moves datasets through the Dataset Catalog: Label publishes versions and no longer
+  pushes to Bench, and flags, links and scores name a dataset by its `catalog_dataset_id`.
 - Some modules are copies of Concord Bench's code, listed under "Code shared with Concord Bench" below.
   When you fix one of them, note the fix for Bench, and keep the adapters' params identical in both
   apps.
@@ -85,10 +87,17 @@ Bench's copies don't have these recent Label changes yet:
   `datasets/ingest.py` sends originals to the store and holds them, `platform/datasets.py` wraps aicore's
   client, and `runs/jobs.py` runs publishes and the `catalog-dataset` job. Bench makes its own version of
   these changes in its D4 work, so compare the two when both branches merge.
+- Contract version 3 (DATASET_CATALOG_PLAN.md §10): Label keeps `CONTRACT_VERSION` in `core/settings.py`
+  and Bench in `concord_bench/__init__.py`. `core/models.py` keeps the `push` rows of `reference_export`
+  only as history, `runs/jobs.py` builds packages for download only, and `lib/api.ts` lost the push fields
+  of the reference preview. Bench's `lib/peer.ts` links to Label by catalog dataset id.
 
 Bench also owns `fixtures/generated` and `fixtures/recorded`. When Bench makes them again (`just fixtures`
 and `just record`), copy both folders into this repository. `just e2e-handoff` tests the round trip
-between the two apps, with both Docker images on one network.
+between the two apps through the Dataset Catalog, with the catalog service and both apps' Docker images on
+one network. It needs the catalog image (`aiplatform-catalog:dataset-catalog`, built from the platform's
+`catalog/Dockerfile`) and `PLATFORM_DIR`, and `HANDOFF_BENCH_IMAGE` and `HANDOFF_LABEL_IMAGE` pick the app
+images.
 
 ## Writing style for docs
 
@@ -127,3 +136,6 @@ These changes came from the updated design canvas and from requests that followe
 - `just check-contracts` no longer compares `docs/CONTRACTS.md` and `contracts/` with the Bench
   repository. It checks Label's samples, and it checks Label's model adapters against the platform's
   contracts instead.
+- Contract version 3 replaced "Send to Bench" with Publish to Dataset Catalog. Without the catalog, the
+  panel builds a reference package to download. Earlier sends stay in the history. Flags, "Open in
+  Label" and the locked score find a dataset by its `catalog_dataset_id`.
