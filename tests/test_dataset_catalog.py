@@ -326,6 +326,67 @@ def test_new_from_catalog_needs_a_known_version(client, dataset_catalog):
     assert r.status_code == 404 and "no version 1" in r.json()["detail"]
 
 
+# ---------------------------------------------------------------- §12 move-originals
+
+def test_move_originals_uploads_holds_and_renames_the_folder(client, session, tmp_path, data_dir, monkeypatch):
+    from concord_label import cli
+
+    d = annotated(client, tmp_path)
+    originals = sorted(p.name for p in (data_dir / "originals").iterdir())
+    (data_dir / "originals" / "notes.txt").write_text("not audio")
+    assert cli.main(["move-originals"]) == 2  # needs DATASET_STORE
+
+    from aicore.datasets import FakeDatasetCatalog
+
+    from concord_label.core.settings import reset_settings
+    from concord_label.platform import datasets
+
+    dc = FakeDatasetCatalog(tmp_path / "store", app="concord-label")
+    monkeypatch.setenv("DATASET_STORE", str(tmp_path / "store"))
+    reset_settings()
+    datasets.set_dataset_catalog(dc)
+    try:
+        assert cli.main(["move-originals"]) == 0
+        moved = data_dir / "originals.moved"
+        assert sorted(p.name for p in moved.iterdir()) == sorted([*originals, "notes.txt"])  # nothing deleted
+        assert not (data_dir / "originals").exists() or not any((data_dir / "originals").iterdir())
+        shas = {f.sha256 for f in files_of(session, d["id"])}
+        assert dc.held() == shas and all(dc.audio_path(s).is_file() for s in shas)
+        f = files_of(session, d["id"])[0]
+        assert paths.original(f.sha256, f.ext) == dc.audio_path(f.sha256)
+        # a second run, after Sync brought one more file, adds it to originals.moved/
+        (data_dir / "originals").mkdir(exist_ok=True)
+        extra = wav(0.5)
+        import hashlib
+
+        sha = hashlib.sha256(extra).hexdigest()
+        (data_dir / "originals" / f"{sha}.wav").write_bytes(extra)
+        assert cli.main(["move-originals"]) == 0
+        assert (moved / f"{sha}.wav").is_file() and sha in dc.held()
+    finally:
+        datasets.set_dataset_catalog(None)
+
+
+def test_move_originals_keeps_the_folder_when_the_store_is_not_mounted_here(client, tmp_path, data_dir,
+                                                                             monkeypatch):
+    from aicore.datasets import FakeDatasetCatalog
+
+    from concord_label import cli
+    from concord_label.core.settings import reset_settings
+    from concord_label.platform import datasets
+
+    annotated(client, tmp_path)
+    dc = FakeDatasetCatalog(tmp_path / "elsewhere", app="concord-label")  # not where DATASET_STORE points
+    monkeypatch.setenv("DATASET_STORE", str(tmp_path / "store"))
+    reset_settings()
+    datasets.set_dataset_catalog(dc)
+    try:
+        assert cli.main(["move-originals"]) == 1
+        assert len(list((data_dir / "originals").iterdir())) == 7 and not (data_dir / "originals.moved").exists()
+    finally:
+        datasets.set_dataset_catalog(None)
+
+
 @pytest.fixture(autouse=True)
 def _no_leftover_catalog():
     yield

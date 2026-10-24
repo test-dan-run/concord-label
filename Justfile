@@ -39,6 +39,11 @@ worker:
 migrate:
     {{py}} -m concord_label.cli migrate
 
+# move data/originals/ into the Dataset Catalog's store (DATASET_STORE): upload and hold each original, then
+# rename the folder to data/originals.moved/ (never deleted; remove it yourself when satisfied)
+move-originals:
+    {{py}} -m concord_label.cli move-originals
+
 # new Alembic revision from model changes: just revision "add foo"
 revision message:
     {{py}} -m concord_label.cli revision "{{message}}"
