@@ -174,6 +174,8 @@ export interface Model {
   usable_as: string | null;
   not_usable: string | null;
   stages: string[];
+  /** Models page groups, from every task the catalog's verifier found (also ones Label does not run). */
+  groups: ("asr" | "seg" | "enhance")[];
   cold_start_s: number | null;
   cold_start_measured: boolean;
   gpu: { fraction?: number; gb?: number } | null;

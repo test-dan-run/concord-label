@@ -45,6 +45,10 @@ log = logging.getLogger("concord_label.catalog")
 APP = "label"  # this app's name in the catalog (leases `label:job-<id>`, the output index, POST /api/apps)
 RECORDS_TTL_S = 5.0
 TASKS = ("asr", "vad", "diar", "kws")
+# How the Models page groups the catalog's models, by the tasks its verifier found (Label runs the first
+# two; speech enhancement is listed so the catalog's models are all in sight).
+GROUPS = {"asr": ("asr",), "seg": ("vad", "diar"), "enhance": ("enhance",)}
+TASK_NAMES = {"enhance": "speech enhancement", "itn": "inverse text normalisation"}
 USABLE = ("asr", "chat-audio", "segmenter")
 
 Log = Callable[[str], None]
@@ -226,10 +230,23 @@ def capabilities(rec: dict[str, Any]) -> tuple[list[str], str | None, str | None
         return [], None, "verification failed (see the catalog's report)"
     tasks = [t for t in caps.get("tasks") or [] if t in TASKS]
     if not tasks:
-        return [], None, f"verification {status}" if status in ("pending", "running") else "no speech task detected"
+        if status in ("pending", "running"):
+            return [], None, f"verification {status}"
+        other = [TASK_NAMES.get(t, t) for t in caps.get("tasks") or []]
+        return [], None, f"{', '.join(other)}: not a task Label runs" if other else "no speech task detected"
     if usable_as(rec) not in USABLE:
         return [], None, f"{rec.get('contract')} / {rec.get('api')} is not a protocol Label calls"
     return tasks, caps.get("timing_level"), None
+
+
+def groups(rec: dict[str, Any]) -> list[str]:
+    """The Models page groups a record belongs in (`GROUPS` keys), from every task its verifier found, also
+    ones Label does not run; [] before verification, when it failed, or for tasks no group holds."""
+    caps = rec.get("capabilities") or {}
+    if caps.get("status") == "failed":
+        return []
+    found = set(caps.get("tasks") or [])
+    return [g for g, tasks in GROUPS.items() if found & set(tasks)]
 
 
 def sync_model(session: Session, rec: dict[str, Any]) -> Model:

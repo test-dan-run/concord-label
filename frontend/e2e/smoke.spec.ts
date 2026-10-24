@@ -49,6 +49,13 @@ test("datasets, upload, models and jobs load", async ({ page }) => {
   // cold start and build; registering moved to the catalog's own UI, so Add model and Contract are gone.
   await page.goto("/models");
   await expect(page.getByText("faster-whisper-large-v3 · openai / audio.transcriptions")).toBeVisible();
+  // grouped by what the catalog's verifier found: ASR, VAD / diarisation, speech enhancement (and the rest)
+  const group = (name: string) => page.getByRole("region", { name: new RegExp(`^${name}`) });
+  await expect(group("ASR").getByRole("link", { name: "faster-whisper-large-v3" })).toBeVisible();
+  await expect(group("VAD / Diarisation").getByRole("link", { name: "pyannote-diarization" })).toBeVisible();
+  await expect(group("VAD / Diarisation").getByRole("link", { name: "silero-vad" })).toBeVisible();
+  await expect(group("ASR").getByRole("link", { name: "pyannote-diarization" })).toHaveCount(0);
+  await expect(group("Speech enhancement")).toContainText("No speech enhancement models in the catalog.");
   await expect(page.getByRole("link", { name: "Open the model catalog ↗" })).toBeVisible();
   await expect(page.getByRole("link", { name: /Add model/ })).toHaveCount(0);
   for (const path of ["/models/add", "/contract"]) {

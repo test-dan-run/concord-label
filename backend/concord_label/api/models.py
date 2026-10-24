@@ -1,7 +1,8 @@
 """Models, read from the model catalog (platform/catalog/README.md).
 
 Registering, verifying and serving models is the catalog's job, in its own UI (`CATALOG_UI_URL`). Label lists
-the catalog's registered models with their state, capabilities, cold start and build key, and keeps a row
+the catalog's registered models with their state, capabilities, cold start and build key (and the groups the
+Models page shows them in: ASR, VAD / diarisation, speech enhancement), and keeps a row
 for each model it has used (platform/catalog.py). While the catalog does not answer, the list falls back to
 those rows, marked as not reachable.
 """
@@ -49,6 +50,7 @@ def model_json(rec: dict[str, Any], row: Model | None, runs: dict[int, int]) -> 
             "leased_by": rec.get("leased_by") or [], "build_key": rec.get("build_key"),
             "capabilities": tasks, "timing_level": timing, "capabilities_status": caps.get("status"),
             "usable_as": catalog.usable_as(rec), "not_usable": why, "stages": stages,
+            "groups": catalog.groups(rec),
             "cold_start_s": rec.get("cold_start_s"), "cold_start_measured": bool(rec.get("cold_start_measured")),
             "gpu": rec.get("gpu"), "runs": runs.get(row.id, 0) if row else 0,
             "catalog_url": f"{ui}/models/{rec['id']}"}

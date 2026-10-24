@@ -60,6 +60,9 @@ def test_models_are_listed_from_the_catalog(client, fake_catalog, monkeypatch):
     fake_catalog.add_model(rec("qwen3-8b", [], contract="openai", api="chat.completions", usable="chat-audio",
                                status="failed"))
     fake_catalog.add_model(rec("bge-m3", [], api="embeddings", usable=None, status="verified"))
+    fake_catalog.add_model(rec("sepformer", ["enhance"], contract="oip-v2", api="infer", usable="enhancer"))
+    fake_catalog.add_model(rec("sortformer-asr", ["asr", "diar"], contract="oip-v2", api="infer", usable="segmenter"))
+    fake_catalog.add_model({**rec("parakeet", []), "capabilities": None})  # not verified yet
     out = _ok(client.get("/api/models"))
     assert out["catalog"]["reachable"] and out["catalog"]["ui_url"] == "http://catalog.example:8700/ui"
     by = {m["catalog_id"]: m for m in out["models"]}
@@ -70,7 +73,13 @@ def test_models_are_listed_from_the_catalog(client, fake_catalog, monkeypatch):
     assert by["silero-vad"]["stages"] == ["seg"] and by["silero-vad"]["not_usable"] is None
     assert by["qwen3-8b"]["stages"] == [] and "failed" in by["qwen3-8b"]["not_usable"]
     assert by["bge-m3"]["stages"] == []
-    assert [m["catalog_id"] for m in out["models"]][:2] == ["silero-vad", "whisper-large-v3"]  # usable first
+    # groups come from every task the verifier found: enhancers too, a joint model in both stage groups,
+    # none for a failed, unverified or task-less record
+    assert {k: by[k]["groups"] for k in by} == {
+        "whisper-large-v3": ["asr"], "silero-vad": ["seg"], "qwen3-8b": [], "bge-m3": [], "sepformer": ["enhance"],
+        "sortformer-asr": ["asr", "seg"], "parakeet": []}
+    assert by["sepformer"]["not_usable"] == "speech enhancement: not a task Label runs"
+    assert [m["catalog_id"] for m in out["models"]][:3] == ["silero-vad", "sortformer-asr", "whisper-large-v3"]
     # no registration endpoints: registering happens in the catalog's own UI
     assert client.post("/api/models", json={"registry_name": "x"}).status_code in (404, 405)
     for path in ("/api/registry", "/api/registry/status", "/api/models/1"):
