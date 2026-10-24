@@ -4,13 +4,13 @@ Concord Label is a web app for labelling speech audio, with a FastAPI backend in
 and a React frontend in `frontend/src`. [README.md](README.md) describes the app's features for its
 users, and it leaves out the developer details that this file covers.
 
-The other docs are in `Docs/`, and code comments cite them by file name, e.g., "CONTRACTS.md §2":
+The other docs are in `docs/`, and code comments cite them by file name, e.g., "CONTRACTS.md §2":
 
-- [Docs/HANDOFF.md](Docs/HANDOFF.md) describes the behaviour the owner asked for. The design canvas it
+- [docs/HANDOFF.md](docs/HANDOFF.md) describes the behaviour the owner asked for. The design canvas it
   links shows every screen, and where the canvas and HANDOFF.md disagree, HANDOFF.md wins.
-- [Docs/CONTRACTS.md](Docs/CONTRACTS.md) holds the formats and endpoints that Concord Label and Concord
+- [docs/CONTRACTS.md](docs/CONTRACTS.md) holds the formats and endpoints that Concord Label and Concord
   Bench agree on.
-- [Docs/PLAN.md](Docs/PLAN.md) and [Docs/SPLIT_PLAN.md](Docs/SPLIT_PLAN.md) are the original build plans,
+- [docs/PLAN.md](docs/PLAN.md) and [docs/SPLIT_PLAN.md](docs/SPLIT_PLAN.md) are the original build plans,
   kept for history.
 
 ## Commands
@@ -37,8 +37,8 @@ tests, and look at the page in a browser, because several bugs in Annotate only 
   next `label_000N` id (`db.next_revision_id()`). Update the pinned revision ids in
   `tests/test_db_owner.py`, and `tests/test_migrations.py` checks that the head schema matches the ORM
   models.
-- `Docs/CONTRACTS.md` and `contracts/` must stay identical to the copies in the Concord Bench repository.
-  `contracts/check.py` finds the contracts doc in `Docs/` or at the repository root, in either app.
+- `docs/CONTRACTS.md` and `contracts/` must stay identical to the copies in the Concord Bench repository.
+  `contracts/check.py` finds the contracts doc in `docs/` or at the repository root, in either app.
   When you change them, the same change has to land in Bench.
 - Some modules are copies of Concord Bench's code, listed under "Code shared with Concord Bench" below.
   When you fix one of them, note the fix for Bench, and keep the adapters' params identical in both
@@ -75,7 +75,7 @@ Bench's copies don't have these recent Label changes yet:
   listeners attach even when the element renders after the page loads its data.
 - `Timeline`: the optional `selection` and `onSelection` props, and the exported `LABEL_W`.
 - Models page: the groups by capability.
-- `contracts/check.py`: it finds the contracts doc in `Docs/` as well as at the repository root. Until
+- `contracts/check.py`: it finds the contracts doc in `docs/` as well as at the repository root. Until
   Bench copies the new file, `just check-contracts` reports that `contracts/check.py` differs.
 
 Bench also owns `fixtures/generated` and `fixtures/recorded`. When Bench makes them again (`just fixtures`
@@ -114,5 +114,5 @@ These changes came from the updated design canvas and from requests that followe
   diarisation, and speech enhancement.
 - The Docs page and README.md were rewritten in the plain style above, and README.md now covers only the
   app's features and its known limitations.
-- CONTRACTS.md, HANDOFF.md, PLAN.md and SPLIT_PLAN.md moved into `Docs/`. AGENTS.md stays at the
+- CONTRACTS.md, HANDOFF.md, PLAN.md and SPLIT_PLAN.md moved into `docs/`. AGENTS.md stays at the
   repository root, where agent tools look for it.

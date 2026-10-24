@@ -1,5 +1,5 @@
 """Check the contract samples, and compare this repository's contracts with the other app's (CONTRACTS.md, at
-the repository root or in Docs/).
+the repository root or in docs/).
 
     python contracts/check.py [--peer PATH]
 
@@ -177,8 +177,8 @@ def check_samples() -> list[str]:
 
 
 def contracts_doc(root: Path) -> Path:
-    """A repository's CONTRACTS.md: in Docs/ where the repository keeps its docs there, else at the root."""
-    docs = root / "Docs" / "CONTRACTS.md"
+    """A repository's CONTRACTS.md: in docs/ where the repository keeps its docs there, else at the root."""
+    docs = root / "docs" / "CONTRACTS.md"
     return docs if docs.is_file() else root / "CONTRACTS.md"
 
 
