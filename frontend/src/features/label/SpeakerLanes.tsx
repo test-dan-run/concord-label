@@ -2,7 +2,8 @@
 // Drag a bar to move it (onto another lane to give it to that speaker), drag a grip to trim it (or focus
 // the grip and use the arrow keys), drag across empty space to draw a new segment. A change is committed
 // once, when the pointer is released; until the commit settles the bar stays where it was dropped.
-// Lines up with the Timeline above it (same lane-name column).
+// Lines up with the Timeline above it (same lane-name column) and shows the same window of the file
+// (`view`; zoomed in, segments outside it are not drawn).
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import * as I from "../../components/icons";
@@ -10,6 +11,7 @@ import { LABEL_W } from "../../components/Timeline";
 import { cx } from "../../components/ui";
 import { clock } from "../../lib/format";
 import { drawn, laneAt, moved, NUDGE, NUDGE_SHIFT, nudged, timeAt, trimmed, type Span } from "./laneDrag";
+import type { Window } from "./zoom";
 
 export interface Lane {
   key: string;
@@ -38,11 +40,17 @@ type Drag =
 const HINT = "Drag a segment to move it or onto another speaker · drag its edges to trim · drag across empty space to add one";
 const STRIPES = "repeating-linear-gradient(45deg, rgba(255,255,255,.18) 0 3px, transparent 3px 7px)";
 const NUDGE_COMMIT_MS = 500;
-const pct = (t: number, duration: number) => `${(100 * t) / Math.max(1e-9, duration)}%`;
+const pct = (t: number, view: Window) => `${(100 * (t - view.t0)) / Math.max(1e-9, view.t1 - view.t0)}%`;
+const len = (d: number, view: Window) => `${(100 * d) / Math.max(1e-9, view.t1 - view.t0)}%`;
+const inView = (s: Span, view: Window) => s.end >= view.t0 && s.start <= view.t1;
 const same = (a: LaneEdit, b: LaneEdit) => a.start === b.start && a.end === b.end && a.speaker === b.speaker;
 
 export function SpeakerLanes(props: {
   duration: number;
+  /** The part of the file shown, as on the Timeline above. */
+  view: Window;
+  /** The stretch selected on the waveform, shown across the lanes so you see which segments it cuts. */
+  selection?: Window | null;
   lanes: Lane[];
   segs: LaneSeg[];
   currentId: number | null;
@@ -58,7 +66,7 @@ export function SpeakerLanes(props: {
   onCommit: (id: number, edit: LaneEdit) => Promise<unknown>;
   onCreate: (edit: LaneEdit) => void;
 }) {
-  const { duration, lanes, segs, currentId, time, overlaps, flags, note, canAdd, onAddSpeaker } = props;
+  const { duration, view, selection, lanes, segs, currentId, time, overlaps, flags, note, canAdd, onAddSpeaker } = props;
   const latest = useRef(props);
   latest.current = props;
   const laneEls = useRef(new Map<string, HTMLDivElement>());
@@ -131,7 +139,7 @@ export function SpeakerLanes(props: {
     if (!d.moved && Math.abs(ev.clientX - d.x0) < 3 && (d.kind === "create" || Math.abs(ev.clientY - d.y0) < 3)) return;
     d.moved = true;
     const { duration: dur, segs: all } = latest.current;
-    const t = timeAt(ev.clientX, d.rect, dur);
+    const t = timeAt(ev.clientX, d.rect, latest.current.view);
     if (d.kind === "create") {
       d.span = drawn(d.a, t);
       setDraft({ lane: d.lane.key, span: d.span });
@@ -156,7 +164,7 @@ export function SpeakerLanes(props: {
     const d = end(false);
     if (!d) return;
     if (!d.moved) {
-      const t = timeAt(ev.clientX, d.rect, latest.current.duration);
+      const t = timeAt(ev.clientX, d.rect, latest.current.view);
       setLive(null);
       if (d.kind === "create") latest.current.onSeek(t);
       else if (d.kind === "move") latest.current.onSeek(t, d.id);
@@ -180,7 +188,7 @@ export function SpeakerLanes(props: {
     const lane = (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-lane]");
     if (!lane) return;
     const rect = lane.getBoundingClientRect();
-    const t = timeAt(e.clientX, rect, duration);
+    const t = timeAt(e.clientX, rect, view);
     begin(e, { kind, id: s.id, offset: t - s.start, rect, rows: rows(), x0: e.clientX, y0: e.clientY, moved: false, edit: null });
     props.onSelect(s.id);
   };
@@ -188,7 +196,7 @@ export function SpeakerLanes(props: {
   const laneDown = (e: ReactPointerEvent<HTMLDivElement>, lane: Lane) => {
     if (e.button !== 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    begin(e, { kind: "create", lane, a: timeAt(e.clientX, rect, duration), rect, x0: e.clientX, moved: false, span: null });
+    begin(e, { kind: "create", lane, a: timeAt(e.clientX, rect, view), rect, x0: e.clientX, moved: false, span: null });
   };
 
   const gripKey = (e: React.KeyboardEvent, s: LaneSeg, edge: "start" | "end") => {
@@ -215,8 +223,11 @@ export function SpeakerLanes(props: {
   };
 
   const shown = segs.map((s) => (live && live.id === s.id ? { ...s, ...live.edit } : s));
-  const playX = time >= 0 && time <= duration ? pct(time, duration) : null;
+  const playX = time >= view.t0 && time <= view.t1 ? pct(time, view) : null;
   const playhead = playX && <span className="absolute top-0 bottom-0 w-px bg-focus pointer-events-none z-[2]" style={{ left: playX }} />;
+  const band = selection && inView({ start: selection.t0, end: selection.t1 }, view) && (
+    <span className="absolute top-0 bottom-0 bg-fg/10 border-x border-fg/40 pointer-events-none z-[2]" style={{ left: pct(selection.t0, view), width: len(selection.t1 - selection.t0, view) }} />
+  );
 
   return (
     <div className="flex flex-col gap-1 mt-1.5 select-none">
@@ -225,7 +236,8 @@ export function SpeakerLanes(props: {
         <div className="flex-1 text-right text-[11px] text-subtle hidden md:block">{HINT}</div>
       </div>
       {lanes.map((lane) => {
-        const bars = shown.filter((s) => s.speaker === lane.speaker);
+        const all = shown.filter((s) => s.speaker === lane.speaker);
+        const bars = all.filter((s) => inView(s, view));
         const d = draft && draft.lane === lane.key ? draft.span : null;
         return (
           <div key={lane.key} className="flex items-center">
@@ -241,10 +253,10 @@ export function SpeakerLanes(props: {
                 else laneEls.current.delete(lane.key);
               }}
               onPointerDown={(e) => laneDown(e, lane)}
-              className="relative flex-1 h-[22px] bg-track rounded-[3px] cursor-crosshair touch-none"
+              className="relative flex-1 h-[22px] bg-track rounded-[3px] cursor-crosshair touch-none overflow-clip"
             >
-              {overlaps.map((o, k) => (
-                <span key={`o${k}`} className="hatch absolute top-0 bottom-0 pointer-events-none" style={{ left: pct(o.start, duration), width: pct(o.end - o.start, duration) }} />
+              {overlaps.filter((o) => inView(o, view)).map((o, k) => (
+                <span key={`o${k}`} className="hatch absolute top-0 bottom-0 pointer-events-none" style={{ left: pct(o.start, view), width: len(o.end - o.start, view) }} />
               ))}
               {bars.map((s) => {
                 const sel = s.id === currentId;
@@ -255,8 +267,8 @@ export function SpeakerLanes(props: {
                     onPointerDown={(e) => barDown(e, s, "move")}
                     className={cx("group absolute top-0.5 bottom-0.5 rounded-sm cursor-grab touch-none", sel && "z-[1]")}
                     style={{
-                      left: pct(s.start, duration),
-                      width: `max(2px, ${pct(s.end - s.start, duration)})`,
+                      left: pct(s.start, view),
+                      width: `max(2px, ${len(s.end - s.start, view)})`,
                       background: lane.color,
                       backgroundImage: s.created ? STRIPES : undefined,
                       boxShadow: sel ? "0 0 0 2px var(--color-fg)" : undefined,
@@ -285,15 +297,16 @@ export function SpeakerLanes(props: {
               {d && (
                 <span
                   className="absolute top-0.5 bottom-0.5 rounded-sm pointer-events-none border border-dashed"
-                  style={{ left: pct(d.start, duration), width: pct(d.end - d.start, duration), borderColor: lane.color, background: `${lane.color}40` }}
+                  style={{ left: pct(d.start, view), width: len(d.end - d.start, view), borderColor: lane.color, background: `${lane.color}40` }}
                 />
               )}
-              {bars.length === 0 && !d && (
+              {all.length === 0 && !d && (
                 <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-subtle pointer-events-none whitespace-nowrap">
                   Drag here to add a segment for {lane.label}
                   {lane.hotkey ? `, or press ${lane.hotkey} on a selected one` : ""}.
                 </span>
               )}
+              {band}
               {playhead}
             </div>
           </div>
@@ -321,10 +334,11 @@ export function SpeakerLanes(props: {
           <span className="size-2 rounded-full bg-warn" />
           Flags
         </div>
-        <div className="relative flex-1 h-3.5 bg-track rounded-sm">
-          {flags.map((f, k) => (
-            <span key={k} className="absolute top-0 bottom-0 rounded-sm bg-warn" style={{ left: pct(f.start, duration), width: `max(2px, ${pct(f.end - f.start, duration)})` }} />
+        <div className="relative flex-1 h-3.5 bg-track rounded-sm overflow-clip">
+          {flags.filter((f) => inView(f, view)).map((f, k) => (
+            <span key={k} className="absolute top-0 bottom-0 rounded-sm bg-warn" style={{ left: pct(f.start, view), width: `max(2px, ${len(f.end - f.start, view)})` }} />
           ))}
+          {band}
           {playhead}
         </div>
       </div>

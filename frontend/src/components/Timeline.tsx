@@ -1,5 +1,6 @@
 // Waveform (server-computed peaks on canvas, never recoloured per speaker) + per-speaker lanes,
-// an error lane and the overlap hatch in SVG, a playhead, and click-to-seek.
+// an error lane and the overlap hatch in SVG, a playhead, and click-to-seek. With `onSelection`, a drag
+// across the waveform selects a stretch of time (a click still seeks, and clears the selection).
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -54,6 +55,8 @@ export function Timeline({
   markers,
   time,
   onSeek,
+  selection,
+  onSelection,
   showWave = true,
 }: {
   fileId: number;
@@ -65,6 +68,10 @@ export function Timeline({
   markers?: Marker[];
   time?: number;
   onSeek?: (t: number) => void;
+  /** The stretch selected on the waveform (shown highlighted). */
+  selection?: { t0: number; t1: number } | null;
+  /** Makes the waveform selectable by dragging; null when a click clears the selection. */
+  onSelection?: (s: { t0: number; t1: number } | null) => void;
   showWave?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -117,6 +124,47 @@ export function Timeline({
     onSeek(Math.max(t0, Math.min(t1, xToT(e.clientX - rect.left, view))));
   };
 
+  // Drag-to-select on the waveform: the pointer is captured, so the drag may leave the waveform.
+  const pull = useRef<{ a: number; x0: number; moved: boolean } | null>(null);
+  const [draft, setDraft] = useState<[number, number] | null>(null);
+  const timeAt = (e: React.PointerEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return Math.max(t0, Math.min(t1, xToT(e.clientX - rect.left, view)));
+  };
+  const select = onSelection && {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      pull.current = { a: timeAt(e), x0: e.clientX, moved: false };
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const p = pull.current;
+      if (!p) return;
+      if (!p.moved && Math.abs(e.clientX - p.x0) < 3) return;
+      p.moved = true;
+      setDraft([p.a, timeAt(e)]);
+    },
+    onPointerUp: (e: React.PointerEvent) => {
+      const p = pull.current;
+      pull.current = null;
+      setDraft(null);
+      if (!p) return;
+      if (!p.moved) {
+        onSelection(null);
+        seek(e);
+        return;
+      }
+      const [a, b] = [Math.min(p.a, timeAt(e)), Math.max(p.a, timeAt(e))];
+      onSelection(b - a >= 0.05 ? { t0: a, t1: b } : null);
+    },
+    onPointerCancel: () => {
+      pull.current = null;
+      setDraft(null);
+    },
+  };
+  const picked = draft ? [Math.min(...draft), Math.max(...draft)] as [number, number] : selection ? [selection.t0, selection.t1] as [number, number] : null;
+  const pickedRect = picked ? clipSegments([picked], view)[0] : null;
+
   let y = 0;
   return (
     <div ref={box} className="w-full select-none">
@@ -140,7 +188,13 @@ export function Timeline({
           <div style={{ width: LABEL_W }} className="shrink-0 text-[10px] text-subtle uppercase tracking-wider">
             Waveform
           </div>
-          <div className="relative cursor-pointer bg-canvas rounded" style={{ width, height: WAVE_H }} onClick={seek} role="presentation">
+          <div
+            className={`relative bg-canvas rounded touch-none ${select ? "cursor-text" : "cursor-pointer"}`}
+            style={{ width, height: WAVE_H }}
+            onClick={select ? undefined : seek}
+            {...select}
+            role="presentation"
+          >
             <canvas ref={canvas} style={{ width, height: WAVE_H }} className="block" />
             {(markers ?? []).map((m, i) => {
               const r = clipSegments([[m.t0, m.t1]], view)[0];
@@ -154,6 +208,9 @@ export function Timeline({
                 </div>
               ) : null;
             })}
+            {pickedRect && (
+              <div className="absolute top-0 bottom-0 pointer-events-none bg-fg/15 border-x border-fg/70" style={{ left: pickedRect.x, width: pickedRect.w }} />
+            )}
             {playX !== null && <div className="absolute top-0 bottom-0 w-px bg-focus pointer-events-none" style={{ left: playX }} />}
           </div>
         </div>

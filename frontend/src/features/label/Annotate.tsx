@@ -20,6 +20,8 @@ import { Button, Chip, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner 
 import { Crumbs, DatasetChooser, LabelTabs } from "./common";
 import { MAX_SPEAKERS, nextSpeakerName } from "./laneDrag";
 import { SpeakerLanes, type Lane, type LaneEdit } from "./SpeakerLanes";
+import { Overview, useWheelZoom, ZoomBar } from "./TimelineZoom";
+import { fit, follow, reveal, STEP, zoomAt, type Window } from "./zoom";
 
 type Show = "all" | SegStatus;
 const SHOW: { value: Show; label: string }[] = [
@@ -137,9 +139,14 @@ function useLabelMutations(fileId: number, datasetId: number) {
   return { patch, move, bulk, merge, split, create, remove, confirmAuto, error };
 }
 
+const NOT_TEXT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "file", "color"]);
+
+/** Whether a key goes to a field that takes text (a checkbox or a button does not: the shortcuts apply). */
 function isTyping(e: KeyboardEvent): boolean {
   const t = e.target as HTMLElement | null;
-  return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+  if (!t) return false;
+  if (t.tagName === "INPUT") return !NOT_TEXT.has((t as HTMLInputElement).type);
+  return t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable;
 }
 
 function Annotator({
@@ -183,6 +190,28 @@ function Annotator({
   const colors = useMemo(() => speakerColors(speakers), [speakers]);
   const high = v?.thresholds.high ?? 0.85;
   const current = segs.find((s) => s.id === cur) ?? null;
+  // The part of the file the timeline shows (zoom): the whole file until zoomed; follows playback and
+  // the selected segment.
+  const duration = v?.file.duration || 1;
+  const [zoomed, setZoomed] = useState<Window | null>(null);
+  const view = zoomed ?? fit(duration);
+  const setView = useCallback((f: (w: Window) => Window) => setZoomed((w) => f(w ?? fit(duration))), [duration]);
+  const zoomAround = useCallback(
+    (factor: number) => setView((w) => zoomAt(w, factor, ctl.time >= w.t0 && ctl.time <= w.t1 ? ctl.time : (w.t0 + w.t1) / 2, duration)),
+    [setView, ctl.time, duration],
+  );
+  const timelineBox = useRef<HTMLDivElement>(null);
+  // A stretch pulled out on the waveform to listen to, across speakers; Space plays it while it is there.
+  const [range, setRange] = useState<Window | null>(null);
+  useWheelZoom(timelineBox, !!v, duration, setView);
+  useEffect(() => {
+    if (ctl.playing) setView((w) => follow(w, ctl.time, duration));
+  }, [ctl.playing, ctl.time, duration, setView]);
+  useEffect(() => {
+    const s = segs.find((x) => x.id === cur);
+    if (s) setView((w) => reveal(w, s.start, s.end, duration));
+    // only when the selection changes, so a segment dragged out of sight does not pull the view after it
+  }, [cur]);
   const active = useQuery({ queryKey: ["lexicons-active"], queryFn: () => api.get<{ lexicons: ActiveLexicon[] }>("/lexicons/active") });
   const lexicons = useMemo(() => active.data?.lexicons ?? [], [active.data]);
   const matcher = useMemo(() => new Matcher(lexicons), [lexicons]);
@@ -251,8 +280,9 @@ function Annotator({
       if (isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === " ") {
         e.preventDefault();
+        const span = range ? { start: range.t0, end: range.t1 } : current;
         if (ctl.playing) ctl.pause();
-        else if (current) ctl.play(ctl.time > current.start && ctl.time < current.end - 0.05 ? ctl.time : current.start, current.end);
+        else if (span) ctl.play(ctl.time > span.start && ctl.time < span.end - 0.05 ? ctl.time : span.start, span.end);
         else ctl.play();
       } else if (e.key === "Tab") {
         e.preventDefault();
@@ -268,8 +298,15 @@ function Annotator({
       } else if (e.key === "Enter") {
         e.preventDefault();
         confirm();
+      } else if (e.key === "=" || e.key === "+") {
+        zoomAround(STEP);
+      } else if (e.key === "-" || e.key === "_") {
+        zoomAround(1 / STEP);
+      } else if (e.key === "0") {
+        setView(() => fit(duration));
       } else if (e.key === "Escape") {
         setSel(new Set());
+        setRange(null);
       } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         const k = visible.findIndex((s) => s.id === cur);
@@ -279,7 +316,7 @@ function Annotator({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ctl, current, segs, visible, cur, high, targets, splitAtPlayhead, mergeSel, confirm, speakers, hints, hasHint, applyHint]);
+  }, [ctl, current, segs, visible, cur, high, targets, splitAtPlayhead, mergeSel, confirm, speakers, hints, hasHint, applyHint, zoomAround, setView, duration, range]);
 
   if (q.isLoading || !v) return <Spinner />;
 
@@ -332,12 +369,24 @@ function Annotator({
       <ErrorNote error={m.error} />
       <Panel>
         <AudioPlayer ctl={ctl} start={0} end={v.file.duration} label="Play file" />
+        <div className="flex flex-wrap items-center gap-3">
+          <RangeBar range={range} ctl={ctl} onClear={() => setRange(null)} />
+          <div className="ml-auto">
+            <ZoomBar view={view} duration={duration} anchor={ctl.time >= view.t0 && ctl.time <= view.t1 ? ctl.time : (view.t0 + view.t1) / 2} onView={(w) => setView(() => w)} />
+          </div>
+        </div>
+        <div ref={timelineBox}>
         <Timeline
           fileId={fileId}
-          t0={0}
-          t1={v.file.duration || 1}
+          t0={view.t0}
+          t1={view.t1}
           time={ctl.time}
           markers={current ? [{ t0: current.start, t1: current.end, color: C.focus }] : []}
+          selection={range}
+          onSelection={(r) => {
+            setRange(r);
+            if (r) ctl.play(r.t0, r.t1);
+          }}
           onSeek={(t) => {
             ctl.seek(t);
             const hit = segs.find((s) => s.start <= t && t <= s.end && s.status !== "rejected");
@@ -345,7 +394,9 @@ function Annotator({
           }}
         />
         <SpeakerLanes
-          duration={v.file.duration || 1}
+          duration={duration}
+          view={view}
+          selection={range}
           lanes={lanes}
           segs={live}
           currentId={cur}
@@ -364,6 +415,8 @@ function Annotator({
           onCommit={(id, edit) => m.move.mutateAsync({ id, ...edit })}
           onCreate={(edit) => m.create.mutate(edit, { onSuccess: (s) => setCur(s.id) })}
         />
+        <Overview view={view} duration={duration} time={ctl.time} onView={(w) => setView(() => w)} />
+        </div>
       </Panel>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
         <Panel
@@ -468,6 +521,24 @@ function Annotator({
         />
       </div>
     </>
+  );
+}
+
+/** Above the timeline: the stretch pulled out on the waveform, to play again or clear; a hint without one. */
+function RangeBar({ range, ctl, onClear }: { range: Window | null; ctl: ReturnType<typeof useAudio>; onClear: () => void }) {
+  if (!range) return <span className="text-xs text-subtle">Drag across the waveform to play a stretch of the file.</span>;
+  const inside = ctl.time >= range.t0 && ctl.time < range.t1 - 0.05;
+  return (
+    <span role="group" aria-label="Waveform selection" className="flex flex-wrap items-center gap-2 text-xs text-muted">
+      Selection
+      <span className="num text-fg">{clock(range.t0)} – {clock(range.t1)} · {(range.t1 - range.t0).toFixed(2)} s</span>
+      <Button size="sm" aria-label={ctl.playing && inside ? "Pause selection" : "Play selection"} onClick={() => (ctl.playing && inside ? ctl.pause() : ctl.play(inside ? ctl.time : range.t0, range.t1))}>
+        {ctl.playing && inside ? <I.Pause size={12} /> : <I.Play size={12} />}
+      </Button>
+      <Button size="sm" variant="ghost" aria-label="Clear selection" onClick={onClear}>
+        <I.X size={12} />
+      </Button>
+    </span>
   );
 }
 

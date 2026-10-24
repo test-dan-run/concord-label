@@ -153,6 +153,130 @@ test("annotate: speaker lanes move, trim, draw and add a speaker", async ({ page
   expect(errors).toEqual([]);
 });
 
+test("annotate: Space pauses what it plays, from a play button or a row checkbox too", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 5 });
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const audio = page.locator("audio").first();
+  const paused = () => audio.evaluate((a: HTMLAudioElement) => a.paused);
+  // Space pauses a segment started from its play button (which keeps the focus), and stays paused
+  await page.getByRole("button", { name: /^Play segment at / }).nth(1).click();
+  await expect.poll(paused, { timeout: 15_000 }).toBe(false);
+  await page.keyboard.press("Space");
+  await expect.poll(paused).toBe(true);
+  await page.waitForTimeout(300);
+  expect(await paused()).toBe(true);
+  // with a row's checkbox focused, Space plays and pauses instead of ticking it
+  await page.getByLabel(/^Select segment at /).nth(1).click();
+  await page.keyboard.press("Space");
+  await expect.poll(paused, { timeout: 15_000 }).toBe(false);
+  await page.keyboard.press("Space");
+  await expect.poll(paused).toBe(true);
+  await expect(page.getByLabel(/^Select segment at /).nth(1)).toBeChecked();
+  expect(errors).toEqual([]);
+});
+
+test("annotate: pull a stretch out on the waveform and play it, across speakers", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 5 });
+  await expect(page.getByText("Drag across the waveform to play a stretch of the file.")).toBeVisible();
+  const audio = page.locator("audio").first();
+  const state = () => audio.evaluate((a: HTMLAudioElement) => ({ paused: a.paused, t: a.currentTime }));
+  const wave = (await page.locator("canvas").first().boundingBox())!;
+  const y = wave.y + wave.height / 2;
+  // drag from 20 % to 25 % of the file: the stretch plays at once and stops at its end
+  await page.mouse.move(wave.x + wave.width * 0.2, y);
+  await page.mouse.down();
+  await page.mouse.move(wave.x + wave.width * 0.25, y, { steps: 5 });
+  await page.mouse.up();
+  const sel = page.getByRole("group", { name: "Waveform selection" });
+  await expect(sel).toContainText(/Selection\s*\d\d:\d\d\.\d{3} – \d\d:\d\d\.\d{3} · \d\.\d\d s/);
+  const [a, b] = (await sel.textContent())!.match(/\d\d:\d\d\.\d{3}/g)!.map((c) => Number(c.slice(0, 2)) * 60 + Number(c.slice(3)));
+  await expect.poll(async () => (await state()).paused, { timeout: 15_000 }).toBe(false);
+  expect((await state()).t).toBeGreaterThanOrEqual(a - 0.01);
+  await expect.poll(async () => (await state()).paused, { timeout: 15_000 }).toBe(true);
+  expect((await state()).t).toBeGreaterThanOrEqual(b - 0.01);
+  expect((await state()).t).toBeLessThan(b + 0.25);
+  // Space plays it again from its start, and pauses it
+  await page.keyboard.press("Space");
+  await expect.poll(async () => (await state()).paused).toBe(false);
+  expect((await state()).t).toBeLessThan(b);
+  await page.keyboard.press("Space");
+  await expect.poll(async () => (await state()).paused).toBe(true);
+  // Escape clears it; so does a click on the waveform
+  await page.keyboard.press("Escape");
+  await expect(sel).toHaveCount(0);
+  await page.mouse.move(wave.x + wave.width * 0.5, y);
+  await page.mouse.down();
+  await page.mouse.move(wave.x + wave.width * 0.55, y, { steps: 5 });
+  await page.mouse.up();
+  await expect(sel).toBeVisible();
+  await page.keyboard.press("Space");
+  await page.mouse.click(wave.x + wave.width * 0.8, y);
+  await expect(sel).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("annotate: zoom the timeline for fine edits", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 4 });
+  await expect(page.getByRole("heading", { name: "d05_clipped" })).toBeVisible();
+  const zoom = page.getByRole("group", { name: "Timeline zoom" });
+  await expect(zoom).toContainText("Whole file");
+  const bar = page.locator('[data-lane="spk0"] span[title]').first();
+  const w0 = (await bar.boundingBox())!.width;
+
+  // a button step doubles the scale around the playhead (at 0 s, so the first segment stays in sight)
+  await zoom.getByRole("button", { name: "Zoom in (=)" }).click();
+  await expect(zoom).not.toContainText("Whole file");
+  expect((await bar.boundingBox())!.width / w0).toBeCloseTo(2, 1);
+
+  // Ctrl + scroll zooms further at the pointer; 0 shows the whole file again
+  const lane = (await page.locator('[data-lane="spk0"]').boundingBox())!;
+  await page.mouse.move(lane.x + 40, lane.y + lane.height / 2);
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -400);
+  await page.keyboard.up("Control");
+  await expect.poll(async () => (await bar.boundingBox())!.width / w0).toBeGreaterThan(3);
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("0");
+  await expect(zoom).toContainText("Whole file");
+
+  // zoomed in to a few seconds, a 60 px drag of a grip moves it by a fraction of a second
+  for (let k = 0; k < 4; k++) await page.keyboard.press("=");
+  await expect(zoom).toContainText("00:00.000 – 00:02.331 · 2.3 s"); // a sixteenth of the 37.3 s file
+  await bar.hover();
+  const grip = bar.getByRole("button", { name: /^Start of segment/ });
+  const before = await grip.getAttribute("aria-label");
+  const g = (await grip.boundingBox())!;
+  await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(g.x + g.width / 2 + 60, g.y + g.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await expect(grip).not.toHaveAttribute("aria-label", before!);
+  const secs = (label: string) => { const m = /(\d+):(\d+\.\d+)\./.exec(label)!; return Number(m[1]) * 60 + Number(m[2]); };
+  const moved = secs((await grip.getAttribute("aria-label"))!) - secs(before!);
+  expect(moved).toBeGreaterThan(0.05);
+  expect(moved).toBeLessThan(0.5);
+
+  // the overview strip pans the window: drag it to the right
+  const thumb = page.locator("div.cursor-pointer.touch-none > span.cursor-grab");
+  const t = (await thumb.boundingBox())!;
+  const text = await zoom.textContent();
+  await page.mouse.move(t.x + t.width / 2, t.y + t.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(t.x + t.width / 2 + 200, t.y + t.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect(zoom).not.toHaveText(text!);
+  expect(errors).toEqual([]);
+});
+
 test("lexicons: publish house spellings, then use or keep them in Annotate", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/lexicons");

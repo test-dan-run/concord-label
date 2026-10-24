@@ -18,9 +18,10 @@ export interface Span {
 export const ms = (t: number): number => Math.round(t * 1000) / 1000;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-/** The time under a pointer at `clientX` on a lane spanning `rect`, for a file of `duration` seconds. */
-export function timeAt(clientX: number, rect: { left: number; width: number }, duration: number): number {
-  return ms(clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1) * duration);
+/** The time under a pointer at `clientX` on a lane spanning `rect` that shows `view` (the whole file, or
+ * the zoomed-in part of it). */
+export function timeAt(clientX: number, rect: { left: number; width: number }, view: { t0: number; t1: number }): number {
+  return ms(view.t0 + clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1) * (view.t1 - view.t0));
 }
 
 /** `seg` dragged so that the point grabbed `offset` seconds after its start sits at `t`; length kept. */

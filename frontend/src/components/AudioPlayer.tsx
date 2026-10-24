@@ -6,7 +6,9 @@ import * as I from "./icons";
 import { Button, cx } from "./ui";
 
 export interface AudioController {
-  audioRef: React.RefObject<HTMLAudioElement | null>;
+  /** Ref for the <audio> element (AudioPlayer renders it). A callback, so that the play / pause listeners
+   * attach whenever the element appears, also when it renders after the page has loaded its data. */
+  audioRef: (el: HTMLAudioElement | null) => void;
   src: string;
   time: number;
   playing: boolean;
@@ -21,7 +23,12 @@ export interface AudioController {
 }
 
 export function useAudio(fileId: number | null | undefined): AudioController {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const elRef = useRef<HTMLAudioElement | null>(null);
+  const [el, setEl] = useState<HTMLAudioElement | null>(null);
+  const audioRef = useCallback((node: HTMLAudioElement | null) => {
+    elRef.current = node;
+    setEl(node);
+  }, []);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [rate, setRateState] = useState(1);
@@ -30,7 +37,7 @@ export function useAudio(fileId: number | null | undefined): AudioController {
   const raf = useRef<number | null>(null);
 
   const tick = useCallback(() => {
-    const a = audioRef.current;
+    const a = elRef.current;
     if (!a) return;
     setTime(a.currentTime);
     if (until.current !== null && a.currentTime >= until.current) {
@@ -47,8 +54,9 @@ export function useAudio(fileId: number | null | undefined): AudioController {
   }, []);
 
   useEffect(() => {
-    const a = audioRef.current;
+    const a = el;
     if (!a) return;
+    setPlaying(!a.paused);
     const onPlay = () => {
       setPlaying(true);
       raf.current = requestAnimationFrame(tick);
@@ -67,10 +75,10 @@ export function useAudio(fileId: number | null | undefined): AudioController {
       a.removeEventListener("ended", onPause);
       if (raf.current) cancelAnimationFrame(raf.current);
     };
-  }, [tick, fileId]);
+  }, [tick, el]);
 
   const play = useCallback((from?: number, to?: number) => {
-    const a = audioRef.current;
+    const a = elRef.current;
     if (!a) return;
     queue.current = [];
     if (from !== undefined) a.currentTime = from;
@@ -79,7 +87,7 @@ export function useAudio(fileId: number | null | undefined): AudioController {
   }, []);
 
   const playSpans = useCallback((spans: [number, number][]) => {
-    const a = audioRef.current;
+    const a = elRef.current;
     if (!a || !spans.length) return;
     const [first, ...rest] = spans;
     queue.current = rest;
@@ -88,16 +96,16 @@ export function useAudio(fileId: number | null | undefined): AudioController {
     void a.play().catch(() => setPlaying(false));
   }, []);
 
-  const pause = useCallback(() => audioRef.current?.pause(), []);
+  const pause = useCallback(() => elRef.current?.pause(), []);
   const seek = useCallback((t: number) => {
-    const a = audioRef.current;
+    const a = elRef.current;
     if (!a) return;
     a.currentTime = t;
     setTime(t);
   }, []);
   const setRate = useCallback((r: number) => {
     setRateState(r);
-    if (audioRef.current) audioRef.current.playbackRate = r;
+    if (elRef.current) elRef.current.playbackRate = r;
   }, []);
 
   return { audioRef, src: fileId ? `/api/audio/${fileId}` : "", time, playing, rate, setRate, play, playSpans, pause, seek };

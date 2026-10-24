@@ -103,6 +103,10 @@ const SECTIONS: Section[] = [
           segment to see each model’s output beside it; use <em>Use this text</em> to copy one into the transcript.
         </p>
         <p className="m-0">
+          To listen to any stretch of the file, across speakers, drag across the waveform: it plays at once, Space plays or pauses it
+          again, and a click on the waveform or Escape clears it.
+        </p>
+        <p className="m-0">
           Edit the transcript, check the speaker, then confirm. <em>Confirm all high-confidence</em> confirms every auto-accepted segment in the
           file at once.
         </p>
@@ -117,6 +121,7 @@ const SECTIONS: Section[] = [
       <>
         <p className="m-0">Most of this happens on the speaker lanes under the waveform:</p>
         <ul className="m-0 pl-5 flex flex-col gap-1.5">
+          <li><B>Zoom in for fine edits:</B> use the zoom buttons or press = and −; hold Ctrl (⌘ on a Mac) and scroll to zoom where the pointer is, down to one second. Shift and scroll, or drag the window on the overview strip, to move along the file; press 0 to see it all again. The view follows playback and the segment you select.</li>
           <li><B>Move a segment:</B> drag the bar sideways. Drag it onto another lane to give it to that speaker. Press Escape while dragging to cancel.</li>
           <li><B>Trim a segment:</B> drag the grip at either end. With a grip focused, the arrow keys nudge it by {NUDGE} s, or {NUDGE_SHIFT} s with Shift.</li>
           <li><B>Add a segment:</B> drag across empty space in a lane. Segments shorter than {MIN_LEN} s are ignored. <em>Segment at playhead</em> adds a one-second one where the playhead is.</li>

@@ -4,12 +4,14 @@ import { drawn, laneAt, moved, nextSpeakerName, nudged, timeAt, trimmed } from "
 const seg = { start: 2, end: 4 };
 
 describe("lane drag maths", () => {
-  it("maps a pointer to a time inside the file, in milliseconds", () => {
+  it("maps a pointer to a time inside the visible window, in milliseconds", () => {
     const rect = { left: 100, width: 400 };
-    expect(timeAt(300, rect, 10)).toBe(5);
-    expect(timeAt(50, rect, 10)).toBe(0);
-    expect(timeAt(900, rect, 10)).toBe(10);
-    expect(timeAt(100 + 400 / 3, rect, 10)).toBe(3.333);
+    const file = { t0: 0, t1: 10 };
+    expect(timeAt(300, rect, file)).toBe(5);
+    expect(timeAt(50, rect, file)).toBe(0);
+    expect(timeAt(900, rect, file)).toBe(10);
+    expect(timeAt(100 + 400 / 3, rect, file)).toBe(3.333);
+    expect(timeAt(300, rect, { t0: 20, t1: 22 })).toBe(21); // zoomed in: the lane shows 20–22 s
   });
 
   it("moves a segment keeping its length, stopping at either end of the file", () => {

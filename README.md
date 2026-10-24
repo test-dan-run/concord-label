@@ -165,7 +165,10 @@ both apps dropped them for the catalog's own UI.
   below rejected. Pseudo-labels go into `segment` with the label run as `source_run_id`.
 - **Annotate**: whole-file timeline with editable speaker lanes (drag a segment to move it or onto another
   speaker, drag or arrow-key its grips to trim, drag across a lane to draw one, add speakers up to 8;
-  saved on release), overlap hatch and a flags lane; segment grid with shift-click multi-select and a bulk
+  saved on release), overlap hatch and a flags lane; zoom down to a 1 s window (buttons, `=` `−` `0`,
+  Ctrl/⌘ + scroll at the pointer; Shift + scroll or the overview strip to pan; follows playback and the
+  selected segment); drag across the waveform to play any stretch, across speakers (Space replays it,
+  Escape or a click clears it); segment grid with shift-click multi-select and a bulk
   bar, inline transcript editing with autosave, speaker pill cycling, merge / split / add. Shortcuts:
   Space, Tab, Alt+Enter, 1–8, V, M, Enter. Any edit marks the segment as touched by a person;
   pseudo-labelling never replaces it afterwards. A segment drawn by hand shows as "New · manual" until it is
