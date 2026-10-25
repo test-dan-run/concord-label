@@ -3,7 +3,8 @@
 Every change made here is a person's, so it sets `edited_at`: pseudo-labelling never replaces the segment
 afterwards, and label packages carry it as reviewed work. Merging or splitting drops the members'
 outputs from `meta` (they were transcribed on the old span), so live evaluation only uses outputs that
-match the segment.
+match the segment. Each change is also recorded in its file's history, so Annotate can undo and redo it
+(label/history.py).
 """
 
 from __future__ import annotations
@@ -16,10 +17,11 @@ from sqlalchemy.orm import Session
 
 from ..core.models import AudioFile, Model, Run, Segment, SegmentStatus, utcnow
 from ..runs import cache
-from . import console
+from . import console, history
 
 EDITABLE = ("text", "speaker", "start", "end", "status", "flagged", "flag_note", "spelling_kept")
 MIN_LEN = 0.05
+TOUCH = 0.02  # two segments touch when one ends within this many seconds of where the other starts
 
 
 class EditError(ValueError):
@@ -41,6 +43,30 @@ def _touch(s: Segment) -> None:
     s.edited_at = utcnow()
 
 
+def _record(session: Session, action: str, before: list[dict[str, Any]], after: list[dict[str, Any]]) -> None:
+    """Record an edit in the history of each file it touched."""
+    for fid in sorted({r["audio_file_id"] for r in before + after}):
+        history.record(session, fid, action, [r for r in before if r["audio_file_id"] == fid],
+                       [r for r in after if r["audio_file_id"] == fid])
+
+
+def _update_action(fields: dict[str, Any], before: dict[str, Any], s: Segment) -> str:
+    """The name of a PATCH in the history, e.g. "text edit" or "move" (a drag on the speaker lanes)."""
+    if "text" in fields:
+        return "text edit"
+    if "start" in fields or "end" in fields:
+        return "move" if s.start != before["start"] and s.end != before["end"] else "trim"
+    if "speaker" in fields:
+        return "speaker change"
+    if "status" in fields:
+        return "status change"
+    if "flagged" in fields:
+        return "flag" if fields["flagged"] else "unflag"
+    if "spelling_kept" in fields:
+        return "spelling choice"
+    return "edit"
+
+
 def _check_span(f: AudioFile, start: float, end: float) -> None:
     dur = f.duration or 0.0
     if start < 0 or end > dur + 1e-3 or end - start < MIN_LEN:
@@ -54,6 +80,7 @@ def update(session: Session, s: Segment, fields: dict[str, Any]) -> Segment:
         raise EditError(f"cannot edit {', '.join(sorted(bad))}")
     if "status" in fields and fields["status"] not in tuple(SegmentStatus):
         raise EditError(f"unknown status {fields['status']!r}")
+    before = history.snapshot([s])
     start, end = fields.get("start", s.start), fields.get("end", s.end)
     if "start" in fields or "end" in fields:
         _check_span(s.audio_file, float(start), float(end))
@@ -72,10 +99,20 @@ def update(session: Session, s: Segment, fields: dict[str, Any]) -> Segment:
         setattr(s, k, v)
     _touch(s)
     session.flush()
+    _record(session, _update_action(fields, before[0], s), before, history.snapshot([s]))
     return s
 
 
-def bulk(session: Session, segs: list[Segment], action: str, speaker: str | None = None) -> int:
+BULK_ACTIONS = {"confirm": "confirm", "reject": "reject", "review": "review", "assign_speaker": "speaker change",
+                "rename_speaker": "speaker rename", "flag": "flag", "unflag": "unflag"}
+
+
+def bulk(session: Session, segs: list[Segment], action: str, speaker: str | None = None,
+         history_name: str | None = None) -> int:
+    """`action` on every segment; `history_name` names the edit in the history (by default from BULK_ACTIONS)."""
+    if action not in BULK_ACTIONS:
+        raise EditError(f"unknown action {action!r}")
+    before = history.snapshot(segs)
     if action == "confirm":
         for s in segs:
             s.status = SegmentStatus.confirmed
@@ -85,10 +122,11 @@ def bulk(session: Session, segs: list[Segment], action: str, speaker: str | None
     elif action == "review":
         for s in segs:
             s.status = SegmentStatus.pseudo
-    elif action == "assign_speaker":
+    elif action in ("assign_speaker", "rename_speaker"):
+        # rename_speaker is assign_speaker on every segment of one speaker (Annotate's lane names)
         name = (speaker or "").strip()
         if not name:
-            raise EditError("assign_speaker needs a speaker")
+            raise EditError(f"{action} needs a speaker")
         for s in segs:
             s.speaker = name
     elif action == "flag":
@@ -97,11 +135,10 @@ def bulk(session: Session, segs: list[Segment], action: str, speaker: str | None
     elif action == "unflag":
         for s in segs:
             s.flagged = False
-    else:
-        raise EditError(f"unknown action {action!r}")
     for s in segs:
         _touch(s)
     session.flush()
+    _record(session, history_name or BULK_ACTIONS[action], before, history.snapshot(segs))
     return len(segs)
 
 
@@ -111,6 +148,7 @@ def merge(session: Session, segs: list[Segment]) -> Segment:
     if len({s.audio_file_id for s in segs}) != 1:
         raise EditError("only segments of the same file can be merged")
     segs = sorted(segs, key=lambda s: (s.start, s.end))
+    before = history.snapshot(segs)
     keep = segs[0]
     by_spk: dict[str | None, float] = {}
     for s in segs:
@@ -131,7 +169,41 @@ def merge(session: Session, segs: list[Segment]) -> Segment:
         session.delete(s)
     _touch(keep)
     session.flush()
+    _record(session, "merge", before, history.snapshot([keep]))
     return keep
+
+
+def boundary(session: Session, segs: list[Segment], t: float) -> list[Segment]:
+    """Move the edge where these segments touch to `t`: the ends of the ones that end there and the starts of
+    the ones that start there, so a change of speaker stays in the same place on every lane. One edit."""
+    if len(segs) < 2:
+        raise EditError("a shared boundary needs at least two segments")
+    if len({s.audio_file_id for s in segs}) != 1:
+        raise EditError("only segments of the same file share a boundary")
+    ends = [s.end for s in segs if any(abs(s.end - o.start) <= TOUCH for o in segs if o is not s)]
+    if not ends:
+        raise EditError("these segments don't touch")
+    x = sum(ends) / len(ends)
+    left = [s for s in segs if abs(s.end - x) <= TOUCH]
+    right = [s for s in segs if abs(s.start - x) <= TOUCH and s not in left]
+    if len(left) + len(right) != len(segs) or not right:
+        raise EditError("these segments don't share one boundary")
+    t = round(float(t), 3)
+    for s in left:
+        _check_span(s.audio_file, s.start, t)
+    for s in right:
+        _check_span(s.audio_file, t, s.end)
+    before = history.snapshot(segs)
+    for s in left:
+        s.end = t
+    for s in right:
+        s.start = t
+    for s in segs:
+        s.meta = {k: v for k, v in (s.meta or {}).items() if k not in ("members", "span", "words")}
+        _touch(s)
+    session.flush()
+    _record(session, "boundary move", before, history.snapshot(segs))
+    return segs
 
 
 def _split_text(s: Segment, t: float) -> tuple[str | None, str | None, list | None, list | None]:
@@ -153,6 +225,7 @@ def split(session: Session, s: Segment, t: float) -> tuple[Segment, Segment]:
     t = round(float(t), 3)
     if t - s.start < MIN_LEN or s.end - t < MIN_LEN:
         raise EditError(f"split point {t:.3f} s must be inside the segment ({s.start:.3f}–{s.end:.3f} s)")
+    before = history.snapshot([s])
     ta, tb, wa, wb = _split_text(s, t)
     status = SegmentStatus.rejected if s.status == SegmentStatus.rejected else SegmentStatus.pseudo
     second = Segment(audio_file_id=s.audio_file_id, start=t, end=s.end, speaker=s.speaker, text=tb, status=status,
@@ -164,6 +237,7 @@ def split(session: Session, s: Segment, t: float) -> tuple[Segment, Segment]:
     _touch(second)
     session.add(second)
     session.flush()
+    _record(session, "split", before, history.snapshot([s, second]))
     return s, second
 
 
@@ -174,14 +248,22 @@ def create(session: Session, f: AudioFile, start: float, end: float, speaker: st
     _touch(s)
     session.add(s)
     session.flush()
+    _record(session, "new segment", [], history.snapshot([s]))
     return s
+
+
+def remove(session: Session, s: Segment) -> None:
+    before = history.snapshot([s])
+    session.delete(s)
+    session.flush()
+    _record(session, "delete", before, [])
 
 
 def confirm_auto(session: Session, f: AudioFile) -> int:
     """'Confirm all high-confidence': every auto-accepted segment of the file becomes confirmed."""
     segs = list(session.scalars(select(Segment).where(Segment.audio_file_id == f.id,
                                                       Segment.status == SegmentStatus.auto)))
-    return bulk(session, segs, "confirm") if segs else 0
+    return bulk(session, segs, "confirm", history_name="confirm all high-confidence") if segs else 0
 
 
 # ---------------------------------------------------------------- views
@@ -232,6 +314,7 @@ def file_view(session: Session, f: AudioFile) -> dict[str, Any]:
                      "dataset_id": f.dataset_id, "meta": f.meta},
             "dataset": {"id": f.dataset.id, "name": f.dataset.name, "language": f.dataset.language},
             "segments": rows, "speakers": speakers, "diariser": _diariser(session, segs), "keywords": [],
+            "history": history.state(session, f.id),
             "thresholds": th or {"high": 0.85, "low": 0.5},
             "prev_file_id": siblings[k - 1] if k > 0 else None,
             "next_file_id": siblings[k + 1] if k + 1 < len(siblings) else None,

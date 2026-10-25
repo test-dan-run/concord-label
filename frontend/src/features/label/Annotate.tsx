@@ -1,29 +1,37 @@
 // Annotate (annotation only, no metrics): whole-file timeline with editable speaker lanes (SpeakerLanes),
-// segment grid with multi-select and a bulk bar, inline transcript editing with autosave per segment, and
-// the AeroAudio shortcuts:
-// Space play/pause · Tab next low-confidence or lexicon hint · Alt+Enter use house spelling · 1–8 assign
-// speaker · V split · M merge · Enter confirm. Variants the published lexicons flag are underlined in the
-// transcript with a choice to use the house spelling or keep the text; the text never changes on its own.
+// a transport row (Transport), segment grid with multi-select and a bulk bar, inline transcript editing with
+// autosave per segment, undo and redo (label/history.py on the server), and the keys of the owner's earlier
+// app, pseudolabel (docs/ANNOTATE_PLAN.md; SHORTCUTS in lib/label.ts lists them for the strip and the Docs page):
+// Space play/pause from the playhead · Shift+Space play the waveform selection or the segment · ←/→ skip 2 s ·
+// ↑/↓ previous/next segment · Tab/Shift+Tab next/previous to review · Enter edit · Ctrl+Enter confirm ·
+// S split at the playhead · M merge · Delete · Ctrl+Z undo · Ctrl+Shift+Z or Ctrl+Y redo · Esc close/clear ·
+// 1–8 assign speaker · Alt+Enter use house spelling · = - 0 zoom. Variants the published lexicons flag are
+// underlined in the transcript with a choice to use the house spelling or keep the text; the text never
+// changes on its own.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, qs, type AnnotateView, type LabelFile, type SegStatus, type Segment } from "../../lib/api";
 import { houseSpelled, Matcher, norm, type ActiveLexicon, type Hint } from "../../lib/lexicon";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS, STATUS_TONE, statusLabel } from "../../lib/label";
-import { AudioPlayer, PlayFrom, useAudio } from "../../components/AudioPlayer";
+import { lowConfidence, nextToReview, nextUnconfirmed, overlapRegions, playingSegment, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS } from "../../lib/label";
+import { useAudio } from "../../components/AudioPlayer";
 import { Timeline } from "../../components/Timeline";
 import * as I from "../../components/icons";
-import { Button, Chip, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner } from "../../components/ui";
+import { Button, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 import { Crumbs, DatasetChooser, LabelTabs } from "./common";
 import { MAX_SPEAKERS, nextSpeakerName } from "./laneDrag";
+import { SegmentRow, type RowMenu } from "./SegmentRow";
 import { SpeakerLanes, type Lane, type LaneEdit } from "./SpeakerLanes";
-import { Overview, useWheelZoom, ZoomBar } from "./TimelineZoom";
+import { Overview, useWheelZoom } from "./TimelineZoom";
+import { Transport } from "./Transport";
 import { fit, follow, reveal, STEP, zoomAt, type Window } from "./zoom";
 
 type Show = "all" | SegStatus;
+/** ← and → move the playhead this many seconds. */
+const SKIP = 2;
 const SHOW: { value: Show; label: string }[] = [
   { value: "all", label: "All" },
   { value: "pseudo", label: "Needs review" },
@@ -138,11 +146,24 @@ function useLabelMutations(fileId: number, datasetId: number) {
     },
     onSettled: done,
   });
+  // A shared edge dragged on the lanes: every segment that ends or starts there moves at once, as one edit.
+  const boundary = useMutation({
+    mutationFn: (b: { ids: number[]; t: number; ends: number[] }) => api.post<Segment[]>(`/label/segments/boundary`, { ids: b.ids, t: b.t }),
+    onMutate: async ({ ids, t, ends }) => {
+      await qc.cancelQueries({ queryKey: ["annotate", fileId] });
+      qc.setQueryData<AnnotateView>(["annotate", fileId], (v) =>
+        v && { ...v, segments: v.segments.map((s) => (!ids.includes(s.id) ? s : ends.includes(s.id) ? { ...s, end: t } : { ...s, start: t })).sort((a, b) => a.start - b.start || a.end - b.end) },
+      );
+    },
+    onSettled: done,
+  });
   const create = useMutation({ mutationFn: (b: { start: number; end: number; speaker: string | null }) => api.post<Segment>(`/label/files/${fileId}/segments`, b), onSuccess: done });
   const remove = useMutation({ mutationFn: (id: number) => api.del(`/label/segments/${id}`), onSuccess: done });
   const confirmAuto = useMutation({ mutationFn: () => api.post<{ confirmed: number }>(`/label/files/${fileId}/confirm-auto`), onSuccess: done });
-  const error = patch.error ?? move.error ?? bulk.error ?? merge.error ?? split.error ?? create.error ?? remove.error ?? confirmAuto.error;
-  return { patch, move, bulk, merge, split, create, remove, confirmAuto, error };
+  // Undo and redo (label/history.py): a 409 means the history no longer matches the file, and the server forgot it.
+  const history = useMutation({ mutationFn: (way: "undo" | "redo") => api.post<{ action: string; ids: number[] }>(`/label/files/${fileId}/${way}`), onSettled: done });
+  const error = patch.error ?? move.error ?? boundary.error ?? bulk.error ?? merge.error ?? split.error ?? create.error ?? remove.error ?? confirmAuto.error ?? history.error;
+  return { patch, move, boundary, bulk, merge, split, create, remove, confirmAuto, history, error };
 }
 
 const NOT_TEXT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "file", "color"]);
@@ -181,6 +202,11 @@ function Annotator({
   const [anchor, setAnchor] = useState<number | null>(null);
   const [show, setShow] = useState<Show>(initialShow);
   const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
+  // The row whose text is in the editor, and the menu open on a row (its speaker chip's or a spelling hint's);
+  // Esc closes them.
+  const [editing, setEditing] = useState<number | null>(null);
+  const [menu, setMenu] = useState<{ id: number; menu: Exclude<RowMenu, null> } | null>(null);
+  const listBox = useRef<HTMLDivElement>(null);
 
   const v = q.data;
   const segs = useMemo(() => v?.segments ?? [], [v]);
@@ -225,23 +251,61 @@ function Annotator({
   const hasHint = useCallback((s: Segment) => (hints.get(s.id)?.length ?? 0) > 0, [hints]);
   const applyHint = useCallback((s: Segment, h: Hint) => s.text !== null && m.patch.mutate({ id: s.id, text: houseSpelled(s.text, h) }), [m.patch]);
   const keepHint = useCallback((s: Segment, h: Hint) => m.patch.mutate({ id: s.id, spelling_kept: [...s.spelling_kept, norm(h.found)] }), [m.patch]);
+  useEffect(() => setMenu(null), [segs]);
 
   // Pick a starting segment once loaded: the requested one, else the one at the requested time (and the
-  // playhead goes there), else the first low-confidence one.
+  // playhead goes there), else the first low-confidence one. Later, when the selected segment goes away
+  // (merged, deleted, or taken back by an undo), select the one nearest where it was. An id the list hasn't
+  // loaded yet (a segment just added, or one an undo brings back) is waited for, so the list stays put.
   const seeked = useRef(false);
+  const picked = useRef(false);
+  const loaded = useRef(new Set<number>());
+  const curAt = useRef<number | null>(null);
   useEffect(() => {
-    if (!v || (cur !== null && segs.some((s) => s.id === cur))) return;
-    const atTime = initialTime !== null && !seeked.current ? segmentAt(segs, initialTime) : null;
-    setCur(atTime ?? nextLowConfidence(segs, null, high) ?? segs[0]?.id ?? null);
+    if (current) curAt.current = current.start;
+  }, [current]);
+  useEffect(() => {
+    if (!v) return;
+    const had = loaded.current;
+    loaded.current = new Set(segs.map((s) => s.id));
+    const first = !picked.current;
+    picked.current = true;
+    if (cur !== null && loaded.current.has(cur)) return;
+    if (first) {
+      const atTime = initialTime !== null && !seeked.current ? segmentAt(segs, initialTime) : null;
+      setCur(atTime ?? nextToReview(segs, null, 1, high) ?? segs[0]?.id ?? null);
+    } else if (cur !== null && had.has(cur)) {
+      setCur(curAt.current !== null ? segmentAt(segs, curAt.current) : null);
+    }
   }, [v, segs, cur, high, initialTime]);
   useEffect(() => {
     if (!v || initialTime === null || seeked.current) return;
     seeked.current = true;
     ctl.seek(Math.max(0, Math.min(initialTime, v.file.duration)));
   }, [v, initialTime, ctl]);
+  // Scroll the list (the list alone, so the page stays where it is) just enough to show segment `id`'s row.
+  const showRow = useCallback((id: number | null) => {
+    const row = id !== null ? rowRefs.current.get(id) : undefined;
+    const box = listBox.current;
+    if (!row || !box) return false;
+    const r = row.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    const head = box.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+    if (r.top < b.top + head) box.scrollTop -= b.top + head - r.top;
+    else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
+    return true;
+  }, []);
+  // The selected row comes into view once, when it is selected or, for a new segment, when its row appears.
+  const shown = useRef<number | null>(null);
   useEffect(() => {
-    if (cur !== null) rowRefs.current.get(cur)?.scrollIntoView({ block: "nearest" });
-  }, [cur]);
+    if (cur !== shown.current && showRow(cur)) shown.current = cur;
+  }, [cur, segs, showRow]);
+  // The segment under the playhead, highlighted on the lanes and in the list; during playback the list
+  // scrolls just enough to keep its row in sight.
+  const playingId = useMemo(() => playingSegment(segs, ctl.time), [segs, ctl.time]);
+  useEffect(() => {
+    if (ctl.playing) showRow(playingId);
+  }, [ctl.playing, playingId, showRow]);
 
   const targets = useCallback((): number[] => (sel.size ? [...sel] : cur !== null ? [cur] : []), [sel, cur]);
   const speakerForKey = (k: number) => speakers[k - 1] ?? `spk${k - 1}`;
@@ -249,20 +313,101 @@ function Annotator({
     const k = segs.findIndex((s) => s.id === id);
     return segs[k + 1]?.id ?? null;
   };
+  // The next segment to review after `from` (Tab and Shift+Tab); `done` were just confirmed.
+  const toReview = useCallback(
+    (from: number | null, direction: 1 | -1, done: number[] = []) =>
+      nextToReview(done.length ? segs.map((s) => (done.includes(s.id) ? { ...s, status: "confirmed" as const, reviewed: true } : s)) : segs, from, direction, high, hasHint),
+    [segs, high, hasHint],
+  );
+  // Select segment `id`; with `play` (Tab and Shift+Tab), also play it from start to end. The timeline brings
+  // the selected segment into view.
+  const goTo = useCallback(
+    (id: number | null, play = false) => {
+      const s = segs.find((x) => x.id === id);
+      if (!s) return;
+      setCur(s.id);
+      if (play) ctl.play(s.start, s.end);
+    },
+    [segs, ctl],
+  );
 
-  const confirm = useCallback(() => {
-    const ids = targets();
-    if (!ids.length) return;
-    m.bulk.mutate({ ids, action: "confirm" });
-    if (!sel.size && cur !== null) setCur(nextLowConfidence(segs, cur, high) ?? nextId(cur) ?? cur);
-    setSel(new Set());
-  }, [targets, sel, cur, segs, high]);
+  const confirm = useCallback(
+    (ids: number[] = targets()) => {
+      if (!ids.length) return;
+      m.bulk.mutate({ ids, action: "confirm" });
+      // on to the next segment in the list that isn't confirmed, auto-accepted ones included
+      const from = cur ?? ids[0];
+      goTo(nextUnconfirmed(visible, from, ids) ?? from);
+      setSel(new Set());
+    },
+    [targets, cur, visible, goTo],
+  );
 
+  // S and Split: the segment under the playhead, the selected one first where segments overlap.
+  const splitTarget = useMemo(() => {
+    const inside = (s: Segment) => ctl.time > s.start + 0.05 && ctl.time < s.end - 0.05;
+    if (current && inside(current)) return current;
+    const s = segs.find((x) => x.id === playingId);
+    return s && inside(s) ? s : null;
+  }, [current, segs, playingId, ctl.time]);
   const splitAtPlayhead = useCallback(() => {
+    if (splitTarget) m.split.mutate({ id: splitTarget.id, t: ctl.time }, { onSuccess: ([a]) => setCur(a.id) });
+  }, [splitTarget, ctl.time, m.split]);
+
+  // Delete: the selected segment goes, and the next one (or the one before the last) is selected.
+  const removeCurrent = useCallback(() => {
     if (!current) return;
-    const inside = ctl.time > current.start + 0.05 && ctl.time < current.end - 0.05;
-    m.split.mutate({ id: current.id, t: inside ? ctl.time : (current.start + current.end) / 2 });
-  }, [current, ctl.time, m.split]);
+    const k = segs.findIndex((s) => s.id === current.id);
+    m.remove.mutate(current.id);
+    setSel((old) => new Set([...old].filter((id) => id !== current.id)));
+    setCur((segs[k + 1] ?? segs[k - 1])?.id ?? null);
+  }, [current, segs, m.remove]);
+
+  // "Undid merge": what the last undo or redo did, for a few seconds.
+  const [undoNote, setUndoNote] = useState("");
+  useEffect(() => {
+    if (!undoNote) return;
+    const t = window.setTimeout(() => setUndoNote(""), 4000);
+    return () => window.clearTimeout(t);
+  }, [undoNote]);
+  const step = useCallback(
+    (way: "undo" | "redo") => {
+      if (m.history.isPending || !v?.history[way]) return;
+      m.history.mutate(way, {
+        onSuccess: ({ action, ids }) => {
+          setUndoNote(`${way === "undo" ? "Undid" : "Redid"} ${action}`);
+          setSel(new Set());
+          if (ids.length) setCur(ids[0]);
+        },
+      });
+    },
+    [m.history, v],
+  );
+
+  // A lane's speaker renamed on every segment of the file (one edit). A lane added by hand that has no
+  // segments yet is renamed on the page alone; a name another speaker has merges the two, after asking.
+  const renameSpeaker = useCallback(
+    (from: string, to: string) => {
+      const ids = segs.filter((s) => s.speaker === from).map((s) => s.id);
+      const drop = (names: string[]) => names.filter((n) => n !== from);
+      if (!ids.length) {
+        setSeen(drop);
+        setAdded((a) => (a.includes(to) || speakers.includes(to) ? drop(a) : a.map((n) => (n === from ? to : n))));
+        return;
+      }
+      if (speakers.includes(to) && !window.confirm(`${to} is already a speaker. Give all of ${from}'s segments to ${to}?`)) return;
+      m.bulk.mutate(
+        { ids, action: "rename_speaker", speaker: to },
+        {
+          onSuccess: () => {
+            setSeen(drop);
+            setAdded(drop);
+          },
+        },
+      );
+    },
+    [segs, speakers, m.bulk],
+  );
 
   const mergeSel = useCallback(() => {
     if (sel.size >= 2) {
@@ -274,6 +419,10 @@ function Annotator({
   }, [sel, cur, segs, m.merge]);
 
   useEffect(() => {
+    // Tab and Shift+Tab are the page's on the page itself, the timeline and the segment list; elsewhere
+    // (the header, the file picker, the bulk bar) Tab keeps its usual meaning.
+    const tabHere = (t: EventTarget | null) =>
+      t === document.body || (t instanceof Node && (!!timelineBox.current?.contains(t) || !!listBox.current?.contains(t)));
     const onKey = (e: KeyboardEvent) => {
       if (e.altKey && e.key === "Enter" && !isTyping(e)) {
         const h = current && hints.get(current.id)?.[0];
@@ -283,27 +432,44 @@ function Annotator({
         }
         return;
       }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !isTyping(e)) {
+        // outside text fields only, so the browser's own undo still works while you type
+        const k = e.key.toLowerCase();
+        if (k === "z" || k === "y") {
+          e.preventDefault();
+          step(k === "y" || e.shiftKey ? "redo" : "undo");
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          confirm();
+        }
+        return;
+      }
       if (isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === " ") {
         e.preventDefault();
         const span = range ? { start: range.t0, end: range.t1 } : current;
-        if (ctl.playing) ctl.pause();
-        else if (span) ctl.play(ctl.time > span.start && ctl.time < span.end - 0.05 ? ctl.time : span.start, span.end);
-        else ctl.play();
+        if (e.shiftKey && span) ctl.play(span.start, span.end);
+        else if (e.shiftKey) return;
+        else if (ctl.playing) ctl.pause();
+        else ctl.play(ctl.time >= duration - 0.05 ? 0 : ctl.time);
       } else if (e.key === "Tab") {
+        if (!tabHere(e.target)) return;
         e.preventDefault();
-        const n = nextLowConfidence(segs, cur, high, hasHint);
-        if (n !== null) setCur(n);
+        goTo(toReview(cur, e.shiftKey ? -1 : 1), true);
       } else if (/^[1-8]$/.test(e.key)) {
         const ids = targets();
         if (ids.length) m.bulk.mutate({ ids, action: "assign_speaker", speaker: speakerForKey(Number(e.key)) });
-      } else if (e.key === "v" || e.key === "V") {
+      } else if (e.key === "s" || e.key === "S") {
         splitAtPlayhead();
       } else if (e.key === "m" || e.key === "M") {
         mergeSel();
+      } else if (e.key === "Delete") {
+        removeCurrent();
       } else if (e.key === "Enter") {
+        // a focused button or link keeps Enter
+        if ((e.target as HTMLElement | null)?.closest?.("button, a") || !current) return;
         e.preventDefault();
-        confirm();
+        setEditing(current.id);
       } else if (e.key === "=" || e.key === "+") {
         zoomAround(STEP);
       } else if (e.key === "-" || e.key === "_") {
@@ -311,18 +477,34 @@ function Annotator({
       } else if (e.key === "0") {
         setView(() => fit(duration));
       } else if (e.key === "Escape") {
-        setSel(new Set());
-        setRange(null);
+        if (menu) setMenu(null);
+        else if (editing !== null) setEditing(null);
+        else if (sel.size) setSel(new Set());
+        else setRange(null);
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        ctl.skip(e.key === "ArrowLeft" ? -SKIP : SKIP);
       } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         const k = visible.findIndex((s) => s.id === cur);
         const n = visible[Math.max(0, Math.min(visible.length - 1, k + (e.key === "ArrowDown" ? 1 : -1)))];
-        if (n) setCur(n.id);
+        if (n) {
+          setCur(n.id);
+          ctl.seek(n.start);
+        }
       }
     };
+    // Space plays and pauses, so its keyup must not also press the button or tick the box that has the focus.
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === " " && !isTyping(e)) e.preventDefault();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [ctl, current, segs, visible, cur, high, targets, splitAtPlayhead, mergeSel, confirm, speakers, hints, hasHint, applyHint, zoomAround, setView, duration, range]);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [ctl, current, segs, visible, cur, sel, menu, editing, targets, splitAtPlayhead, mergeSel, removeCurrent, confirm, toReview, goTo, speakers, hints, applyHint, zoomAround, setView, duration, range, step]);
 
   if (q.isLoading || !v) return <Spinner />;
 
@@ -332,6 +514,7 @@ function Annotator({
     ...(live.some((s) => !s.speaker) ? [{ key: "", speaker: null, label: "no speaker", color: C.subtle }] : []),
   ];
   const autoCount = segs.filter((s) => s.status === "auto").length;
+  const reviewCount = segs.filter((s) => lowConfidence(s, high) || hasHint(s)).length;
   const order = visible.map((s) => s.id);
   const fileIndex = files.findIndex((f) => f.id === fileId);
 
@@ -363,24 +546,48 @@ function Annotator({
           <button type="button" disabled title="Keyword spotting is not built yet (Q6)" className="min-h-8 px-3 text-xs border-0 bg-transparent text-subtle cursor-not-allowed">Both</button>
         </span>
         <span className="text-xs text-muted num">{fileIndex >= 0 ? `${fileIndex + 1}/${files.length}` : ""}</span>
-        <span className="ml-auto flex gap-2">
+        <span role="group" aria-label="Review" className="flex items-center gap-1.5 text-xs text-muted">
+          {reviewCount ? (
+            <>
+              <Button size="sm" variant="ghost" aria-label="Previous to review" title="Previous segment to review (Shift+Tab)" onClick={() => goTo(toReview(cur, -1), true)}>‹</Button>
+              <span className="num">{num(reviewCount)} to review</span>
+              <Button size="sm" variant="ghost" aria-label="Next to review" title="Next segment to review (Tab)" onClick={() => goTo(toReview(cur, 1), true)}>›</Button>
+            </>
+          ) : (
+            "Nothing left to review"
+          )}
+        </span>
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted" aria-live="polite">{undoNote}</span>
+          <span role="group" aria-label="History" className="flex gap-1.5">
+            <Button size="sm" disabled={!v.history.undo || m.history.isPending} title={v.history.undo ? `Undo ${v.history.undo} (Ctrl+Z)` : "Nothing to undo"} onClick={() => step("undo")}>
+              Undo
+            </Button>
+            <Button size="sm" disabled={!v.history.redo || m.history.isPending} title={v.history.redo ? `Redo ${v.history.redo} (Ctrl+Shift+Z)` : "Nothing to redo"} onClick={() => step("redo")}>
+              Redo
+            </Button>
+          </span>
           <Button size="sm" disabled={!autoCount || m.confirmAuto.isPending} onClick={() => m.confirmAuto.mutate()}>
             <I.Check size={13} /> Confirm all high-confidence ({autoCount})
           </Button>
-          <Button size="sm" onClick={() => m.create.mutate({ start: Math.max(0, Math.min(ctl.time, v.file.duration - 1)), end: Math.min(v.file.duration, Math.max(ctl.time, 0) + 1), speaker: current?.speaker ?? null })}>
+          <Button size="sm" onClick={() => m.create.mutate({ start: Math.max(0, Math.min(ctl.time, v.file.duration - 1)), end: Math.min(v.file.duration, Math.max(ctl.time, 0) + 1), speaker: current?.speaker ?? null }, { onSuccess: (s) => setCur(s.id) })}>
             <I.Plus size={13} /> Segment at playhead
           </Button>
         </span>
       </div>
       <ErrorNote error={m.error} />
       <Panel>
-        <AudioPlayer ctl={ctl} start={0} end={v.file.duration} label="Play file" />
-        <div className="flex flex-wrap items-center gap-3">
-          <RangeBar range={range} ctl={ctl} onClear={() => setRange(null)} />
-          <div className="ml-auto">
-            <ZoomBar view={view} duration={duration} anchor={ctl.time >= view.t0 && ctl.time <= view.t1 ? ctl.time : (view.t0 + view.t1) / 2} onView={(w) => setView(() => w)} />
-          </div>
-        </div>
+        <Transport
+          ctl={ctl}
+          duration={duration}
+          range={range}
+          onClearRange={() => setRange(null)}
+          view={view}
+          onView={(w) => setView(() => w)}
+          split={{ onClick: splitAtPlayhead, disabled: !splitTarget, title: "Split the segment under the playhead (S)" }}
+          merge={{ onClick: mergeSel, disabled: sel.size < 2 && (cur === null || nextId(cur) === null), title: "Merge the selected segments, or the selected segment with the next one (M)" }}
+          remove={{ onClick: removeCurrent, disabled: !current, title: "Delete the selected segment (Delete)" }}
+        />
         <div ref={timelineBox}>
         <Timeline
           fileId={fileId}
@@ -406,6 +613,7 @@ function Annotator({
           lanes={lanes}
           segs={live}
           currentId={cur}
+          playingId={playingId}
           time={ctl.time}
           overlaps={overlapRegions(segs)}
           flags={segs.filter((s) => s.flagged)}
@@ -419,6 +627,8 @@ function Annotator({
             if (hit !== undefined) setCur(hit);
           }}
           onCommit={(id, edit) => m.move.mutateAsync({ id, ...edit })}
+          onBoundary={(ends, starts, t) => m.boundary.mutateAsync({ ids: [...ends, ...starts], t, ends })}
+          onRename={renameSpeaker}
           onCreate={(edit) => m.create.mutate(edit, { onSuccess: (s) => setCur(s.id) })}
         />
         <Overview view={view} duration={duration} time={ctl.time} onView={(w) => setView(() => w)} />
@@ -460,8 +670,8 @@ function Annotator({
           )}
           {visible.length === 0 && <Empty>No segments {show === "all" ? "in this file" : `with status “${STATUS_LABELS[show as SegStatus]}”`}.</Empty>}
           {visible.length > 0 && (
-            <div className="overflow-auto scroll-thin max-h-[60vh] border border-track rounded-md">
-              <table className="w-full border-collapse text-[13px]" style={{ minWidth: 720 }}>
+            <div ref={listBox} className="overflow-auto scroll-thin max-h-[60vh] border border-track rounded-md">
+              <table className="w-full border-collapse text-[13px]" style={{ minWidth: 640 }}>
                 <thead className="sticky top-0 z-10 bg-panel">
                   <tr className="text-[11px] text-muted uppercase tracking-wider text-left">
                     <th scope="col" className="px-2 py-2 border-b border-line w-8">
@@ -472,13 +682,11 @@ function Annotator({
                         onChange={(e) => setSel(e.target.checked ? new Set(order) : new Set())}
                       />
                     </th>
-                    <th scope="col" className="px-2 py-2 border-b border-line w-8" />
-                    <th scope="col" className="px-2 py-2 border-b border-line font-medium">Time</th>
+                    <th scope="col" className="px-1 py-2 border-b border-line w-8" />
+                    <th scope="col" className="px-2 py-2 border-b border-line font-medium">Start</th>
                     <th scope="col" className="px-2 py-2 border-b border-line font-medium">Speaker</th>
                     <th scope="col" className="px-2 py-2 border-b border-line font-medium">Transcript</th>
-                    <th scope="col" className="px-2 py-2 border-b border-line font-medium text-right">Conf.</th>
-                    <th scope="col" className="px-2 py-2 border-b border-line font-medium">Status</th>
-                    <th scope="col" className="px-2 py-2 border-b border-line w-20" />
+                    <th scope="col" className="px-2 py-2 border-b border-line font-medium text-right">Review</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -491,8 +699,11 @@ function Annotator({
                         else rowRefs.current.delete(s.id);
                       }}
                       current={s.id === cur}
+                      playing={s.id === playingId}
                       checked={sel.has(s.id)}
                       color={s.speaker ? colors[s.speaker] ?? C.subtle : C.subtle}
+                      colors={colors}
+                      speakers={speakers}
                       high={high}
                       low={v.thresholds.low}
                       ctl={ctl}
@@ -501,13 +712,28 @@ function Annotator({
                         setSel(selectRange(order, sel, s.id, anchor, shift));
                         setAnchor(s.id);
                       }}
-                      onSpeaker={() => m.patch.mutate({ id: s.id, speaker: cycleSpeaker(speakers.length ? speakers : ["spk0"], s.speaker) })}
+                      onSpeaker={(speaker) => {
+                        setMenu(null);
+                        if (speaker !== s.speaker) m.patch.mutate({ id: s.id, speaker });
+                      }}
+                      onNewSpeaker={() => {
+                        const name = nextSpeakerName(speakers);
+                        setMenu(null);
+                        setAdded((a) => [...a, name]);
+                        m.patch.mutate({ id: s.id, speaker: name });
+                      }}
                       onText={(text) => m.patch.mutate({ id: s.id, text })}
                       hints={hints.get(s.id) ?? []}
                       onUseHint={(h) => applyHint(s, h)}
                       onKeepHint={(h) => keepHint(s, h)}
                       onConfirm={() => m.bulk.mutate({ ids: [s.id], action: "confirm" })}
                       onReject={() => m.bulk.mutate({ ids: [s.id], action: "reject" })}
+                      editing={editing === s.id}
+                      onEdit={(on) => setEditing((e) => (on ? s.id : e === s.id ? null : e))}
+                      menu={menu?.id === s.id ? menu.menu : null}
+                      onMenu={(k) => setMenu(k === null ? null : { id: s.id, menu: k })}
+                      onNext={(direction) => goTo(toReview(s.id, direction), true)}
+                      onConfirmNext={() => confirm([s.id])}
                     />
                   ))}
                 </tbody>
@@ -521,44 +747,11 @@ function Annotator({
           ctl={ctl}
           onUse={(text) => current && m.patch.mutate({ id: current.id, text })}
           onFlag={() => current && m.patch.mutate({ id: current.id, flagged: !current.flagged })}
-          onSplit={splitAtPlayhead}
-          onDelete={() => current && m.remove.mutate(current.id)}
           onLive={() => navigate(`/label/live/${datasetId}`)}
         />
       </div>
     </>
   );
-}
-
-/** Above the timeline: the stretch pulled out on the waveform, to play again or clear; a hint without one. */
-function RangeBar({ range, ctl, onClear }: { range: Window | null; ctl: ReturnType<typeof useAudio>; onClear: () => void }) {
-  if (!range) return <span className="text-xs text-subtle">Drag across the waveform to play a stretch of the file.</span>;
-  const inside = ctl.time >= range.t0 && ctl.time < range.t1 - 0.05;
-  return (
-    <span role="group" aria-label="Waveform selection" className="flex flex-wrap items-center gap-2 text-xs text-muted">
-      Selection
-      <span className="num text-fg">{clock(range.t0)} – {clock(range.t1)} · {(range.t1 - range.t0).toFixed(2)} s</span>
-      <Button size="sm" aria-label={ctl.playing && inside ? "Pause selection" : "Play selection"} onClick={() => (ctl.playing && inside ? ctl.pause() : ctl.play(inside ? ctl.time : range.t0, range.t1))}>
-        {ctl.playing && inside ? <I.Pause size={12} /> : <I.Play size={12} />}
-      </Button>
-      <Button size="sm" variant="ghost" aria-label="Clear selection" onClick={onClear}>
-        <I.X size={12} />
-      </Button>
-    </span>
-  );
-}
-
-/** `text` split around its hints: plain strings, and the index of each hint in between. */
-function pieces(text: string, hints: Hint[]): (string | number)[] {
-  const out: (string | number)[] = [];
-  let at = 0;
-  hints.forEach((h, k) => {
-    if (h.start > at) out.push(text.slice(at, h.start));
-    out.push(k);
-    at = h.end;
-  });
-  if (at < text.length) out.push(text.slice(at));
-  return out;
 }
 
 /** In the segments header: the lexicons in use and how many hints they give in this file. */
@@ -606,185 +799,7 @@ function BulkBar({ n, speakers, onAssign, onAction, onMerge, onClear }: { n: num
   );
 }
 
-function SegmentRow({
-  s,
-  rowRef,
-  current,
-  checked,
-  color,
-  high,
-  low,
-  ctl,
-  onFocus,
-  onCheck,
-  onSpeaker,
-  onText,
-  hints,
-  onUseHint,
-  onKeepHint,
-  onConfirm,
-  onReject,
-}: {
-  s: Segment;
-  rowRef: (el: HTMLTableRowElement | null) => void;
-  current: boolean;
-  checked: boolean;
-  color: string;
-  high: number;
-  low: number;
-  ctl: ReturnType<typeof useAudio>;
-  onFocus: () => void;
-  onCheck: (shift: boolean) => void;
-  onSpeaker: () => void;
-  onText: (t: string) => void;
-  hints: Hint[];
-  onUseHint: (h: Hint) => void;
-  onKeepHint: (h: Hint) => void;
-  onConfirm: () => void;
-  onReject: () => void;
-}) {
-  const [draft, setDraft] = useState(s.text ?? "");
-  // With spelling hints the transcript shows as text with the variants underlined; a click elsewhere edits it.
-  const [editing, setEditing] = useState(false);
-  const [open, setOpen] = useState<number | null>(null);
-  useEffect(() => setOpen(null), [s.text, s.spelling_kept]);
-  useEffect(() => setDraft(s.text ?? ""), [s.text]);
-  const save = () => {
-    if (draft !== (s.text ?? "")) onText(draft);
-  };
-  const onKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      save();
-      (e.target as HTMLInputElement).blur();
-    } else if (e.key === "Escape") {
-      setDraft(s.text ?? "");
-      (e.target as HTMLInputElement).blur();
-    }
-  };
-  return (
-    <tr ref={rowRef} onClick={onFocus} aria-current={current || undefined} className={cx("border-b border-track", current ? "bg-active" : "hover:bg-track/60", s.status === "rejected" && "opacity-60")}>
-      <td className="px-2 py-1.5">
-        <input
-          type="checkbox"
-          aria-label={`Select segment at ${clock(s.start)}`}
-          checked={checked}
-          onChange={() => undefined}
-          onClick={(e) => {
-            e.stopPropagation();
-            onCheck(e.shiftKey);
-          }}
-        />
-      </td>
-      <td className="px-2 py-1.5">
-        <PlayFrom ctl={ctl} t={s.start} until={s.end} label={`Play segment at ${clock(s.start)}`} />
-      </td>
-      <td className="px-2 py-1.5 num text-xs text-muted whitespace-nowrap">
-        {clock(s.start)}
-        <br />
-        {clock(s.end)}
-      </td>
-      <td className="px-2 py-1.5">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSpeaker();
-          }}
-          title="Click to cycle speakers (or press 1–8)"
-          className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs cursor-pointer bg-transparent text-fg num whitespace-nowrap"
-          style={{ borderColor: color }}
-        >
-          <span className="size-2 rounded-full" style={{ background: color }} />
-          {s.speaker ?? "—"}
-        </button>
-      </td>
-      <td className="px-2 py-1.5 w-full">
-        {hints.length > 0 && !editing && s.text !== null ? (
-          <div className="flex flex-col gap-1.5">
-            <div onClick={() => setEditing(true)} className="group/t px-1.5 py-1 rounded border border-transparent hover:border-line text-fg text-[13px] cursor-text">
-              {pieces(s.text, hints).map((p, k) =>
-                typeof p === "string" ? (
-                  <span key={k}>{p}</span>
-                ) : (
-                  <button
-                    key={k}
-                    type="button"
-                    aria-expanded={open === p}
-                    aria-label={`${hints[p].found}: house spelling is ${hints[p].word}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onFocus();
-                      setOpen(open === p ? null : p);
-                    }}
-                    className="p-0 border-0 bg-transparent text-fg text-[13px] cursor-pointer underline decoration-wavy decoration-warn underline-offset-[3px]"
-                  >
-                    {hints[p].found}
-                  </button>
-                ),
-              )}
-              <button
-                type="button"
-                aria-label={`Edit transcript at ${clock(s.start)}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditing(true);
-                }}
-                className="ml-1.5 p-0 border-0 bg-transparent text-subtle hover:text-fg cursor-pointer align-middle opacity-0 group-hover/t:opacity-100 focus-visible:opacity-100"
-              >
-                <I.Pen size={12} />
-              </button>
-            </div>
-            {open !== null && hints[open] && (
-              <div role="group" aria-label="Spelling hint" className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded-md border border-line bg-canvas text-xs text-muted" onClick={(e) => e.stopPropagation()}>
-                House spelling <span className="num text-fg">{hints[open].word}</span>
-                <span className="text-subtle">· {hints[open].lexicon}</span>
-                <span className="ml-auto flex gap-1.5">
-                  <Button size="sm" variant="primary" onClick={() => onUseHint(hints[open])}>Use</Button>
-                  <Button size="sm" onClick={() => onKeepHint(hints[open])}>Keep</Button>
-                </span>
-              </div>
-            )}
-          </div>
-        ) : (
-          <input
-            aria-label={`Transcript at ${clock(s.start)}`}
-            value={draft}
-            autoFocus={editing}
-            placeholder={s.text === null ? "(no transcript)" : ""}
-            onFocus={onFocus}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => {
-              save();
-              setEditing(false);
-            }}
-            onKeyDown={onKey}
-            className="w-full bg-transparent border border-transparent hover:border-line focus:border-focus rounded px-1.5 py-1 text-fg text-[13px] outline-none"
-          />
-        )}
-      </td>
-      <td className="px-2 py-1.5 text-right num text-xs font-semibold" style={{ color: confidenceColor(s.confidence, high, low) }}>
-        {s.confidence === null ? "—" : s.confidence.toFixed(2)}
-      </td>
-      <td className="px-2 py-1.5 whitespace-nowrap">
-        <Chip tone={STATUS_TONE[s.status]}>{statusLabel(s)}</Chip>
-        {s.flagged && <span className="ml-1 text-warn" title={s.flag_note ?? "Flagged"}><I.Flag size={12} /></span>}
-      </td>
-      <td className="px-2 py-1.5 whitespace-nowrap">
-        <span className="flex gap-1">
-          <button type="button" aria-label="Confirm" title="Confirm (Enter)" onClick={(e) => { e.stopPropagation(); onConfirm(); }} className="size-7 inline-flex items-center justify-center rounded border border-line bg-transparent text-good cursor-pointer hover:bg-track">
-            <I.Check size={12} />
-          </button>
-          <button type="button" aria-label="Reject" title="Reject" onClick={(e) => { e.stopPropagation(); onReject(); }} className="size-7 inline-flex items-center justify-center rounded border border-line bg-transparent text-bad cursor-pointer hover:bg-track">
-            <I.X size={12} />
-          </button>
-        </span>
-      </td>
-    </tr>
-  );
-}
-
-function SidePanel({ s, ctl, onUse, onFlag, onSplit, onDelete, onLive }: { s: Segment | null; ctl: ReturnType<typeof useAudio>; onUse: (t: string) => void; onFlag: () => void; onSplit: () => void; onDelete: () => void; onLive: () => void }) {
+function SidePanel({ s, ctl, onUse, onFlag, onLive }: { s: Segment | null; ctl: ReturnType<typeof useAudio>; onUse: (t: string) => void; onFlag: () => void; onLive: () => void }) {
   if (!s) return <Panel title="Segment"><span className="text-[13px] text-muted">Select a segment.</span></Panel>;
   return (
     <Panel title="Segment" subtitle={<span className="num">{clock(s.start)} – {clock(s.end)} · {(s.end - s.start).toFixed(2)} s</span>}>
@@ -809,9 +824,7 @@ function SidePanel({ s, ctl, onUse, onFlag, onSplit, onDelete, onLive }: { s: Se
       </div>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" onClick={() => ctl.play(s.start, s.end)}><I.Play size={11} /> Play</Button>
-        <Button size="sm" onClick={onSplit} title="Split at the playhead (V)">Split at playhead</Button>
         <Button size="sm" variant={s.flagged ? "danger" : "outline"} onClick={onFlag} aria-pressed={s.flagged}><I.Flag size={12} /> {s.flagged ? "Unflag" : "Flag"}</Button>
-        <Button size="sm" variant="ghost" onClick={onDelete}>Delete</Button>
       </div>
       <span className="text-xs text-muted">
         {s.reviewed ? "Reviewed: pseudo-labelling will not replace this segment." : "Not reviewed yet: a new pseudo-label run may replace it."}

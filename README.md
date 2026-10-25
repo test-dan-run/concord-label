@@ -111,16 +111,26 @@ Annotate shows one file at a time, with a timeline of the whole file above a tab
 can edit segments on the speaker lanes under the waveform:
 
 - Drag a segment to move it, or drag it onto another lane to give it to that speaker.
-- Drag a segment's grips to trim it, or use the arrow keys on a grip.
-- Drag across empty space in a lane to draw a segment, and use Add speaker to add lanes, up to 8
-  speakers.
+- Drag a segment's grips to trim it, or use the arrow keys on a grip. Where two segments touch, the
+  drag moves the edge they share, and Alt moves one edge alone.
+- Drag across empty space in a lane to draw a segment, or double-click there to add a 2 second one.
+- Use Add speaker to add lanes, up to 8 speakers, and double-click a lane's name to rename the speaker.
 
-You can zoom the timeline down to a one-second window, and you can drag across the waveform to play any
+The player above the timeline plays the file from the playhead at a speed from 0.5× to 2×, and the
+segment under the playhead stands out on the lanes and in the table. You can zoom the timeline down to a
+one-second window, and the mouse wheel moves along the file. You can drag across the waveform to play any
 stretch of the file, including a stretch that crosses speakers. In the segment table, you edit
 transcripts, change speakers, merge and split segments, and confirm segments one at a time or in bulk.
 
-Any edit marks a segment as checked by a person, and later pseudo-label runs never replace it. The Docs
-page in the app lists the keyboard shortcuts.
+You can undo and redo any change to a file's segments, and Label keeps the last 200 changes for each
+file. A pseudo-label run or an imported package clears that history for the files it changes.
+
+Any edit marks a segment as checked by a person, and later pseudo-label runs never replace it.
+
+You can review a file from the keyboard. Tab goes to the next segment to review and plays it, Enter
+edits its text, and Ctrl+Enter confirms it. A click on the text opens the editor with the cursor where you
+clicked. The speaker chip in each row opens a menu of the speakers. Space plays or pauses from the playhead, S splits the segment under the
+playhead, and Ctrl+Z undoes the last change. The Docs page in the app lists every key.
 
 ### Lexicons
 
@@ -132,8 +142,11 @@ draft, and you publish it as a new version.
 ### Live evaluation
 
 Live evaluation scores each model against the confirmed segments, using saved outputs only, so it never
-runs a model. It shows WER (word error rate) with 95% intervals, and it shows DER (diarisation error
-rate) and JER (Jaccard error rate) on fully reviewed files.
+runs a model. It shows WER (word error rate) with 95% intervals, and cpWER (concatenated
+minimum-permutation WER), which scores each transcript together with the speakers that the last
+pseudo-label run's diariser found. cpWER scores each file up to the first segment nobody has reviewed, so
+a file counts before you finish it. Live evaluation also shows DER (diarisation error rate) and JER
+(Jaccard error rate) on fully reviewed files.
 
 ### Sync
 

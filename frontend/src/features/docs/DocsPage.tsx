@@ -7,7 +7,7 @@ import * as I from "../../components/icons";
 import { Chip, Empty, PageHeader } from "../../components/ui";
 import type { SegStatus } from "../../lib/api";
 import { SHORTCUTS, STATUS_TONE, statusLabel } from "../../lib/label";
-import { MAX_SPEAKERS, MIN_LEN, NUDGE, NUDGE_SHIFT } from "../label/laneDrag";
+import { MAX_SPEAKERS, MIN_LEN, NUDGE, NUDGE_SHIFT, PLACED_LEN } from "../label/laneDrag";
 
 const STEPS: { n: number; to: string; title: string; text: string }[] = [
   { n: 1, to: "/datasets", title: "Upload a dataset", text: "You upload audio, with references if you have them." },
@@ -127,8 +127,27 @@ const SECTIONS: Section[] = [
           high-confidence</em> confirms every auto-accepted segment in the file at once.
         </p>
         <p className="m-0">
+          You can review a file from the keyboard. Tab goes to the next segment to review, which is a segment with low confidence or a spelling
+          hint, and it plays the segment. The row above the timeline counts the segments left to review. Enter opens the text in the editor, and
+          Enter again saves it. A click on the text also opens the editor, with the cursor where you clicked. When a segment has word timings
+          and the audio is paused, that click also moves the playhead to the word, and the word that is playing is highlighted. Ctrl+Enter confirms the segment and goes to the next one that isn't confirmed yet, including auto-accepted segments.
+          Space plays or pauses from the playhead, Shift+Space plays the selected segment, and the arrow keys move the playhead. The table
+          under <em>Keyboard shortcuts</em> lists every key.
+        </p>
+        <p className="m-0">
+          <em>Undo</em> and <em>Redo</em> above the timeline take back any change to the file's segments, one change at a time, and their
+          tooltips name the change. Label keeps the last 200 changes for each file, and it keeps them when you leave the page. A pseudo-label run
+          or an imported package clears the history of the files it changes.
+        </p>
+        <p className="m-0">
+          The row above the waveform holds the player. It plays the file from the playhead, shows the time, and sets the speed from 0.5× to 2×.
+          Label remembers the speed in your browser for the next file. While the file plays, the segment under the playhead has a blue outline
+          on the speaker lanes and a blue edge in the table, and the table scrolls to keep it in view.
+        </p>
+        <p className="m-0">
           To listen to any stretch of the file, including a stretch that crosses speakers, drag across the waveform, and the stretch plays at
-          once. Space plays or pauses the stretch again, and Escape or a click on the waveform clears it.
+          once. Shift+Space plays the stretch again, and Escape or a click on the waveform clears it. When you play a segment with its play
+          button, a click anywhere else on the timeline stops it there.
         </p>
       </>
     ),
@@ -143,17 +162,23 @@ const SECTIONS: Section[] = [
         <ul className="m-0 pl-5 flex flex-col gap-1.5">
           <li>To move a segment, drag it sideways. To give it to another speaker, drag it onto that speaker's lane, and press Escape while you drag to cancel.</li>
           <li>To trim a segment, drag the grip at either end. When a grip has the focus, the arrow keys move it by {NUDGE} seconds, or by {NUDGE_SHIFT} seconds with Shift.</li>
-          <li>To add a segment, drag across empty space in a lane. Label ignores a segment shorter than {MIN_LEN} seconds, and <em>Segment at playhead</em> adds a one-second segment where the playhead is.</li>
+          <li>
+            Where one segment ends and another starts at the same time, on any lane, a drag of that edge moves both segments, so a change of
+            speaker stays in the same place. To move one edge alone, hold Alt while you drag.
+          </li>
+          <li>To add a segment, drag across empty space in a lane. Label ignores a segment shorter than {MIN_LEN} seconds. A double-click on empty space adds a {PLACED_LEN} second segment that stops short of the segments next to it, and <em>Segment at playhead</em> adds a one-second segment where the playhead is.</li>
           <li>To add a speaker that the diarisation model missed, use <em>Add speaker</em>. A file can have up to {MAX_SPEAKERS} speakers.</li>
+          <li>To rename a speaker, double-click its name beside the lane, type the new name, and press Enter. When another speaker already has that name, Label asks before it gives that speaker all the segments.</li>
         </ul>
         <p className="m-0">
-          To change a segment's speaker, click the speaker chip in the table to cycle through the speakers, or press a number from 1 to 8. To split a
-          segment at the playhead, press V, and to merge segments, press M.
+          To change a segment's speaker, click the speaker chip in the table and pick a speaker from the menu, or press a number from 1 to 8.
+          The menu can also take the speaker away, or add a new speaker. To split the
+          segment under the playhead, press S, and to merge segments, press M. Delete deletes the selected segment, and Ctrl+Z undoes it.
         </p>
         <p className="m-0">
           For fine edits, you can zoom in on the timeline, down to a one-second window. Use the zoom buttons or the <kbd className={kbd}>=</kbd> and{" "}
-          <kbd className={kbd}>-</kbd> keys, or hold Ctrl (⌘ on a Mac) and scroll to zoom where the pointer is. To move along the file, hold Shift and
-          scroll, or drag the window on the overview strip, and press <kbd className={kbd}>0</kbd> to see the whole file again. The view follows
+          <kbd className={kbd}>-</kbd> keys, or hold Ctrl (⌘ on a Mac) and scroll to zoom where the pointer is. To move along the file, scroll with the
+          pointer over the timeline, or drag the window on the overview strip, and press <kbd className={kbd}>0</kbd> to see the whole file again. The view follows
           playback and the segment you select.
         </p>
       </>
@@ -222,6 +247,12 @@ const SECTIONS: Section[] = [
         </p>
         <ul className="m-0 pl-5 flex flex-col gap-1.5">
           <li>WER (word error rate) compares each model's transcripts with the confirmed ones, after the selected normaliser removes differences such as case and punctuation.</li>
+          <li>
+            cpWER (concatenated minimum-permutation WER) scores the transcript and the speakers together. For each model, it puts each speaker's
+            words in a row, with the speakers the last pseudo-label run's diariser found, and it matches the speakers to the confirmed ones in the
+            way that gives the fewest errors. A word given to the wrong speaker counts twice. cpWER scores each file up to the first segment
+            nobody has reviewed, so a file counts before you finish it, and speech nobody has labelled yet never counts as an error.
+          </li>
           <li>DER (diarisation error rate) and JER (Jaccard error rate) measure the speaker turns on fully reviewed files. They use a 0.25-second collar, which ignores small timing differences at each segment edge.</li>
           <li>The standings show a 95% interval for each model, computed by resampling the segments many times (bootstrapping).</li>
         </ul>

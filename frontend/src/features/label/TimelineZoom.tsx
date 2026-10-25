@@ -1,13 +1,13 @@
 // Zoom for Annotate's timeline: buttons (and the =, −, 0 keys in Annotate), Ctrl/⌘ + scroll to zoom
-// at the pointer, Shift + scroll or a sideways scroll to pan, and an overview strip of the whole file
-// whose window can be dragged. The Timeline and the speaker lanes both show the same window.
+// at the pointer, a plain scroll to pan, and an overview strip of the whole file whose window can be
+// dragged. The Timeline and the speaker lanes both show the same window.
 
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import * as I from "../../components/icons";
 import { LABEL_W } from "../../components/Timeline";
 import { Button } from "../../components/ui";
 import { clock } from "../../lib/format";
-import { centreOn, fit, isFit, MIN_SPAN, pan, STEP, zoomAt, type Window } from "./zoom";
+import { centreOn, fit, isFit, MIN_SPAN, pan, STEP, wheeled, zoomAt, type Window } from "./zoom";
 
 /** Zoom buttons and what the window shows. `anchor` is where a button zooms around (the playhead). */
 export function ZoomBar({ view, duration, anchor, onView }: { view: Window; duration: number; anchor: number; onView: (w: Window) => void }) {
@@ -18,7 +18,7 @@ export function ZoomBar({ view, duration, anchor, onView }: { view: Window; dura
       <span className="num" aria-live="polite">
         {whole ? "Whole file" : <>{clock(view.t0)} – {clock(view.t1)} · {s < 10 ? s.toFixed(1) : Math.round(s)} s</>}
       </span>
-      <span className="hidden lg:inline text-subtle">Ctrl + scroll to zoom · Shift + scroll to pan</span>
+      <span className="hidden 2xl:inline text-subtle">Scroll to pan · Ctrl + scroll to zoom</span>
       <Button size="sm" aria-label="Zoom out (−)" disabled={whole} onClick={() => onView(zoomAt(view, 1 / STEP, anchor, duration))}>
         <span aria-hidden className="num text-sm leading-none">−</span>
       </Button>
@@ -68,8 +68,8 @@ export function Overview({ view, duration, time, onView }: { view: Window; durat
   );
 }
 
-/** Ctrl/⌘ + wheel (and a trackpad pinch) zooms at the pointer; Shift + wheel or a sideways scroll pans.
- * A plain vertical scroll still scrolls the page. On `box`, whose lanes start LABEL_W from its left. */
+/** Ctrl/⌘ + wheel (and a trackpad pinch) zooms at the pointer; any other wheel pans, so the page does not
+ * scroll while the pointer is over the timeline. On `box`, whose lanes start LABEL_W from its left. */
 export function useWheelZoom(box: RefObject<HTMLDivElement | null>, enabled: boolean, duration: number, setView: (f: (w: Window) => Window) => void) {
   const latest = useRef({ duration, setView });
   latest.current = { duration, setView };
@@ -77,21 +77,14 @@ export function useWheelZoom(box: RefObject<HTMLDivElement | null>, enabled: boo
     const el = box.current;
     if (!enabled || !el) return;
     const onWheel = (e: WheelEvent) => {
-      const zoom = e.ctrlKey || e.metaKey;
-      const sideways = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
-      if (!zoom && !sideways) return;
       e.preventDefault();
       const { duration: d, setView: set } = latest.current;
       const r = el.getBoundingClientRect();
       const width = Math.max(1, r.width - LABEL_W);
       const frac = Math.max(0, Math.min(1, (e.clientX - r.left - LABEL_W) / width));
       const px = e.deltaMode === 1 ? 16 : 1; // lines to pixels
-      if (zoom) {
-        set((w) => zoomAt(w, Math.exp(-e.deltaY * px * 0.002), w.t0 + frac * (w.t1 - w.t0), d));
-      } else {
-        const dx = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * px;
-        set((w) => pan(w, (dx / width) * (w.t1 - w.t0), d));
-      }
+      const wheel = { dx: e.deltaX * px, dy: e.deltaY * px, zoom: e.ctrlKey || e.metaKey };
+      set((w) => wheeled(w, wheel, frac, width, d));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);

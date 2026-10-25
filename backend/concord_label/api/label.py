@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..core.db import get_session
 from ..core.models import AudioFile, Job, Model, Run, RunTask, Segment, SegmentStatus
-from ..label import console, edit, fusion, live, pseudo
+from ..label import console, edit, fusion, history, live, pseudo
 from ..platform import catalog
 from ..runs import jobs
 from .datasets import dataset_json, get_dataset, job_brief
@@ -230,7 +230,7 @@ def patch_segment(segment_id: int, body: SegmentPatch, session: Session = Depend
 
 class BulkIn(BaseModel):
     ids: list[int] = Field(min_length=1)
-    action: str  # confirm | reject | review | assign_speaker | flag | unflag
+    action: str  # confirm | reject | review | assign_speaker | rename_speaker | flag | unflag
     speaker: str | None = None
 
 
@@ -252,6 +252,19 @@ def merge_segments(body: MergeIn, session: Session = Depends(get_session)) -> di
     return edit.segment_json(s)
 
 
+class BoundaryIn(BaseModel):
+    ids: list[int] = Field(min_length=2)
+    t: float
+
+
+@router.post("/segments/boundary")
+def move_boundary(body: BoundaryIn, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    """Move the edge where these segments touch (a drag on the speaker lanes) to `t`, as one edit."""
+    segs = _segments(session, body.ids)
+    out = _commit_or_400(session, lambda: edit.boundary(session, segs, body.t))
+    return [edit.segment_json(s) for s in out]
+
+
 class SplitIn(BaseModel):
     t: float
 
@@ -265,7 +278,7 @@ def split_segment(segment_id: int, body: SplitIn, session: Session = Depends(get
 
 @router.delete("/segments/{segment_id}", status_code=204)
 def delete_segment(segment_id: int, session: Session = Depends(get_session)) -> None:
-    session.delete(_segment(session, segment_id))
+    edit.remove(session, _segment(session, segment_id))
     session.commit()
 
 
@@ -287,6 +300,30 @@ def create_segment(file_id: int, body: SegmentIn, session: Session = Depends(get
 def confirm_auto(file_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
     f = _file(session, file_id)
     return {"confirmed": _commit_or_400(session, lambda: edit.confirm_auto(session, f))}
+
+
+def _history(session: Session, fn):
+    try:
+        out = fn()
+    except history.HistoryError as exc:
+        session.commit()  # a history that no longer matches the file has been forgotten
+        raise HTTPException(409, str(exc)) from None
+    session.commit()
+    return out
+
+
+@router.post("/files/{file_id}/undo")
+def undo_edit(file_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Undo the file's last edit: `{action, ids}` with the ids of the segments it wrote back."""
+    _file(session, file_id)
+    return _history(session, lambda: history.undo(session, file_id))
+
+
+@router.post("/files/{file_id}/redo")
+def redo_edit(file_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Redo the edit undone last: `{action, ids}` with the ids of the segments it wrote back."""
+    _file(session, file_id)
+    return _history(session, lambda: history.redo(session, file_id))
 
 
 # ---------------------------------------------------------------- live evaluation

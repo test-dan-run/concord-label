@@ -177,9 +177,9 @@ Canvas artboards: `Label-Console`, `Pseudo-Label`, `Annotate`, `Live-Eval`, `Syn
   - Results: triage bar, member-agreement matrix (pairwise WER), share chosen as starting hypothesis, review queue.
 - **Annotate** (annotation only; no metrics on this screen):
   - Focus switch: *Transcript + speakers* / *Keywords* / *Both*. It hides the lanes and columns that aren't in focus.
-  - Whole-file timeline: waveform (no spectrogram), **one lane per speaker** so overlaps are visible (overlaps hatched across speaker lanes), keyword lane, flags lane.
-  - **Segment grid with multi-select** (checkboxes, shift-click ranges) and a bulk bar: assign speaker, merge, accept/reject keywords, confirm. Inline transcript editing, speaker pill cycling, keyword chips cycling, "Confirm all high-confidence".
-  - Keyboard shortcuts per §7.
+  - Whole-file timeline: waveform (no spectrogram), **one lane per speaker** so overlaps are visible (overlaps hatched across speaker lanes), keyword lane, flags lane. On the lanes (ANNOTATE_PLAN.md phase 5): dragging an edge two segments share moves both (Alt: one edge alone), a double-click on empty space adds a 2 s segment, a double-click on a lane's name renames the speaker, and a wide enough block shows its text.
+  - **Segment grid with multi-select** (checkboxes, shift-click ranges) and a bulk bar: assign speaker, merge, accept/reject keywords, confirm. Inline transcript editing (Enter, a single click on the text with the cursor placed there, or the pen; a text area that grows), a speaker chip that opens a menu of the speakers (the owner replaced pill cycling on 2026-10-25), keyword chips cycling, "Confirm all high-confidence". With word timings a click on a word also seeks to it while the audio is paused, and the word being played is highlighted. Tab / Shift+Tab walk the segments to review and play each one; the row above the timeline counts them.
+  - Keyboard shortcuts per §7. A transport row above the timeline: play/pause from the playhead, clock, speed 0.5×–2×, zoom, Split / Merge / Delete. Undo and redo of every change to the file's segments (server-side history). The mouse wheel pans the timeline; Ctrl + wheel zooms.
 - **Live evaluation** (separate screen): WER of each model vs number of confirmed segments, with "too few to rank" below 30. Standings with bootstrap 95% intervals next to the locked-benchmark score; DER and KWS cards; latest confirmations feed. "Promote to benchmark dataset" (and "Use for retraining" in Full only).
 - **Import / export progress**:
   - Export: dataset; changed-since-last-export / all / picked files; include pseudo-labels, raw model outputs, audio (optional).
@@ -223,7 +223,7 @@ Phase 3 adds `TrainingRun`; nothing above may reference it.
 - Speakers, up to 8: teal `#14B8A6`, orange `#F97316`, violet `#A855F7`, yellow `#FACC15`, sky `#38BDF8`, fuchsia `#EC4899`, lime `#84CC16`, lavender `#8B5CF6`. Overlap is a crimson 45° hatch. Never recolour waveform peaks per speaker.
 - Confidence: ≥0.85 emerald `#10B981`, 0.50–0.84 amber `#F59E0B`, <0.50 rose `#F43F5E`, pending slate `#64748B`.
 - ASR diffs: insertion emerald `+tok`, deletion rose strike-through `−tok`, substitution amber `ref → hyp`. DER: missed rose, false alarm amber, confusion violet. Improvement emerald ↓, degradation rose ↑.
-- Shortcuts: Space play/pause · Tab next low-confidence · 1–8 assign speaker · V split · M merge · Enter confirm.
+- Shortcuts (the owner replaced the design system's list with the keys of their earlier app, pseudolabel, on 2026-10-25; see ANNOTATE_PLAN.md): Space play/pause from the playhead · Shift+Space play the waveform selection or the selected segment · ←/→ skip 2 s · ↑/↓ previous/next segment (the playhead goes to its start) · Tab/Shift+Tab next/previous to review · Enter edit the text · Ctrl+Enter confirm and go to the next segment not yet confirmed (auto-accepted included; the owner asked on 2026-10-25) · S split at the playhead · M merge · Delete delete · Ctrl+Z undo · Ctrl+Shift+Z / Ctrl+Y redo · Esc close menu, editor, row selection, waveform selection · 1–8 assign speaker · Alt+Enter house spelling · = / - / 0 zoom. Annotate's `SHORTCUTS` (`frontend/src/lib/label.ts`) is the list the app shows.
 
 ---
 

@@ -68,14 +68,16 @@ test("annotate: edit, shortcuts, multi-select, bulk confirm, audio", async ({ pa
   await expect(page.getByRole("heading", { name: /Segments · \d+/ })).toBeVisible();
   await expect(page.locator("[data-lane]").first()).toBeVisible();
   await page.getByRole("button", { name: "All", exact: true }).click();
-  // inline edit with autosave
-  const first = page.getByLabel(/^Transcript at /).first();
+  // a click edits the text, and Enter saves it
+  await page.locator("[data-transcript]").first().click();
+  const first = page.getByLabel(/^Transcript at /);
   await first.fill("Edited in the browser.");
   await first.press("Enter");
-  await expect(page.getByLabel(/^Transcript at /).first()).toHaveValue("Edited in the browser.");
+  await expect(first).toHaveCount(0);
+  await expect(page.locator("[data-transcript]").first()).toHaveText("Edited in the browser.");
   await page.reload();
   await page.getByRole("button", { name: "All", exact: true }).click();
-  await expect(page.getByLabel(/^Transcript at /).first()).toHaveValue("Edited in the browser.");
+  await expect(page.locator("[data-transcript]").first()).toHaveText("Edited in the browser.");
   // Space plays the current segment
   await page.locator("body").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("Space");
@@ -91,7 +93,7 @@ test("annotate: edit, shortcuts, multi-select, bulk confirm, audio", async ({ pa
   await expect(bar).toHaveCount(0);
   await expect(page.locator("tbody tr").nth(2)).toContainText("Confirmed");
   // 1–8 assigns a speaker to the current segment
-  const pill = page.locator("tbody tr").nth(3).getByTitle(/cycle speakers/);
+  const pill = page.locator("tbody tr").nth(3).getByTitle(/Change the speaker/);
   await page.locator("tbody tr").nth(3).click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("2");
   await expect.poll(() => pill.textContent()).not.toBe("");
@@ -150,7 +152,7 @@ test("annotate: speaker lanes move, trim, draw and add a speaker", async ({ page
 
   // add a speaker, then draw a segment on its empty lane
   await page.getByRole("button", { name: "Add speaker" }).click();
-  await expect(lane("spk2")).toContainText("Drag here to add a segment for spk2, or press 3 on a selected one.");
+  await expect(lane("spk2")).toContainText("Drag or double-click here to add a segment for spk2, or press 3 on a selected one.");
   await expect(page.getByText("1 added by you")).toBeVisible();
   const l2 = (await lane("spk2").boundingBox())!;
   await page.mouse.move(l2.x + l2.width * 0.1, l2.y + l2.height / 2);
@@ -210,8 +212,8 @@ test("annotate: pull a stretch out on the waveform and play it, across speakers"
   await expect.poll(async () => (await state()).paused, { timeout: 15_000 }).toBe(true);
   expect((await state()).t).toBeGreaterThanOrEqual(b - 0.01);
   expect((await state()).t).toBeLessThan(b + 0.25);
-  // Space plays it again from its start, and pauses it
-  await page.keyboard.press("Space");
+  // Shift+Space plays it again from its start, and Space pauses it
+  await page.keyboard.press("Shift+Space");
   await expect.poll(async () => (await state()).paused).toBe(false);
   expect((await state()).t).toBeLessThan(b);
   await page.keyboard.press("Space");
@@ -286,6 +288,290 @@ test("annotate: zoom the timeline for fine edits", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("annotate: the transport's speed, a wheel pan, and a click that ends a segment's playback", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 4 });
+  await expect(page.getByRole("heading", { name: "d05_clipped" })).toBeVisible();
+  const audio = page.locator("audio").first();
+  // the speed applies at once and carries over to the next page load
+  await page.getByLabel("Playback speed").selectOption("1.5");
+  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.playbackRate)).toBe(1.5);
+  await page.reload();
+  await expect(page.getByLabel("Playback speed")).toHaveValue("1.5");
+  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.playbackRate)).toBe(1.5);
+  await page.getByLabel("Playback speed").selectOption("1");
+
+  // zoomed in, a plain wheel over the lanes pans the timeline and leaves the page where it was
+  const zoom = page.getByRole("group", { name: "Timeline zoom" });
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("=");
+  await page.keyboard.press("=");
+  await expect(zoom).toContainText("00:00.000 – ");
+  const lane = (await page.locator('[data-lane="spk0"]').boundingBox())!;
+  const scrollY = await page.evaluate(() => window.scrollY);
+  await page.mouse.move(lane.x + lane.width / 2, lane.y + lane.height / 2);
+  await page.mouse.wheel(0, 300);
+  await expect(zoom).not.toContainText("00:00.000 – ");
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
+  await page.keyboard.press("0");
+
+  // a segment started with its play button stops when you click somewhere else on the waveform
+  const paused = () => audio.evaluate((a: HTMLAudioElement) => a.paused);
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  await page.getByRole("button", { name: /^Play segment at / }).nth(1).click();
+  await expect.poll(paused, { timeout: 15_000 }).toBe(false);
+  await expect(page.locator("tbody tr[data-playing]")).toHaveCount(1);
+  const wave = (await page.locator("canvas").first().boundingBox())!;
+  await page.mouse.click(wave.x + wave.width * 0.9, wave.y + wave.height / 2);
+  await expect.poll(paused).toBe(true);
+  expect(await audio.evaluate((a: HTMLAudioElement) => a.currentTime)).toBeGreaterThan(30);
+  expect(errors).toEqual([]);
+});
+
+test("annotate: undo a merge with Ctrl+Z, and redo it", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 2 });
+  await expect(page.getByRole("heading", { name: "d03_44k_stereo" })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const rows = page.locator("tbody tr");
+  const history = page.getByRole("group", { name: "History" });
+  await expect(rows.first()).toBeVisible();
+  const n = await rows.count();
+  const texts = await page.locator("[data-transcript]").allTextContents();
+  const boxes = page.getByLabel(/^Select segment at /);
+  await boxes.nth(0).click();
+  await boxes.nth(1).click();
+  await page.getByRole("toolbar", { name: "Bulk actions" }).getByRole("button", { name: "Merge" }).click();
+  await expect(rows).toHaveCount(n - 1);
+  await expect(history.getByRole("button", { name: "Undo" })).toHaveAttribute("title", "Undo merge (Ctrl+Z)");
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+z");
+  await expect(rows).toHaveCount(n);
+  await expect(page.getByText("Undid merge")).toBeVisible();
+  await expect.poll(() => page.locator("[data-transcript]").allTextContents()).toEqual(texts);
+  await expect(history.getByRole("button", { name: "Redo" })).toHaveAttribute("title", "Redo merge (Ctrl+Shift+Z)");
+  await page.keyboard.press("Control+Shift+z");
+  await expect(rows).toHaveCount(n - 1);
+  await expect(page.getByText("Redid merge")).toBeVisible();
+  await page.keyboard.press("Control+z");
+  await expect(rows).toHaveCount(n);
+  expect(errors).toEqual([]);
+});
+
+test("annotate: the keys", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 5 });
+  await expect(page.getByRole("heading", { name: "d06" })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const audio = page.locator("audio").first();
+  const t = () => audio.evaluate((a: HTMLAudioElement) => a.currentTime);
+  const paused = () => audio.evaluate((a: HTMLAudioElement) => a.paused);
+  const rows = page.locator("tbody tr");
+  const current = page.locator("tbody tr[aria-current]");
+  const start = async (row: typeof current) => {
+    const m = /(\d\d):(\d\d\.\d{3})/.exec((await row.locator("td").nth(2).textContent())!)!;
+    return Number(m[1]) * 60 + Number(m[2]);
+  };
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+
+  // ↑ and ↓ select the previous or next segment and move the playhead to its start
+  await rows.nth(0).click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("ArrowDown");
+  const second = rows.nth(1);
+  await expect(second).toHaveAttribute("aria-current", "true");
+  await expect.poll(t).toBeCloseTo(await start(second), 2);
+  await page.keyboard.press("ArrowUp");
+  await expect(rows.nth(0)).toHaveAttribute("aria-current", "true");
+  // ← and → skip 2 seconds
+  const t0 = await t();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(t).toBeCloseTo(t0 + 2, 2);
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(t).toBeCloseTo(t0, 2);
+  // Space plays from the playhead and pauses; Shift+Space plays the selected segment to its end
+  await page.keyboard.press("Space");
+  await expect.poll(paused, { timeout: 15_000 }).toBe(false);
+  await page.keyboard.press("Space");
+  await expect.poll(paused).toBe(true);
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Shift+Space");
+  await expect.poll(paused, { timeout: 15_000 }).toBe(false);
+  await expect.poll(paused, { timeout: 15_000 }).toBe(true);
+  // the side panel shows the selected segment's span, "00:01.651 – 00:02.832 · 1.18 s"
+  const m2 = /\d\d:\d\d\.\d{3} – (\d\d):(\d\d\.\d{3})/.exec((await page.getByText(/^\d\d:\d\d\.\d{3} – \d\d:\d\d\.\d{3} · /).textContent())!)!;
+  expect(await t()).toBeGreaterThanOrEqual(Number(m2[1]) * 60 + Number(m2[2]) - 0.01);
+
+  // Tab and Shift+Tab go to the next and previous segment to review
+  await page.keyboard.press("Tab");
+  await expect(current).toContainText("Needs review");
+  const first = await current.getAttribute("aria-label") ?? (await current.textContent());
+  await page.keyboard.press("Tab");
+  await expect(current).toContainText("Needs review");
+  await expect(current).not.toHaveText(first!);
+  await page.keyboard.press("Shift+Tab");
+  await expect(current).toHaveText(first!);
+  // Tab keeps its usual meaning in the header
+  await page.getByRole("combobox", { name: "File", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Previous file" })).toBeFocused();
+  await expect(current).toHaveText(first!);
+
+  // Enter edits the text: Esc cancels, Enter saves
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  const shown = current.locator("[data-transcript]");
+  const text = (await shown.textContent())!;
+  await page.keyboard.press("Enter");
+  const input = current.getByLabel(/^Transcript at /);
+  await expect(input).toBeFocused();
+  await page.keyboard.type(" (draft)");
+  await page.keyboard.press("Escape");
+  await expect(input).toHaveCount(0);
+  await expect(shown).toHaveText(text);
+  await page.keyboard.press("Enter");
+  await page.keyboard.type(" Checked.");
+  await page.keyboard.press("Enter");
+  await expect(shown).toHaveText(`${text} Checked.`);
+  // Ctrl+Enter confirms it and goes to the next segment to review
+  const edited = rows.filter({ hasText: `${text} Checked.` });
+  await page.keyboard.press("Control+Enter");
+  await expect(edited).toContainText("Confirmed");
+  await expect(current).not.toHaveText(await edited.textContent() ?? "");
+
+  // S splits the segment under the playhead; V does nothing now
+  const n = await rows.count();
+  const bar = page.locator('[data-lane] span[title]').first();
+  await bar.click();
+  await page.keyboard.press("v");
+  await page.waitForTimeout(300);
+  await expect(rows).toHaveCount(n);
+  await page.keyboard.press("s");
+  await expect(rows).toHaveCount(n + 1);
+  // M merges it back with the next one, Delete deletes the selected segment, and Ctrl+Z and Ctrl+Y undo and redo
+  await page.keyboard.press("m");
+  await expect(rows).toHaveCount(n);
+  await page.keyboard.press("Delete");
+  await expect(rows).toHaveCount(n - 1);
+  await page.keyboard.press("Control+z");
+  await expect(rows).toHaveCount(n);
+  await page.keyboard.press("Control+y");
+  await expect(rows).toHaveCount(n - 1);
+  await page.keyboard.press("Control+Shift+z");
+  await page.keyboard.press("Control+z");
+  await expect(rows).toHaveCount(n);
+
+  // Esc clears the selected rows first, then the waveform selection
+  const boxes = page.getByLabel(/^Select segment at /);
+  await boxes.nth(0).click();
+  await boxes.nth(1).click();
+  const wave = (await page.locator("canvas").first().boundingBox())!;
+  await page.mouse.move(wave.x + wave.width * 0.6, wave.y + wave.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(wave.x + wave.width * 0.65, wave.y + wave.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const sel = page.getByRole("group", { name: "Waveform selection" });
+  await expect(sel).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("toolbar", { name: "Bulk actions" })).toHaveCount(0);
+  await expect(sel).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sel).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("annotate: the segment list reads like pseudolabel's, and Tab plays the next segment to review", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 4 });
+  await expect(page.getByRole("heading", { name: "d05_clipped" })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const rows = page.locator("tbody tr");
+  const audio = page.locator("audio").first();
+  const t = () => audio.evaluate((a: HTMLAudioElement) => a.currentTime);
+
+  // a click on the start time moves the playhead there
+  const row = rows.nth(2);
+  await row.getByTitle("Move the playhead to the start of the segment").click();
+  await expect(row).toHaveAttribute("aria-current", "true");
+  const at = (await row.getByTitle("Move the playhead to the start of the segment").textContent())!;
+  await expect.poll(t).toBeCloseTo(Number(at.slice(0, 2)) * 60 + Number(at.slice(3)), 2);
+
+  // a single click on the text opens the editor with the cursor where you clicked; with word timings, a
+  // click on a word also moves the playhead to it while the audio is paused
+  const shown = row.locator("[data-transcript]");
+  const text = (await shown.textContent())!;
+  const word = row.locator("[data-transcript] [data-word]").nth(2);
+  const wordText = (await word.textContent())!;
+  const before = await t();
+  await word.click({ position: { x: 1, y: 5 } });
+  await expect.poll(t).toBeGreaterThan(before);
+  const editor = row.getByLabel(/^Transcript at /);
+  await expect(editor).toBeFocused();
+  const caret = await editor.evaluate((el: HTMLTextAreaElement) => el.selectionStart);
+  expect(caret - text.indexOf(wordText)).toBeGreaterThanOrEqual(0);
+  expect(caret - text.indexOf(wordText)).toBeLessThanOrEqual(1);
+  await page.keyboard.press("Escape");
+  await expect(editor).toHaveCount(0);
+
+  // Enter saves, and Enter opens the editor again
+  await shown.click();
+  await expect(editor).toBeFocused();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" Twice.");
+  await page.keyboard.press("Enter");
+  await expect(shown).toHaveText(`${text} Twice.`);
+  await page.keyboard.press("Enter");
+  await expect(editor).toBeFocused();
+  await editor.fill(text);
+  await page.keyboard.press("Enter");
+  await expect(shown).toHaveText(text);
+
+  // the speaker chip opens a menu: pick another speaker, or a new one
+  const chip = row.getByTitle(/Change the speaker/);
+  const was = (await chip.textContent())!.trim();
+  await chip.click();
+  const menu = page.getByRole("menu", { name: "Speaker" });
+  await expect(menu.getByRole("menuitem")).toHaveCount(4); // spk0, spk1, No speaker, New speaker
+  await menu.getByRole("menuitem", { name: was === "spk0" ? /spk1/ : /spk0/ }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(chip).toHaveText(was === "spk0" ? "spk1" : "spk0");
+  await chip.click();
+  await menu.getByRole("menuitem", { name: "New speaker" }).click();
+  await expect(chip).toHaveText("spk2");
+  await expect(page.locator('[data-lane="spk2"]')).toBeVisible();
+  await chip.click();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  await expect(page.getByRole("group", { name: "Review" })).toContainText("Nothing left to review");
+  // Ctrl+Enter confirms the segment and goes to the next one that isn't confirmed, auto-accepted ones too
+  await row.click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+Enter");
+  await expect(row).toContainText("Confirmed");
+  await expect(rows.nth(3)).toHaveAttribute("aria-current", "true");
+  await expect(rows.nth(3)).toContainText("Auto-accepted");
+
+  // Tab goes to the next segment to review and plays it from start to end (d06 has one left after the keys test)
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 5 });
+  await expect(page.getByRole("heading", { name: "d06" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Review" })).toContainText(/[12] to review/);
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Tab");
+  const current = page.locator("tbody tr[aria-current]");
+  await expect(current).toContainText(/Needs review|New · manual/);
+  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.paused), { timeout: 15_000 }).toBe(false);
+  const start = (await current.getByTitle("Move the playhead to the start of the segment").textContent())!;
+  expect(await t()).toBeGreaterThanOrEqual(Number(start.slice(0, 2)) * 60 + Number(start.slice(3)) - 0.01);
+  await page.keyboard.press("Space");
+  expect(errors).toEqual([]);
+});
+
 test("lexicons: publish house spellings, then use or keep them in Annotate", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/lexicons");
@@ -315,8 +601,7 @@ test("lexicons: publish house spellings, then use or keep them in Annotate", asy
   await page.getByRole("button", { name: "neighbor: house spelling is neighbour" }).click();
   const hint = page.getByRole("group", { name: "Spelling hint" });
   await hint.getByRole("button", { name: "Use" }).click();
-  // a segment with no hints left is a plain input again
-  const transcripts = () => page.getByLabel(/^Transcript at /).evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value).join("\n"));
+  const transcripts = async () => (await page.locator("[data-transcript]").allTextContents()).join("\n");
   await expect.poll(transcripts).toContain("my neighbour if I am out?");
   await expect(page.getByRole("link", { name: /· 1 spelling hint$/ })).toBeVisible();
   await page.getByRole("button", { name: "noon: house spelling is midday" }).click();
@@ -329,15 +614,133 @@ test("lexicons: publish house spellings, then use or keep them in Annotate", asy
   expect(errors).toEqual([]);
 });
 
+test("annotate: drag a shared edge, rename a lane, and double-click to add a segment", async ({ page, request }) => {
+  const errors = watchErrors(page);
+  type Seg = { id: number; start: number; end: number; speaker: string | null; status: string };
+  const ds = ((await (await request.get("/api/datasets")).json()) as { id: number; name: string }[]).find((d) => d.name === "Unlabelled calls")!;
+  const file = ((await (await request.get(`/api/label/datasets/${ds.id}/files`)).json()) as { id: number; stem: string; duration: number }[]).find((f) => f.stem === "d04")!;
+  const view = async () => (await (await request.get(`/api/label/files/${file.id}`)).json()) as { segments: Seg[] };
+  const live = (await view()).segments.filter((x) => x.status !== "rejected");
+  // two segments of different speakers made to touch: the first now ends where the second starts
+  const k = live.findIndex((x, j) => live[j + 1] && live[j + 1].speaker !== x.speaker && live[j + 1].start - x.start > 1);
+  const [a, b] = [live[k], live[k + 1]];
+  expect((await request.patch(`/api/label/segments/${a.id}`, { data: { end: b.start } })).ok()).toBe(true);
+  const clk = (t: number) => `${String(Math.floor(t / 60)).padStart(2, "0")}:${(t % 60).toFixed(3).padStart(6, "0")}`;
+  await page.goto(`/label/annotate/${ds.id}?file=${file.id}`);
+  await expect(page.getByRole("heading", { name: "d04" })).toBeVisible();
+  const bar = (x: Seg) => page.locator(`[data-lane="${x.speaker}"] span[title*="${clk(x.start)} – "]`);
+  const after = async () => Object.fromEntries((await view()).segments.map((x) => [x.id, x]));
+
+  // dragging the end of the first moves the start of the second with it, as one edit
+  await bar(a).hover();
+  const grip = bar(a).getByRole("button", { name: /^End of segment/ });
+  const g = (await grip.boundingBox())!;
+  await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(g.x + g.width / 2 - 25, g.y + g.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await after())[a.id].end).toBeLessThan(b.start);
+  const moved = await after();
+  expect(moved[b.id].start).toBe(moved[a.id].end);
+  await expect(page.getByRole("group", { name: "History" }).getByRole("button", { name: "Undo" })).toHaveAttribute("title", "Undo boundary move (Ctrl+Z)");
+  // with Alt, the edge moves alone
+  const g2 = (await grip.boundingBox())!;
+  await page.keyboard.down("Alt");
+  await page.mouse.move(g2.x + g2.width / 2, g2.y + g2.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(g2.x + g2.width / 2 - 25, g2.y + g2.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Alt");
+  await expect.poll(async () => (await after())[a.id].end).toBeLessThan(moved[a.id].end);
+  expect((await after())[b.id].start).toBe(moved[b.id].start);
+
+  // a double-click on an empty part of a lane adds a 2 second segment there
+  const spk = a.speaker!;
+  const mine = (await view()).segments.filter((x) => x.speaker === spk && x.status !== "rejected").sort((p, q) => p.start - q.start);
+  const edges = [0, ...mine.flatMap((x) => [x.start, x.end]), file.duration];
+  let gap = 0;
+  for (let j = 0; j < edges.length; j += 2) if (edges[j + 1] - edges[j] > 3) { gap = (edges[j] + edges[j + 1]) / 2; break; }
+  expect(gap).toBeGreaterThan(0);
+  const l = (await page.locator(`[data-lane="${spk}"]`).boundingBox())!;
+  const n = await page.locator(`[data-lane="${spk}"] span[title]`).count();
+  await page.mouse.dblclick(l.x + (l.width * gap) / file.duration, l.y + l.height / 2);
+  await expect(page.locator(`[data-lane="${spk}"] span[title]`)).toHaveCount(n + 1);
+  const added = (await view()).segments.find((x) => x.speaker === spk && x.start < gap && gap < x.end)!;
+  expect(added.end - added.start).toBeCloseTo(2, 1);
+
+  // a double-click on a lane's name renames the speaker on every segment; Esc cancels
+  const other = b.speaker!;
+  await page.getByTitle(`${other} (double-click to rename)`, { exact: true }).locator("span.truncate").dblclick();
+  await page.getByLabel(`Rename ${other}`).fill("Caller");
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel(`Rename ${other}`)).toHaveCount(0);
+  await page.getByTitle(`${other} (double-click to rename)`, { exact: true }).locator("span.truncate").dblclick();
+  await page.getByLabel(`Rename ${other}`).fill("Caller");
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-lane="Caller"]')).toBeVisible();
+  await expect(page.locator(`[data-lane="${other}"]`)).toHaveCount(0);
+  expect((await view()).segments.filter((x) => x.speaker === other)).toEqual([]);
+  // and the rename can be undone
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+z");
+  await expect(page.locator(`[data-lane="${other}"]`)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("annotate: adding a segment keeps the list where you are working", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 0 });
+  await expect(page.getByRole("heading", { name: "d01" })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const list = page.locator("div.overflow-auto:has(> table)");
+  const rows = page.locator("tbody tr");
+  const n = await rows.count();
+  // work near the end of the file: select a late segment, so the list scrolls down to it
+  await rows.nth(n - 2).click({ position: { x: 5, y: 5 } });
+  await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
+  // add a segment late in the file with a double-click on an empty part of a lane
+  await page.locator("[data-lane]").first().scrollIntoViewIfNeeded();
+  const lane = (await page.locator("[data-lane]").first().boundingBox())!;
+  const bars = await page.locator("[data-lane]").first().locator("span[title]").evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => [r.left, r.right]));
+  let x = 0;
+  for (let k = bars.length - 1; k > 0 && !x; k--) if (bars[k][0] - bars[k - 1][1] > 40) x = (bars[k][0] + bars[k - 1][1]) / 2;
+  expect(x).toBeGreaterThan(lane.x + lane.width / 2);
+  await page.mouse.dblclick(x, lane.y + lane.height / 2);
+  await expect(rows).toHaveCount(n + 1);
+  // the new segment is selected, and the list stays down there instead of jumping to the top
+  await expect(page.locator("tbody tr[aria-current]")).toContainText("New · manual");
+  await page.waitForTimeout(300);
+  expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
+  // the same for a segment added at the playhead
+  await rows.nth(n - 3).getByTitle("Move the playhead to the start of the segment").click();
+  await page.getByRole("button", { name: "Segment at playhead" }).click();
+  await expect(rows).toHaveCount(n + 2);
+  await page.waitForTimeout(300);
+  expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
+  expect(errors).toEqual([]);
+});
+
 test("live evaluation loads standings and DER; Publish or Download, no locked score without Bench", async ({ page, request }) => {
   const errors = watchErrors(page);
   const catalog = await catalogOn(request);
+  // confirm every segment of one file, so cpWER has a fully reviewed file to score
+  const ds = ((await (await request.get("/api/datasets")).json()) as { id: number; name: string }[]).find((d) => d.name === "Unlabelled calls")!;
+  const file = ((await (await request.get(`/api/label/datasets/${ds.id}/files`)).json()) as { id: number; stem: string }[]).find((f) => f.stem === "d02_8k")!;
+  const ids = ((await (await request.get(`/api/label/files/${file.id}`)).json()) as { segments: { id: number }[] }).segments.map((x) => x.id);
+  expect((await request.post("/api/label/segments/bulk", { data: { ids, action: "confirm" } })).ok()).toBe(true);
   await page.goto("/label/live");
   await page.getByRole("main").getByRole("link", { name: /Unlabelled calls/ }).click();
   await expect(page.getByRole("heading", { name: "Live evaluation" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "WER vs confirmed segments" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Standings" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Diarisation (DER)" })).toBeVisible();
+  // cpWER sits beside WER, with the diariser's speakers, on each file up to where its review has got
+  await expect(page.getByRole("columnheader", { name: "cpWER" })).toBeVisible();
+  await expect(page.getByText(/with the speakers pyannote-diarization found\. .* of audio in [1-9]\d* of 6 files so far, [1-9]\d* of them reviewed to the end/)).toBeVisible();
+  const row = page.getByRole("row", { name: /whisper-large-v3/ }).first();
+  await expect(row.getByRole("cell").nth(4)).toHaveText(/\d+\.\d%/);
   // Publish to Dataset Catalog replaces Promote and Send to Bench; without the catalog the panel builds a package to
   // download. Without BENCH_URL the locked score is hidden.
   await expect(page.getByRole("heading", { name: "Promote to benchmark dataset" })).toHaveCount(0);
@@ -463,7 +866,7 @@ test("open in Label by sha256: the annotator opens on the file at t", async ({ p
   await page.goto(`/label/file/by-sha/${f.sha256}?${q}t=${t}`);
   await expect(page).toHaveURL(new RegExp(`/label/annotate/${hit.dataset_id}\\?file=${hit.file_id}&t=`));
   await expect(page.getByRole("heading", { name: f.stem, exact: true })).toBeVisible();
-  await expect(page.locator('tbody tr[aria-current="true"]').getByLabel(/^Transcript at /)).toHaveValue(seg.text ?? "");
+  await expect(page.locator('tbody tr[aria-current="true"] [data-transcript]')).toHaveText(seg.text ?? "(no transcript)");
   // an unknown fingerprint says so
   await page.goto(`/label/file/by-sha/${"0".repeat(64)}`);
   await expect(page.getByText(/This audio is not in Concord Label/)).toBeVisible();

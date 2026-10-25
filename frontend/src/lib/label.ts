@@ -42,19 +42,31 @@ export function statusLabel(s: Pick<Segment, "status" | "created">): string {
 
 /** Annotate's keyboard shortcuts: `short` for the strip under the segment table, `does` for the Docs page. */
 export const SHORTCUTS: { key: string; short: string; does: string }[] = [
-  { key: "Space", short: "play / pause", does: "Plays or pauses the stretch selected on the waveform, or the selected segment when no stretch is selected." },
-  { key: "Tab", short: "next low-confidence or spelling hint", does: "Moves to the next low-confidence segment or spelling hint." },
-  { key: "Alt+Enter", short: "use house spelling", does: "Uses the house spelling for the first spelling hint in the selected segment." },
+  { key: "Space", short: "play / pause", does: "Plays or pauses from the playhead." },
+  { key: "Shift+Space", short: "play selection", does: "Plays the stretch selected on the waveform, or else the selected segment." },
+  { key: "← and →", short: "skip 2 s", does: "Moves the playhead 2 seconds back or forward." },
+  { key: "↑ and ↓", short: "previous / next", does: "Selects the previous or next segment, and moves the playhead to its start." },
+  { key: "Tab and Shift+Tab", short: "next / previous to review", does: "Goes to the next or previous segment to review: one with low confidence, or one with a spelling hint." },
+  { key: "Enter", short: "edit text", does: "Starts editing the selected segment's text. In the editor, Enter saves, Esc cancels, and Tab saves and goes to the next segment to review." },
+  { key: "Ctrl+Enter", short: "confirm", does: "Confirms the selected segments and goes to the next segment that isn't confirmed yet, auto-accepted ones included. In the editor, it saves the text first." },
+  { key: "S", short: "split", does: "Splits the segment under the playhead at the playhead." },
+  { key: "M", short: "merge", does: "Merges the selected segments, or the selected segment with the next one." },
+  { key: "Delete", short: "delete", does: "Deletes the selected segment." },
+  { key: "Ctrl+Z", short: "undo", does: "Undoes the last change to the file's segments." },
+  { key: "Ctrl+Shift+Z and Ctrl+Y", short: "redo", does: "Redoes the last change that was undone." },
+  { key: "Esc", short: "close / clear", does: "Closes the open menu, then the editor, then clears the selected rows, then the waveform selection." },
   { key: "1 to 8", short: "assign speaker", does: "Gives the selected segments to that speaker." },
-  { key: "V", short: "split at playhead", does: "Splits the selected segment at the playhead." },
-  { key: "M", short: "merge", does: "Merges the selected segments, or merges the selected segment with the next one." },
-  { key: "Enter", short: "confirm", does: "Confirms the selected segments." },
-  { key: "↑ ↓", short: "move", does: "Moves the selection to the previous or next segment." },
+  { key: "Alt+Enter", short: "use house spelling", does: "Uses the house spelling for the first spelling hint in the selected segment." },
   { key: "= and -", short: "zoom", does: "Zooms the timeline in or out around the playhead, and Ctrl with the scroll wheel zooms at the pointer." },
   { key: "0", short: "whole file", does: "Shows the whole file on the timeline." },
-  { key: "Esc", short: "clear selection", does: "Clears the selected rows and the waveform selection." },
   { key: "Shift-click", short: "select range", does: "Selects a range of segments in the table." },
 ];
+
+/** The single keys in a SHORTCUTS entry, e.g. "Ctrl+Shift+Z and Ctrl+Y" -> ["Ctrl+Shift+Z", "Ctrl+Y"]. */
+export function shortcutKeys(key: string): string[] {
+  if (key === "1 to 8") return ["1", "2", "3", "4", "5", "6", "7", "8"];
+  return key.split(" and ");
+}
 
 /** Confidence colour (AeroAudio): >= high emerald, >= low amber, below rose, none slate. */
 export function confidenceColor(c: number | null | undefined, high = 0.85, low = 0.5): string {
@@ -83,13 +95,6 @@ export function selectRange(order: number[], selected: Set<number>, id: number, 
   return next;
 }
 
-/** The speaker after `current` in the file's speaker list (pill cycling); wraps around. */
-export function cycleSpeaker(speakers: string[], current: string | null): string | null {
-  if (!speakers.length) return current;
-  const k = current === null ? -1 : speakers.indexOf(current);
-  return speakers[(k + 1) % speakers.length];
-}
-
 /** Regions where two or more speakers talk at once (rejected segments ignored). */
 export function overlapRegions(segs: Pick<Segment, "start" | "end" | "speaker" | "status">[]): { start: number; end: number }[] {
   const ev: [number, number, string][] = [];
@@ -115,17 +120,45 @@ export function overlapRegions(segs: Pick<Segment, "start" | "end" | "speaker" |
   return out;
 }
 
-/** "Tab": the next unreviewed segment below the auto-accept threshold after `fromId` (wraps). */
-/** The next segment after `fromId` (wrapping) that is unreviewed and below `high`, or that `also` picks
- * (Annotate: a segment with a spelling hint). */
-export function nextLowConfidence(segs: Segment[], fromId: number | null, high = 0.85, also?: (s: Segment) => boolean): number | null {
-  const want = (s: Segment) => (!s.reviewed && s.status !== "confirmed" && (s.confidence === null || s.confidence < high)) || !!also?.(s);
+/** A segment to review: nobody has reviewed it, and its confidence is below `high`. */
+export function lowConfidence(s: Pick<Segment, "reviewed" | "status" | "confidence">, high = 0.85): boolean {
+  return !s.reviewed && s.status !== "confirmed" && (s.confidence === null || s.confidence < high);
+}
+
+/** "Tab" and "Shift+Tab": the next segment to review after `fromId`, or before it when `direction` is -1,
+ * wrapping around the file. A segment to review has low confidence, or `also` picks it (Annotate: a segment
+ * with a spelling hint). */
+export function nextToReview(segs: Segment[], fromId: number | null, direction: 1 | -1 = 1, high = 0.85, also?: (s: Segment) => boolean): number | null {
+  const want = (s: Segment) => lowConfidence(s, high) || !!also?.(s);
+  const n = segs.length;
+  const at = fromId === null ? -1 : segs.findIndex((s) => s.id === fromId);
+  const k = at >= 0 ? at : direction === 1 ? -1 : n;
+  for (let i = 1; i <= n; i++) {
+    const s = segs[(((k + direction * i) % n) + n) % n];
+    if (want(s)) return s.id;
+  }
+  return null;
+}
+
+/** "Ctrl+Enter": the next segment after `fromId` that isn't confirmed yet, wrapping around; the ids in `done`
+ * were just confirmed. Auto-accepted segments count, because nobody has checked them. */
+export function nextUnconfirmed(segs: Pick<Segment, "id" | "status">[], fromId: number | null, done: number[] = []): number | null {
   const k = fromId === null ? -1 : segs.findIndex((s) => s.id === fromId);
   for (let i = 1; i <= segs.length; i++) {
     const s = segs[(k + i) % segs.length];
-    if (s && want(s)) return s.id;
+    if (s.status !== "confirmed" && !done.includes(s.id)) return s.id;
   }
   return null;
+}
+
+/** The segment playing at time `t` (Annotate highlights it): one that holds `t`, not rejected, the latest
+ * start when segments overlap; null between segments. */
+export function playingSegment(segs: Pick<Segment, "id" | "start" | "end" | "status">[], t: number): number | null {
+  let best: Pick<Segment, "id" | "start"> | null = null;
+  for (const s of segs) {
+    if (s.status !== "rejected" && s.start <= t && t < s.end && (!best || s.start >= best.start)) best = s;
+  }
+  return best?.id ?? null;
 }
 
 /** The segment at time `t` (a link from Concord Bench): one that contains `t` (not rejected first, then the
@@ -150,4 +183,28 @@ export function labelButton(saved: number, fresh: number): string {
   const total = saved + fresh;
   if (!fresh) return `Re-fuse ${saved} saved output${saved === 1 ? "" : "s"}`;
   return `Run ${fresh} new model${fresh === 1 ? "" : "s"}, then fuse ${total}`;
+}
+
+export interface TimedWord {
+  /** The word's place in the text. */
+  start: number;
+  end: number;
+  /** Its time in the audio, in seconds. */
+  t0: number;
+  t1: number;
+}
+
+/** The words of `text` with their times, when the word timings still match the text word for word (an edit by
+ * hand leaves them stale); null otherwise. */
+export function timedWords(text: string | null, words: { w: string; start: number; end: number }[] | null): TimedWord[] | null {
+  if (!text || !words?.length) return null;
+  const toks = [...text.matchAll(/\S+/g)];
+  if (toks.length !== words.length || toks.some((m, k) => m[0] !== words[k].w)) return null;
+  return toks.map((m, k) => ({ start: m.index, end: m.index + m[0].length, t0: words[k].start, t1: words[k].end }));
+}
+
+/** The word under the playhead `t`, by its index; null between words. */
+export function wordAt(words: TimedWord[], t: number): number | null {
+  const k = words.findIndex((w) => w.t0 <= t && t < w.t1);
+  return k < 0 ? null : k;
 }

@@ -10,6 +10,8 @@ The other docs are in `docs/`, and code comments cite them by file name, e.g., "
   links shows every screen, and where the canvas and HANDOFF.md disagree, HANDOFF.md wins.
 - [docs/CONTRACTS.md](docs/CONTRACTS.md) holds the formats and endpoints that Concord Label and Concord
   Bench agree on.
+- [docs/ANNOTATE_PLAN.md](docs/ANNOTATE_PLAN.md) brought the annotating interactions of the owner's earlier
+  app, pseudolabel, into Annotate. Where it differs from HANDOFF.md, the plan's decisions win.
 - [docs/PLAN.md](docs/PLAN.md) and [docs/SPLIT_PLAN.md](docs/SPLIT_PLAN.md) are the original build plans,
   kept for history.
 
@@ -64,6 +66,10 @@ tests, and look at the page in a browser, because several bugs in Annotate only 
 - The lexicon matcher exists twice, as `backend/concord_label/label/lexicon.py` and
   `frontend/src/lib/lexicon.ts`. Change both together, and keep `tests/test_lexicons.py` and
   `frontend/src/lib/lexicon.test.ts` on the same cases.
+- Each edit a person makes to segments records itself in the file's history (`label/history.py`), so
+  Annotate can undo it. A new edit in `label/edit.py` takes a `history.snapshot` of the segments before
+  and after, and calls `_record`. Code that changes segments for any other reason, e.g., a pseudo-label run
+  or a package import, calls `history.forget` for the files it changes.
 - Annotate's keyboard shortcuts are listed once, in `SHORTCUTS` in `frontend/src/lib/label.ts`. The
   strip under the segment table and the Docs page both read that list, so add a new shortcut there.
 - `components/Timeline.tsx` is shared with Bench and draws the waveform and the axis. The speaker lane
@@ -82,7 +88,8 @@ modules:
 
 - Backend: `core/`, `datasets/`, `platform/`, `adapters/`, `runs/cache.py`, `runs/jobs.py`,
   `runs/worker.py`, `cuts.py` (`prepare_cuts` and `usable_files`), and `metrics/` (`wer`, `der`,
-  `normalisers` and `vad`).
+  `normalisers`, `vad` and `cpwer`). Label copied `metrics/cpwer.py` from Bench unchanged for the cpWER
+  column on Live evaluation.
 - Frontend: `components/` (`AudioPlayer`, `Timeline`, `timelineMath`, `TagInput`, `icons` and `ui`),
   `lib/`, and the Models, Jobs and Upload pages.
 
@@ -94,6 +101,9 @@ Bench's copies don't have these recent Label changes yet:
 
 - `AudioPlayer`: `useAudio` takes the `<audio>` element through a callback ref, so its play and pause
   listeners attach even when the element renders after the page loads its data.
+- `AudioPlayer`: `useAudio` has `skip(seconds)`, and a seek ends the playback of a span, so a segment
+  started with its play button stops when you click somewhere else. Annotate renders its own `<audio>` in
+  `features/label/Transport.tsx` and no longer uses `<AudioPlayer>`.
 - `Timeline`: the optional `selection` and `onSelection` props, and the exported `LABEL_W`.
 - Models page: the groups by capability.
 - `JobPill` and `StatusDot`: the `cancelling` and `cancelled` states, and `jobStatusText` says "cancelling".
@@ -185,3 +195,25 @@ These changes came from the updated design canvas and from requests that followe
 - Contract version 3 replaced "Send to Bench" with Publish to Dataset Catalog. Without the catalog, the
   panel builds a reference package to download. Earlier sends stay in the history. Flags, "Open in
   Label" and the locked score find a dataset by its `catalog_dataset_id`.
+- Annotate follows the owner's earlier app, pseudolabel ([docs/ANNOTATE_PLAN.md](docs/ANNOTATE_PLAN.md),
+  phase 1). A transport row above the timeline holds play and pause, the clock, a speed menu, the zoom, and
+  Split, Merge and Delete. A plain mouse wheel over the timeline pans it, and the segment under the playhead
+  is highlighted on the lanes and in the list.
+- Annotate can undo and redo (ANNOTATE_PLAN.md phase 2). Migration `label_0008` added the `segment_edit`
+  table, and `POST /label/files/{file_id}/undo` and `/redo` restore the segments with their old ids and
+  uids.
+- Annotate's keys follow pseudolabel (ANNOTATE_PLAN.md phase 3), and HANDOFF.md §7 now lists them. S splits
+  the segment under the playhead, Enter edits the text, Ctrl+Enter confirms, Delete deletes, and Shift+Tab
+  goes back. The page takes Tab only on the page itself, the timeline and the segment list.
+- Annotate's segment list reads like pseudolabel's transcript (ANNOTATE_PLAN.md phase 4). The rows live in
+  `features/label/SegmentRow.tsx`, with the speaker chip's menu, words that seek, and a text area that
+  grows. Tab and Shift+Tab play the segment they land on, and the row above the timeline counts the
+  segments to review.
+- Annotate's speaker lanes gained pseudolabel's gestures (ANNOTATE_PLAN.md phase 5). A drag of an edge that
+  segments share moves all of them through `POST /label/segments/boundary`, as one edit, and Alt moves one
+  edge alone. A double-click on a lane adds a 2 second segment, a double-click on a lane's name renames the
+  speaker (`rename_speaker` in `edit.bulk`), and a wide enough block shows its text.
+- Live evaluation shows cpWER beside WER (`cp_card` in `label/live.py`). It scores each ASR model with the
+  speakers of the last pseudo-label run's diariser, on each file up to the first segment nobody has reviewed
+  (`reviewed_until`). Ctrl+Enter in Annotate goes to
+  the next segment that isn't confirmed, auto-accepted ones included, instead of the next one to review.

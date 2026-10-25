@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Segment } from "../lib/api";
-import { confidenceColor, cycleSpeaker, labelButton, nextLowConfidence, overlapRegions, segmentAt, selectRange } from "../lib/label";
+import { confidenceColor, labelButton, nextToReview, nextUnconfirmed, overlapRegions, playingSegment, segmentAt, selectRange, shortcutKeys, SHORTCUTS, timedWords, wordAt } from "../lib/label";
 import { C } from "../lib/colors";
 
 function seg(id: number, over: Partial<Segment> = {}): Segment {
@@ -27,15 +27,6 @@ describe("selectRange", () => {
   });
 });
 
-describe("cycleSpeaker", () => {
-  it("cycles and wraps", () => {
-    expect(cycleSpeaker(["a", "b", "c"], "a")).toBe("b");
-    expect(cycleSpeaker(["a", "b", "c"], "c")).toBe("a");
-    expect(cycleSpeaker(["a", "b"], null)).toBe("a");
-    expect(cycleSpeaker([], "z")).toBe("z");
-  });
-});
-
 describe("overlapRegions", () => {
   it("finds where two speakers talk at once and ignores rejected segments", () => {
     const segs = [
@@ -51,15 +42,27 @@ describe("overlapRegions", () => {
   });
 });
 
-describe("nextLowConfidence", () => {
-  const segs = [seg(1, { confidence: 0.9, status: "auto" }), seg(2), seg(3, { reviewed: true }), seg(4, { confidence: null })];
-  it("skips high-confidence and reviewed segments, wrapping around", () => {
-    expect(nextLowConfidence(segs, null)).toBe(2);
-    expect(nextLowConfidence(segs, 2)).toBe(4);
-    expect(nextLowConfidence(segs, 4)).toBe(2);
+describe("nextToReview", () => {
+  const segs = [seg(1, { confidence: 0.9 }), seg(2, { confidence: 0.4 }), seg(3, { confidence: 0.5, reviewed: true }), seg(4, { confidence: null }), seg(5, { confidence: 0.95 })];
+  it("skips high-confidence and reviewed segments, forwards and backwards", () => {
+    expect(nextToReview(segs, null)).toBe(2);
+    expect(nextToReview(segs, 2)).toBe(4);
+    expect(nextToReview(segs, 4, -1)).toBe(2);
+    expect(nextToReview(segs, null, -1)).toBe(4);
+  });
+  it("wraps around at either end", () => {
+    expect(nextToReview(segs, 4)).toBe(2);
+    expect(nextToReview(segs, 5)).toBe(2);
+    expect(nextToReview(segs, 2, -1)).toBe(4);
+    expect(nextToReview(segs, 1, -1)).toBe(4);
+  });
+  it("also takes the segments `also` picks, e.g. ones with a spelling hint", () => {
+    expect(nextToReview(segs, 2, 1, 0.85, (s) => s.id === 3)).toBe(3);
+    expect(nextToReview(segs, 2, -1, 0.85, (s) => s.id === 5)).toBe(5);
   });
   it("returns null when nothing needs review", () => {
-    expect(nextLowConfidence([seg(1, { status: "confirmed", reviewed: true })], null)).toBeNull();
+    expect(nextToReview([seg(1, { status: "confirmed", reviewed: true })], null)).toBeNull();
+    expect(nextToReview([], 3, -1)).toBeNull();
   });
 });
 
@@ -87,5 +90,55 @@ describe("segmentAt", () => {
   it("falls back to the nearest segment", () => {
     expect(segmentAt(segs, 7)).toBe(4);
     expect(segmentAt([], 1)).toBeNull();
+  });
+});
+
+describe("playingSegment", () => {
+  const segs = [seg(1, { start: 0, end: 2 }), seg(2, { start: 1.5, end: 3 }), seg(3, { start: 4, end: 5, status: "rejected" })];
+  it("finds the segment that holds the playhead, the later one where two overlap", () => {
+    expect(playingSegment(segs, 0.5)).toBe(1);
+    expect(playingSegment(segs, 1.8)).toBe(2);
+    expect(playingSegment(segs, 2)).toBe(2); // a segment ends where the next part begins
+  });
+  it("leaves out rejected segments and gaps", () => {
+    expect(playingSegment(segs, 3.5)).toBeNull();
+    expect(playingSegment(segs, 4.5)).toBeNull();
+  });
+});
+
+describe("SHORTCUTS", () => {
+  it("lists each key once", () => {
+    const keys = SHORTCUTS.flatMap((k) => shortcutKeys(k.key));
+    expect(keys.length).toBe(new Set(keys).size);
+    expect(keys).toEqual(expect.arrayContaining(["Space", "Shift+Space", "←", "↓", "Tab", "Shift+Tab", "Enter", "Ctrl+Enter", "S", "Delete", "Ctrl+Y", "8"]));
+    expect(keys).not.toContain("V");
+  });
+});
+
+describe("timedWords", () => {
+  const words = [{ w: "Hello", start: 1, end: 1.4 }, { w: "there.", start: 1.5, end: 2 }];
+  it("places each word in the text with its time", () => {
+    const tw = timedWords("Hello  there.", words)!;
+    expect(tw).toEqual([{ start: 0, end: 5, t0: 1, t1: 1.4 }, { start: 7, end: 13, t0: 1.5, t1: 2 }]);
+    expect(wordAt(tw, 1.6)).toBe(1);
+    expect(wordAt(tw, 1.45)).toBeNull();
+  });
+  it("gives up when the text no longer matches the timings", () => {
+    expect(timedWords("Hello there!", words)).toBeNull();
+    expect(timedWords("Hello", words)).toBeNull();
+    expect(timedWords("Hello there.", null)).toBeNull();
+  });
+});
+
+describe("nextUnconfirmed", () => {
+  const segs = [seg(1, { status: "confirmed" }), seg(2, { status: "auto", confidence: 0.99 }), seg(3, { status: "confirmed" }), seg(4), seg(5, { status: "rejected" })];
+  it("goes to the next segment that isn't confirmed, auto-accepted ones too", () => {
+    expect(nextUnconfirmed(segs, 1)).toBe(2);
+    expect(nextUnconfirmed(segs, 2)).toBe(4);
+    expect(nextUnconfirmed(segs, 2, [4])).toBe(5);
+  });
+  it("wraps around, and gives null when everything is confirmed", () => {
+    expect(nextUnconfirmed(segs, 5)).toBe(2);
+    expect(nextUnconfirmed(segs, 4, [2, 4, 5])).toBeNull();
   });
 });

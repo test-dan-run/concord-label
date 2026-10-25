@@ -19,7 +19,10 @@ export interface AudioController {
   /** Play several spans back to back (e.g. "play errors only"). */
   playSpans: (spans: [number, number][]) => void;
   pause: () => void;
+  /** Move the playhead to `t`. A span that is playing stops there, so it does not run on from the new place. */
   seek: (t: number) => void;
+  /** Move the playhead `seconds` forward (or back, when negative), within the file. */
+  skip: (seconds: number) => void;
 }
 
 export function useAudio(fileId: number | null | undefined): AudioController {
@@ -100,15 +103,29 @@ export function useAudio(fileId: number | null | undefined): AudioController {
   const seek = useCallback((t: number) => {
     const a = elRef.current;
     if (!a) return;
+    if (until.current !== null) {
+      queue.current = [];
+      until.current = null;
+      a.pause();
+    }
     a.currentTime = t;
     setTime(t);
   }, []);
+  const skip = useCallback(
+    (seconds: number) => {
+      const a = elRef.current;
+      if (!a) return;
+      const end = Number.isFinite(a.duration) ? a.duration : Infinity;
+      seek(Math.max(0, Math.min(end, a.currentTime + seconds)));
+    },
+    [seek],
+  );
   const setRate = useCallback((r: number) => {
     setRateState(r);
     if (elRef.current) elRef.current.playbackRate = r;
   }, []);
 
-  return { audioRef, src: fileId ? `/api/audio/${fileId}` : "", time, playing, rate, setRate, play, playSpans, pause, seek };
+  return { audioRef, src: fileId ? `/api/audio/${fileId}` : "", time, playing, rate, setRate, play, playSpans, pause, seek, skip };
 }
 
 /** Transport bar for a span of a file (the whole file when start/end are omitted). */

@@ -61,7 +61,7 @@ from ..core.models import (
     utcnow,
 )
 from ..core.settings import VERSION as APP_VERSION
-from . import lexicon
+from . import history, lexicon
 
 FORMAT = "concord-label-package"
 VERSION = 1
@@ -607,6 +607,7 @@ def apply(session: Session, pkg: SyncPackage, target_id: int | None, resolutions
         session.flush()
     snap = _snapshot(session, ds, pkg)
     files = {f.sha256: f for f in session.scalars(select(AudioFile).where(AudioFile.dataset_id == ds.id))}
+    history.forget(session, [f.id for f in files.values()])  # Annotate's undo history no longer matches
     added_files: list[int] = []
     missing: list[str] = []
     for f in pl["files"]:
@@ -702,6 +703,7 @@ def resolve(session: Session, pkg: SyncPackage, key: str, choice: str) -> dict[s
         if s is None:
             raise SyncError("the local segment no longer exists")
         _apply_fields(s, c["incoming"], pkg.id)
+        history.forget(session, [s.audio_file_id])
     c["resolution"] = choice
     pkg.conflicts = conflicts
     session.flush()
@@ -723,6 +725,7 @@ def undo(session: Session, pkg: SyncPackage) -> SyncPackage:
             session.delete(f)
     session.flush()
     for f in session.scalars(select(AudioFile).where(AudioFile.dataset_id == ds_id)):
+        history.forget(session, [f.id])
         for s in list(f.segments):
             session.delete(s)
     session.flush()
