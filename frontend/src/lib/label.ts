@@ -95,13 +95,6 @@ export function selectRange(order: number[], selected: Set<number>, id: number, 
   return next;
 }
 
-/** The speaker after `current` in the file's speaker list (pill cycling); wraps around. */
-export function cycleSpeaker(speakers: string[], current: string | null): string | null {
-  if (!speakers.length) return current;
-  const k = current === null ? -1 : speakers.indexOf(current);
-  return speakers[(k + 1) % speakers.length];
-}
-
 /** Regions where two or more speakers talk at once (rejected segments ignored). */
 export function overlapRegions(segs: Pick<Segment, "start" | "end" | "speaker" | "status">[]): { start: number; end: number }[] {
   const ev: [number, number, string][] = [];
@@ -127,11 +120,16 @@ export function overlapRegions(segs: Pick<Segment, "start" | "end" | "speaker" |
   return out;
 }
 
+/** A segment to review: nobody has reviewed it, and its confidence is below `high`. */
+export function lowConfidence(s: Pick<Segment, "reviewed" | "status" | "confidence">, high = 0.85): boolean {
+  return !s.reviewed && s.status !== "confirmed" && (s.confidence === null || s.confidence < high);
+}
+
 /** "Tab" and "Shift+Tab": the next segment to review after `fromId`, or before it when `direction` is -1,
- * wrapping around the file. A segment to review is unreviewed and below `high`, or one that `also` picks
- * (Annotate: a segment with a spelling hint). */
+ * wrapping around the file. A segment to review has low confidence, or `also` picks it (Annotate: a segment
+ * with a spelling hint). */
 export function nextToReview(segs: Segment[], fromId: number | null, direction: 1 | -1 = 1, high = 0.85, also?: (s: Segment) => boolean): number | null {
-  const want = (s: Segment) => (!s.reviewed && s.status !== "confirmed" && (s.confidence === null || s.confidence < high)) || !!also?.(s);
+  const want = (s: Segment) => lowConfidence(s, high) || !!also?.(s);
   const n = segs.length;
   const at = fromId === null ? -1 : segs.findIndex((s) => s.id === fromId);
   const k = at >= 0 ? at : direction === 1 ? -1 : n;
@@ -174,4 +172,28 @@ export function labelButton(saved: number, fresh: number): string {
   const total = saved + fresh;
   if (!fresh) return `Re-fuse ${saved} saved output${saved === 1 ? "" : "s"}`;
   return `Run ${fresh} new model${fresh === 1 ? "" : "s"}, then fuse ${total}`;
+}
+
+export interface TimedWord {
+  /** The word's place in the text. */
+  start: number;
+  end: number;
+  /** Its time in the audio, in seconds. */
+  t0: number;
+  t1: number;
+}
+
+/** The words of `text` with their times, when the word timings still match the text word for word (an edit by
+ * hand leaves them stale); null otherwise. */
+export function timedWords(text: string | null, words: { w: string; start: number; end: number }[] | null): TimedWord[] | null {
+  if (!text || !words?.length) return null;
+  const toks = [...text.matchAll(/\S+/g)];
+  if (toks.length !== words.length || toks.some((m, k) => m[0] !== words[k].w)) return null;
+  return toks.map((m, k) => ({ start: m.index, end: m.index + m[0].length, t0: words[k].start, t1: words[k].end }));
+}
+
+/** The word under the playhead `t`, by its index; null between words. */
+export function wordAt(words: TimedWord[], t: number): number | null {
+  const k = words.findIndex((w) => w.t0 <= t && t < w.t1);
+  return k < 0 ? null : k;
 }

@@ -128,7 +128,9 @@ const SECTIONS: Section[] = [
         </p>
         <p className="m-0">
           You can review a file from the keyboard. Tab goes to the next segment to review, which is a segment with low confidence or a spelling
-          hint. Enter opens its text in the editor, and Enter again saves it. Ctrl+Enter confirms the segment and goes to the next one to review.
+          hint, and it plays the segment. The row above the timeline counts the segments left to review. Enter opens the text in the editor, and
+          Enter again saves it. You can also double-click the text to edit it. When a segment has word timings, a click on a word moves the
+          playhead to it, and the word that is playing is highlighted. Ctrl+Enter confirms the segment and goes to the next one to review.
           Space plays or pauses from the playhead, Shift+Space plays the selected segment, and the arrow keys move the playhead. The table
           under <em>Keyboard shortcuts</em> lists every key.
         </p>
@@ -164,7 +166,8 @@ const SECTIONS: Section[] = [
           <li>To add a speaker that the diarisation model missed, use <em>Add speaker</em>. A file can have up to {MAX_SPEAKERS} speakers.</li>
         </ul>
         <p className="m-0">
-          To change a segment's speaker, click the speaker chip in the table to cycle through the speakers, or press a number from 1 to 8. To split the
+          To change a segment's speaker, click the speaker chip in the table and pick a speaker from the menu, or press a number from 1 to 8.
+          The menu can also take the speaker away, or add a new speaker. To split the
           segment under the playhead, press S, and to merge segments, press M. Delete deletes the selected segment, and Ctrl+Z undoes it.
         </p>
         <p className="m-0">

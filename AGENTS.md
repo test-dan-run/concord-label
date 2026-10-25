@@ -202,3 +202,7 @@ These changes came from the updated design canvas and from requests that followe
 - Annotate's keys follow pseudolabel (ANNOTATE_PLAN.md phase 3), and HANDOFF.md §7 now lists them. S splits
   the segment under the playhead, Enter edits the text, Ctrl+Enter confirms, Delete deletes, and Shift+Tab
   goes back. The page takes Tab only on the page itself, the timeline and the segment list.
+- Annotate's segment list reads like pseudolabel's transcript (ANNOTATE_PLAN.md phase 4). The rows live in
+  `features/label/SegmentRow.tsx`, with the speaker chip's menu, words that seek, and a text area that
+  grows. Tab and Shift+Tab play the segment they land on, and the row above the timeline counts the
+  segments to review.

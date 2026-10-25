@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Segment } from "../lib/api";
-import { confidenceColor, cycleSpeaker, labelButton, nextToReview, overlapRegions, playingSegment, segmentAt, selectRange, shortcutKeys, SHORTCUTS } from "../lib/label";
+import { confidenceColor, labelButton, nextToReview, overlapRegions, playingSegment, segmentAt, selectRange, shortcutKeys, SHORTCUTS, timedWords, wordAt } from "../lib/label";
 import { C } from "../lib/colors";
 
 function seg(id: number, over: Partial<Segment> = {}): Segment {
@@ -24,15 +24,6 @@ describe("selectRange", () => {
   it("shift-click from an unselected anchor clears the range", () => {
     expect([...selectRange(order, new Set([1, 2, 3, 4, 5]), 4, 2, true)].length).toBe(5);
     expect([...selectRange(order, new Set([1, 3, 4, 5]), 4, 2, true)].sort()).toEqual([1, 5]);
-  });
-});
-
-describe("cycleSpeaker", () => {
-  it("cycles and wraps", () => {
-    expect(cycleSpeaker(["a", "b", "c"], "a")).toBe("b");
-    expect(cycleSpeaker(["a", "b", "c"], "c")).toBe("a");
-    expect(cycleSpeaker(["a", "b"], null)).toBe("a");
-    expect(cycleSpeaker([], "z")).toBe("z");
   });
 });
 
@@ -121,5 +112,20 @@ describe("SHORTCUTS", () => {
     expect(keys.length).toBe(new Set(keys).size);
     expect(keys).toEqual(expect.arrayContaining(["Space", "Shift+Space", "←", "↓", "Tab", "Shift+Tab", "Enter", "Ctrl+Enter", "S", "Delete", "Ctrl+Y", "8"]));
     expect(keys).not.toContain("V");
+  });
+});
+
+describe("timedWords", () => {
+  const words = [{ w: "Hello", start: 1, end: 1.4 }, { w: "there.", start: 1.5, end: 2 }];
+  it("places each word in the text with its time", () => {
+    const tw = timedWords("Hello  there.", words)!;
+    expect(tw).toEqual([{ start: 0, end: 5, t0: 1, t1: 1.4 }, { start: 7, end: 13, t0: 1.5, t1: 2 }]);
+    expect(wordAt(tw, 1.6)).toBe(1);
+    expect(wordAt(tw, 1.45)).toBeNull();
+  });
+  it("gives up when the text no longer matches the timings", () => {
+    expect(timedWords("Hello there!", words)).toBeNull();
+    expect(timedWords("Hello", words)).toBeNull();
+    expect(timedWords("Hello there.", null)).toBeNull();
   });
 });

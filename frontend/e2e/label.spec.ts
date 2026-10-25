@@ -68,14 +68,16 @@ test("annotate: edit, shortcuts, multi-select, bulk confirm, audio", async ({ pa
   await expect(page.getByRole("heading", { name: /Segments · \d+/ })).toBeVisible();
   await expect(page.locator("[data-lane]").first()).toBeVisible();
   await page.getByRole("button", { name: "All", exact: true }).click();
-  // inline edit with autosave
-  const first = page.getByLabel(/^Transcript at /).first();
+  // a double-click edits the text, and Enter saves it
+  await page.locator("[data-transcript]").first().dblclick();
+  const first = page.getByLabel(/^Transcript at /);
   await first.fill("Edited in the browser.");
   await first.press("Enter");
-  await expect(page.getByLabel(/^Transcript at /).first()).toHaveValue("Edited in the browser.");
+  await expect(first).toHaveCount(0);
+  await expect(page.locator("[data-transcript]").first()).toHaveText("Edited in the browser.");
   await page.reload();
   await page.getByRole("button", { name: "All", exact: true }).click();
-  await expect(page.getByLabel(/^Transcript at /).first()).toHaveValue("Edited in the browser.");
+  await expect(page.locator("[data-transcript]").first()).toHaveText("Edited in the browser.");
   // Space plays the current segment
   await page.locator("body").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("Space");
@@ -91,7 +93,7 @@ test("annotate: edit, shortcuts, multi-select, bulk confirm, audio", async ({ pa
   await expect(bar).toHaveCount(0);
   await expect(page.locator("tbody tr").nth(2)).toContainText("Confirmed");
   // 1–8 assigns a speaker to the current segment
-  const pill = page.locator("tbody tr").nth(3).getByTitle(/cycle speakers/);
+  const pill = page.locator("tbody tr").nth(3).getByTitle(/Change the speaker/);
   await page.locator("tbody tr").nth(3).click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("2");
   await expect.poll(() => pill.textContent()).not.toBe("");
@@ -339,7 +341,7 @@ test("annotate: undo a merge with Ctrl+Z, and redo it", async ({ page }) => {
   const history = page.getByRole("group", { name: "History" });
   await expect(rows.first()).toBeVisible();
   const n = await rows.count();
-  const texts = await page.getByLabel(/^Transcript at /).evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value));
+  const texts = await page.locator("[data-transcript]").allTextContents();
   const boxes = page.getByLabel(/^Select segment at /);
   await boxes.nth(0).click();
   await boxes.nth(1).click();
@@ -350,7 +352,7 @@ test("annotate: undo a merge with Ctrl+Z, and redo it", async ({ page }) => {
   await page.keyboard.press("Control+z");
   await expect(rows).toHaveCount(n);
   await expect(page.getByText("Undid merge")).toBeVisible();
-  await expect.poll(() => page.getByLabel(/^Transcript at /).evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value))).toEqual(texts);
+  await expect.poll(() => page.locator("[data-transcript]").allTextContents()).toEqual(texts);
   await expect(history.getByRole("button", { name: "Redo" })).toHaveAttribute("title", "Redo merge (Ctrl+Shift+Z)");
   await page.keyboard.press("Control+Shift+z");
   await expect(rows).toHaveCount(n - 1);
@@ -401,7 +403,8 @@ test("annotate: the keys", async ({ page }) => {
   await page.keyboard.press("Shift+Space");
   await expect.poll(paused, { timeout: 15_000 }).toBe(false);
   await expect.poll(paused, { timeout: 15_000 }).toBe(true);
-  const m2 = /\d\d:\d\d\.\d{3}\s*(\d\d):(\d\d\.\d{3})/.exec((await second.locator("td").nth(2).textContent())!)!;
+  // the side panel shows the selected segment's span, "00:01.651 – 00:02.832 · 1.18 s"
+  const m2 = /\d\d:\d\d\.\d{3} – (\d\d):(\d\d\.\d{3})/.exec((await page.getByText(/^\d\d:\d\d\.\d{3} – \d\d:\d\d\.\d{3} · /).textContent())!)!;
   expect(await t()).toBeGreaterThanOrEqual(Number(m2[1]) * 60 + Number(m2[2]) - 0.01);
 
   // Tab and Shift+Tab go to the next and previous segment to review
@@ -421,21 +424,21 @@ test("annotate: the keys", async ({ page }) => {
 
   // Enter edits the text: Esc cancels, Enter saves
   await page.locator("body").click({ position: { x: 5, y: 5 } });
+  const shown = current.locator("[data-transcript]");
+  const text = (await shown.textContent())!;
   await page.keyboard.press("Enter");
   const input = current.getByLabel(/^Transcript at /);
   await expect(input).toBeFocused();
-  const text = await input.inputValue();
   await page.keyboard.type(" (draft)");
   await page.keyboard.press("Escape");
-  await expect(input).toHaveValue(text);
-  await expect(input).not.toBeFocused();
+  await expect(input).toHaveCount(0);
+  await expect(shown).toHaveText(text);
   await page.keyboard.press("Enter");
-  await page.keyboard.press("End");
   await page.keyboard.type(" Checked.");
   await page.keyboard.press("Enter");
-  await expect(input).toHaveValue(`${text} Checked.`);
+  await expect(shown).toHaveText(`${text} Checked.`);
   // Ctrl+Enter confirms it and goes to the next segment to review
-  const edited = rows.filter({ has: page.locator(`input[value="${text} Checked."]`) });
+  const edited = rows.filter({ hasText: `${text} Checked.` });
   await page.keyboard.press("Control+Enter");
   await expect(edited).toContainText("Confirmed");
   await expect(current).not.toHaveText(await edited.textContent() ?? "");
@@ -481,6 +484,80 @@ test("annotate: the keys", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("annotate: the segment list reads like pseudolabel's, and Tab plays the next segment to review", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 4 });
+  await expect(page.getByRole("heading", { name: "d05_clipped" })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const rows = page.locator("tbody tr");
+  const audio = page.locator("audio").first();
+  const t = () => audio.evaluate((a: HTMLAudioElement) => a.currentTime);
+
+  // a click on the start time moves the playhead there
+  const row = rows.nth(2);
+  await row.getByTitle("Move the playhead to the start of the segment").click();
+  await expect(row).toHaveAttribute("aria-current", "true");
+  const at = (await row.getByTitle("Move the playhead to the start of the segment").textContent())!;
+  await expect.poll(t).toBeCloseTo(Number(at.slice(0, 2)) * 60 + Number(at.slice(3)), 2);
+
+  // with word timings, each word is a button that moves the playhead to it
+  const words = row.locator("[data-transcript] > button:not([aria-label])");
+  await expect(words.first()).toBeVisible();
+  const before = await t();
+  await words.nth(2).click();
+  await expect.poll(t).toBeGreaterThan(before);
+
+  // the editor opens with Enter and with a double-click; Enter saves and Esc cancels
+  const shown = row.locator("[data-transcript]");
+  const text = (await shown.textContent())!;
+  await shown.dblclick();
+  const editor = row.getByLabel(/^Transcript at /);
+  await expect(editor).toBeFocused();
+  await page.keyboard.type(" Twice.");
+  await page.keyboard.press("Enter");
+  await expect(shown).toHaveText(`${text} Twice.`);
+  await page.keyboard.press("Enter");
+  await expect(editor).toBeFocused();
+  await editor.fill(text);
+  await page.keyboard.press("Enter");
+  await expect(shown).toHaveText(text);
+
+  // the speaker chip opens a menu: pick another speaker, or a new one
+  const chip = row.getByTitle(/Change the speaker/);
+  const was = (await chip.textContent())!.trim();
+  await chip.click();
+  const menu = page.getByRole("menu", { name: "Speaker" });
+  await expect(menu.getByRole("menuitem")).toHaveCount(4); // spk0, spk1, No speaker, New speaker
+  await menu.getByRole("menuitem", { name: was === "spk0" ? /spk1/ : /spk0/ }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(chip).toHaveText(was === "spk0" ? "spk1" : "spk0");
+  await chip.click();
+  await menu.getByRole("menuitem", { name: "New speaker" }).click();
+  await expect(chip).toHaveText("spk2");
+  await expect(page.locator('[data-lane="spk2"]')).toBeVisible();
+  await chip.click();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  await expect(page.getByRole("group", { name: "Review" })).toContainText("Nothing left to review");
+
+  // Tab goes to the next segment to review and plays it from start to end (d06 has one left after the keys test)
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 5 });
+  await expect(page.getByRole("heading", { name: "d06" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Review" })).toContainText(/[12] to review/);
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Tab");
+  const current = page.locator("tbody tr[aria-current]");
+  await expect(current).toContainText(/Needs review|New · manual/);
+  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.paused), { timeout: 15_000 }).toBe(false);
+  const start = (await current.getByTitle("Move the playhead to the start of the segment").textContent())!;
+  expect(await t()).toBeGreaterThanOrEqual(Number(start.slice(0, 2)) * 60 + Number(start.slice(3)) - 0.01);
+  await page.keyboard.press("Space");
+  expect(errors).toEqual([]);
+});
+
 test("lexicons: publish house spellings, then use or keep them in Annotate", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/lexicons");
@@ -510,8 +587,7 @@ test("lexicons: publish house spellings, then use or keep them in Annotate", asy
   await page.getByRole("button", { name: "neighbor: house spelling is neighbour" }).click();
   const hint = page.getByRole("group", { name: "Spelling hint" });
   await hint.getByRole("button", { name: "Use" }).click();
-  // a segment with no hints left is a plain input again
-  const transcripts = () => page.getByLabel(/^Transcript at /).evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value).join("\n"));
+  const transcripts = async () => (await page.locator("[data-transcript]").allTextContents()).join("\n");
   await expect.poll(transcripts).toContain("my neighbour if I am out?");
   await expect(page.getByRole("link", { name: /· 1 spelling hint$/ })).toBeVisible();
   await page.getByRole("button", { name: "noon: house spelling is midday" }).click();
@@ -658,7 +734,7 @@ test("open in Label by sha256: the annotator opens on the file at t", async ({ p
   await page.goto(`/label/file/by-sha/${f.sha256}?${q}t=${t}`);
   await expect(page).toHaveURL(new RegExp(`/label/annotate/${hit.dataset_id}\\?file=${hit.file_id}&t=`));
   await expect(page.getByRole("heading", { name: f.stem, exact: true })).toBeVisible();
-  await expect(page.locator('tbody tr[aria-current="true"]').getByLabel(/^Transcript at /)).toHaveValue(seg.text ?? "");
+  await expect(page.locator('tbody tr[aria-current="true"] [data-transcript]')).toHaveText(seg.text ?? "(no transcript)");
   // an unknown fingerprint says so
   await page.goto(`/label/file/by-sha/${"0".repeat(64)}`);
   await expect(page.getByText(/This audio is not in Concord Label/)).toBeVisible();

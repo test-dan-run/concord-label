@@ -10,19 +10,20 @@
 // changes on its own.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, qs, type AnnotateView, type LabelFile, type SegStatus, type Segment } from "../../lib/api";
 import { houseSpelled, Matcher, norm, type ActiveLexicon, type Hint } from "../../lib/lexicon";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { confidenceColor, cycleSpeaker, nextToReview, overlapRegions, playingSegment, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS, STATUS_TONE, statusLabel } from "../../lib/label";
-import { PlayFrom, useAudio } from "../../components/AudioPlayer";
+import { lowConfidence, nextToReview, overlapRegions, playingSegment, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS } from "../../lib/label";
+import { useAudio } from "../../components/AudioPlayer";
 import { Timeline } from "../../components/Timeline";
 import * as I from "../../components/icons";
-import { Button, Chip, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner } from "../../components/ui";
+import { Button, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 import { Crumbs, DatasetChooser, LabelTabs } from "./common";
 import { MAX_SPEAKERS, nextSpeakerName } from "./laneDrag";
+import { SegmentRow, type RowMenu } from "./SegmentRow";
 import { SpeakerLanes, type Lane, type LaneEdit } from "./SpeakerLanes";
 import { Overview, useWheelZoom } from "./TimelineZoom";
 import { Transport } from "./Transport";
@@ -190,9 +191,10 @@ function Annotator({
   const [anchor, setAnchor] = useState<number | null>(null);
   const [show, setShow] = useState<Show>(initialShow);
   const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
-  // The row whose text is in the editor, and the menu open on a row (a spelling hint's); Esc closes them.
+  // The row whose text is in the editor, and the menu open on a row (its speaker chip's or a spelling hint's);
+  // Esc closes them.
   const [editing, setEditing] = useState<number | null>(null);
-  const [menu, setMenu] = useState<{ id: number; hint: number } | null>(null);
+  const [menu, setMenu] = useState<{ id: number; menu: Exclude<RowMenu, null> } | null>(null);
   const listBox = useRef<HTMLDivElement>(null);
 
   const v = q.data;
@@ -282,9 +284,17 @@ function Annotator({
       nextToReview(done.length ? segs.map((s) => (done.includes(s.id) ? { ...s, status: "confirmed" as const, reviewed: true } : s)) : segs, from, direction, high, hasHint),
     [segs, high, hasHint],
   );
-  const goTo = useCallback((id: number | null) => {
-    if (id !== null) setCur(id);
-  }, []);
+  // Select segment `id`; with `play` (Tab and Shift+Tab), also play it from start to end. The timeline brings
+  // the selected segment into view.
+  const goTo = useCallback(
+    (id: number | null, play = false) => {
+      const s = segs.find((x) => x.id === id);
+      if (!s) return;
+      setCur(s.id);
+      if (play) ctl.play(s.start, s.end);
+    },
+    [segs, ctl],
+  );
 
   const confirm = useCallback(
     (ids: number[] = targets()) => {
@@ -384,7 +394,7 @@ function Annotator({
       } else if (e.key === "Tab") {
         if (!tabHere(e.target)) return;
         e.preventDefault();
-        goTo(toReview(cur, e.shiftKey ? -1 : 1));
+        goTo(toReview(cur, e.shiftKey ? -1 : 1), true);
       } else if (/^[1-8]$/.test(e.key)) {
         const ids = targets();
         if (ids.length) m.bulk.mutate({ ids, action: "assign_speaker", speaker: speakerForKey(Number(e.key)) });
@@ -443,6 +453,7 @@ function Annotator({
     ...(live.some((s) => !s.speaker) ? [{ key: "", speaker: null, label: "no speaker", color: C.subtle }] : []),
   ];
   const autoCount = segs.filter((s) => s.status === "auto").length;
+  const reviewCount = segs.filter((s) => lowConfidence(s, high) || hasHint(s)).length;
   const order = visible.map((s) => s.id);
   const fileIndex = files.findIndex((f) => f.id === fileId);
 
@@ -474,6 +485,17 @@ function Annotator({
           <button type="button" disabled title="Keyword spotting is not built yet (Q6)" className="min-h-8 px-3 text-xs border-0 bg-transparent text-subtle cursor-not-allowed">Both</button>
         </span>
         <span className="text-xs text-muted num">{fileIndex >= 0 ? `${fileIndex + 1}/${files.length}` : ""}</span>
+        <span role="group" aria-label="Review" className="flex items-center gap-1.5 text-xs text-muted">
+          {reviewCount ? (
+            <>
+              <Button size="sm" variant="ghost" aria-label="Previous to review" title="Previous segment to review (Shift+Tab)" onClick={() => goTo(toReview(cur, -1), true)}>‹</Button>
+              <span className="num">{num(reviewCount)} to review</span>
+              <Button size="sm" variant="ghost" aria-label="Next to review" title="Next segment to review (Tab)" onClick={() => goTo(toReview(cur, 1), true)}>›</Button>
+            </>
+          ) : (
+            "Nothing left to review"
+          )}
+        </span>
         <span className="ml-auto flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted" aria-live="polite">{undoNote}</span>
           <span role="group" aria-label="History" className="flex gap-1.5">
@@ -586,7 +608,7 @@ function Annotator({
           {visible.length === 0 && <Empty>No segments {show === "all" ? "in this file" : `with status “${STATUS_LABELS[show as SegStatus]}”`}.</Empty>}
           {visible.length > 0 && (
             <div ref={listBox} className="overflow-auto scroll-thin max-h-[60vh] border border-track rounded-md">
-              <table className="w-full border-collapse text-[13px]" style={{ minWidth: 720 }}>
+              <table className="w-full border-collapse text-[13px]" style={{ minWidth: 640 }}>
                 <thead className="sticky top-0 z-10 bg-panel">
                   <tr className="text-[11px] text-muted uppercase tracking-wider text-left">
                     <th scope="col" className="px-2 py-2 border-b border-line w-8">
@@ -597,13 +619,11 @@ function Annotator({
                         onChange={(e) => setSel(e.target.checked ? new Set(order) : new Set())}
                       />
                     </th>
-                    <th scope="col" className="px-2 py-2 border-b border-line w-8" />
-                    <th scope="col" className="px-2 py-2 border-b border-line font-medium">Time</th>
+                    <th scope="col" className="px-1 py-2 border-b border-line w-8" />
+                    <th scope="col" className="px-2 py-2 border-b border-line font-medium">Start</th>
                     <th scope="col" className="px-2 py-2 border-b border-line font-medium">Speaker</th>
                     <th scope="col" className="px-2 py-2 border-b border-line font-medium">Transcript</th>
-                    <th scope="col" className="px-2 py-2 border-b border-line font-medium text-right">Conf.</th>
-                    <th scope="col" className="px-2 py-2 border-b border-line font-medium">Status</th>
-                    <th scope="col" className="px-2 py-2 border-b border-line w-20" />
+                    <th scope="col" className="px-2 py-2 border-b border-line font-medium text-right">Review</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -619,6 +639,8 @@ function Annotator({
                       playing={s.id === playingId}
                       checked={sel.has(s.id)}
                       color={s.speaker ? colors[s.speaker] ?? C.subtle : C.subtle}
+                      colors={colors}
+                      speakers={speakers}
                       high={high}
                       low={v.thresholds.low}
                       ctl={ctl}
@@ -627,7 +649,16 @@ function Annotator({
                         setSel(selectRange(order, sel, s.id, anchor, shift));
                         setAnchor(s.id);
                       }}
-                      onSpeaker={() => m.patch.mutate({ id: s.id, speaker: cycleSpeaker(speakers.length ? speakers : ["spk0"], s.speaker) })}
+                      onSpeaker={(speaker) => {
+                        setMenu(null);
+                        if (speaker !== s.speaker) m.patch.mutate({ id: s.id, speaker });
+                      }}
+                      onNewSpeaker={() => {
+                        const name = nextSpeakerName(speakers);
+                        setMenu(null);
+                        setAdded((a) => [...a, name]);
+                        m.patch.mutate({ id: s.id, speaker: name });
+                      }}
                       onText={(text) => m.patch.mutate({ id: s.id, text })}
                       hints={hints.get(s.id) ?? []}
                       onUseHint={(h) => applyHint(s, h)}
@@ -636,9 +667,9 @@ function Annotator({
                       onReject={() => m.bulk.mutate({ ids: [s.id], action: "reject" })}
                       editing={editing === s.id}
                       onEdit={(on) => setEditing((e) => (on ? s.id : e === s.id ? null : e))}
-                      menu={menu?.id === s.id ? menu.hint : null}
-                      onMenu={(k) => setMenu(k === null ? null : { id: s.id, hint: k })}
-                      onNext={(direction) => goTo(toReview(s.id, direction))}
+                      menu={menu?.id === s.id ? menu.menu : null}
+                      onMenu={(k) => setMenu(k === null ? null : { id: s.id, menu: k })}
+                      onNext={(direction) => goTo(toReview(s.id, direction), true)}
                       onConfirmNext={() => confirm([s.id])}
                     />
                   ))}
@@ -658,19 +689,6 @@ function Annotator({
       </div>
     </>
   );
-}
-
-/** `text` split around its hints: plain strings, and the index of each hint in between. */
-function pieces(text: string, hints: Hint[]): (string | number)[] {
-  const out: (string | number)[] = [];
-  let at = 0;
-  hints.forEach((h, k) => {
-    if (h.start > at) out.push(text.slice(at, h.start));
-    out.push(k);
-    at = h.end;
-  });
-  if (at < text.length) out.push(text.slice(at));
-  return out;
 }
 
 /** In the segments header: the lexicons in use and how many hints they give in this file. */
@@ -715,227 +733,6 @@ function BulkBar({ n, speakers, onAssign, onAction, onMerge, onClear }: { n: num
       <Button size="sm" onClick={() => onAction("flag")}><I.Flag size={12} /> Flag</Button>
       <Button size="sm" variant="ghost" onClick={onClear} className="ml-auto">Clear</Button>
     </div>
-  );
-}
-
-function SegmentRow({
-  s,
-  rowRef,
-  current,
-  playing,
-  checked,
-  color,
-  high,
-  low,
-  ctl,
-  onFocus,
-  onCheck,
-  onSpeaker,
-  onText,
-  hints,
-  onUseHint,
-  onKeepHint,
-  onConfirm,
-  onReject,
-  editing,
-  onEdit,
-  menu,
-  onMenu,
-  onNext,
-  onConfirmNext,
-}: {
-  s: Segment;
-  rowRef: (el: HTMLTableRowElement | null) => void;
-  current: boolean;
-  /** Under the playhead. */
-  playing: boolean;
-  checked: boolean;
-  color: string;
-  high: number;
-  low: number;
-  ctl: ReturnType<typeof useAudio>;
-  onFocus: () => void;
-  onCheck: (shift: boolean) => void;
-  onSpeaker: () => void;
-  onText: (t: string) => void;
-  hints: Hint[];
-  onUseHint: (h: Hint) => void;
-  onKeepHint: (h: Hint) => void;
-  onConfirm: () => void;
-  onReject: () => void;
-  /** The text is in the editor (Enter, a click, or the pen with spelling hints). */
-  editing: boolean;
-  onEdit: (on: boolean) => void;
-  /** The spelling hint whose menu is open. */
-  menu: number | null;
-  onMenu: (k: number | null) => void;
-  /** Tab and Shift+Tab in the editor: save, then go to the next or previous segment to review. */
-  onNext: (direction: 1 | -1) => void;
-  /** Ctrl+Enter in the editor: save, confirm, and go to the next segment to review. */
-  onConfirmNext: () => void;
-}) {
-  const [draft, setDraft] = useState(s.text ?? "");
-  // With spelling hints the transcript shows as text with the variants underlined; a click elsewhere edits it.
-  const open = menu;
-  const setOpen = onMenu;
-  useEffect(() => setDraft(s.text ?? ""), [s.text]);
-  const input = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (editing) input.current?.focus();
-  }, [editing]);
-  // Set while a key closes the editor, so the blur that follows doesn't save (or cancel) a second time.
-  const closing = useRef(false);
-  const save = () => {
-    if (draft !== (s.text ?? "")) onText(draft);
-  };
-  const close = (keep: boolean) => {
-    if (keep) save();
-    else setDraft(s.text ?? "");
-    closing.current = true;
-    input.current?.blur();
-    closing.current = false;
-    onEdit(false);
-  };
-  const onKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      close(true);
-      onConfirmNext();
-    } else if (e.key === "Enter" && !e.altKey) {
-      e.preventDefault();
-      close(true);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      close(false);
-    } else if (e.key === "Tab") {
-      e.preventDefault();
-      close(true);
-      onNext(e.shiftKey ? -1 : 1);
-    }
-  };
-  return (
-    <tr ref={rowRef} onClick={onFocus} aria-current={current || undefined} data-playing={playing || undefined} className={cx("border-b border-track", current ? "bg-active" : playing ? "bg-focus/10" : "hover:bg-track/60", s.status === "rejected" && "opacity-60")}>
-      <td className={cx("px-2 py-1.5", playing && "shadow-[inset_3px_0_0_var(--color-focus)]")}>
-        <input
-          type="checkbox"
-          aria-label={`Select segment at ${clock(s.start)}`}
-          checked={checked}
-          onChange={() => undefined}
-          onClick={(e) => {
-            e.stopPropagation();
-            onCheck(e.shiftKey);
-          }}
-        />
-      </td>
-      <td className="px-2 py-1.5">
-        <PlayFrom ctl={ctl} t={s.start} until={s.end} label={`Play segment at ${clock(s.start)}`} />
-      </td>
-      <td className="px-2 py-1.5 num text-xs text-muted whitespace-nowrap">
-        {clock(s.start)}
-        <br />
-        {clock(s.end)}
-      </td>
-      <td className="px-2 py-1.5">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSpeaker();
-          }}
-          title="Click to cycle speakers (or press 1–8)"
-          className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs cursor-pointer bg-transparent text-fg num whitespace-nowrap"
-          style={{ borderColor: color }}
-        >
-          <span className="size-2 rounded-full" style={{ background: color }} />
-          {s.speaker ?? "—"}
-        </button>
-      </td>
-      <td className="px-2 py-1.5 w-full">
-        {hints.length > 0 && !editing && s.text !== null ? (
-          <div className="flex flex-col gap-1.5">
-            <div onClick={() => onEdit(true)} className="group/t px-1.5 py-1 rounded border border-transparent hover:border-line text-fg text-[13px] cursor-text">
-              {pieces(s.text, hints).map((p, k) =>
-                typeof p === "string" ? (
-                  <span key={k}>{p}</span>
-                ) : (
-                  <button
-                    key={k}
-                    type="button"
-                    aria-expanded={open === p}
-                    aria-label={`${hints[p].found}: house spelling is ${hints[p].word}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onFocus();
-                      setOpen(open === p ? null : p);
-                    }}
-                    className="p-0 border-0 bg-transparent text-fg text-[13px] cursor-pointer underline decoration-wavy decoration-warn underline-offset-[3px]"
-                  >
-                    {hints[p].found}
-                  </button>
-                ),
-              )}
-              <button
-                type="button"
-                aria-label={`Edit transcript at ${clock(s.start)}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onEdit(true);
-                }}
-                className="ml-1.5 p-0 border-0 bg-transparent text-subtle hover:text-fg cursor-pointer align-middle opacity-0 group-hover/t:opacity-100 focus-visible:opacity-100"
-              >
-                <I.Pen size={12} />
-              </button>
-            </div>
-            {open !== null && hints[open] && (
-              <div role="group" aria-label="Spelling hint" className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded-md border border-line bg-canvas text-xs text-muted" onClick={(e) => e.stopPropagation()}>
-                House spelling <span className="num text-fg">{hints[open].word}</span>
-                <span className="text-subtle">· {hints[open].lexicon}</span>
-                <span className="ml-auto flex gap-1.5">
-                  <Button size="sm" variant="primary" onClick={() => onUseHint(hints[open])}>Use</Button>
-                  <Button size="sm" onClick={() => onKeepHint(hints[open])}>Keep</Button>
-                </span>
-              </div>
-            )}
-          </div>
-        ) : (
-          <input
-            ref={input}
-            aria-label={`Transcript at ${clock(s.start)}`}
-            value={draft}
-            placeholder={s.text === null ? "(no transcript)" : ""}
-            onFocus={() => {
-              onFocus();
-              onEdit(true);
-            }}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => {
-              if (closing.current) return;
-              save();
-              onEdit(false);
-            }}
-            onKeyDown={onKey}
-            className="w-full bg-transparent border border-transparent hover:border-line focus:border-focus rounded px-1.5 py-1 text-fg text-[13px] outline-none"
-          />
-        )}
-      </td>
-      <td className="px-2 py-1.5 text-right num text-xs font-semibold" style={{ color: confidenceColor(s.confidence, high, low) }}>
-        {s.confidence === null ? "—" : s.confidence.toFixed(2)}
-      </td>
-      <td className="px-2 py-1.5 whitespace-nowrap">
-        <Chip tone={STATUS_TONE[s.status]}>{statusLabel(s)}</Chip>
-        {s.flagged && <span className="ml-1 text-warn" title={s.flag_note ?? "Flagged"}><I.Flag size={12} /></span>}
-      </td>
-      <td className="px-2 py-1.5 whitespace-nowrap">
-        <span className="flex gap-1">
-          <button type="button" aria-label="Confirm" title="Confirm (Ctrl+Enter)" onClick={(e) => { e.stopPropagation(); onConfirm(); }} className="size-7 inline-flex items-center justify-center rounded border border-line bg-transparent text-good cursor-pointer hover:bg-track">
-            <I.Check size={12} />
-          </button>
-          <button type="button" aria-label="Reject" title="Reject" onClick={(e) => { e.stopPropagation(); onReject(); }} className="size-7 inline-flex items-center justify-center rounded border border-line bg-transparent text-bad cursor-pointer hover:bg-track">
-            <I.X size={12} />
-          </button>
-        </span>
-      </td>
-    </tr>
   );
 }
 
