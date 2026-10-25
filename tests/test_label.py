@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from concord_label.core.models import Segment
+from concord_label.core.models import Segment, SegmentEdit
 from label_helpers import ASR_MODELS, SEG_MODELS, _ok, label
 
 
@@ -133,6 +133,93 @@ def test_annotate_edits(labelled, client):
     v2 = _ok(client.get(f"/api/label/files/{fid}"))
     assert n == sum(1 for x in segs[3:] if x["status"] == "auto")
     assert not any(x["status"] == "auto" for x in v2["segments"])
+
+
+def _segs(client, fid):
+    """The file's segments as Annotate sees them, apart from `updated_at` (an undo renews it)."""
+    return [{k: v for k, v in x.items() if k != "updated_at"} for x in _ok(client.get(f"/api/label/files/{fid}"))["segments"]]
+
+
+def _history(client, fid):
+    return _ok(client.get(f"/api/label/files/{fid}"))["history"]
+
+
+def test_undo_and_redo_each_kind_of_edit(labelled, client, session):
+    ds = labelled["unlabelled"]
+    fid = _ok(client.get(f"/api/label/datasets/{ds}/files"))[0]["id"]
+    assert _history(client, fid) == {"undo": None, "redo": None}
+    segs = _segs(client, fid)
+    a, b, c = segs[0], segs[1], segs[2]
+    c_updated = session.get(Segment, c["id"]).updated_at
+    edits = [
+        ("text edit", lambda: client.patch(f"/api/label/segments/{a['id']}", json={"text": "Changed."})),
+        ("confirm", lambda: client.post("/api/label/segments/bulk", json={"ids": [a["id"], b["id"]], "action": "confirm"})),
+        ("merge", lambda: client.post("/api/label/segments/merge", json={"ids": [a["id"], b["id"]]})),
+        ("split", lambda: client.post(f"/api/label/segments/{c['id']}/split", json={"t": round((c["start"] + c["end"]) / 2, 3)})),
+        ("new segment", lambda: client.post(f"/api/label/files/{fid}/segments", json={"start": 0.0, "end": 0.4, "speaker": "x"})),
+        ("delete", lambda: client.delete(f"/api/label/segments/{c['id']}")),
+        ("confirm all high-confidence", lambda: client.post(f"/api/label/files/{fid}/confirm-auto")),
+        ("move", lambda: client.patch(f"/api/label/segments/{b['id']}", json={"start": b["start"] + 0.1, "end": b["end"] + 0.1,
+                                                                             "speaker": "spk7"})),
+    ]
+    for action, do in edits:
+        before = _segs(client, fid)
+        assert do().status_code < 300
+        after = _segs(client, fid)
+        assert after != before and _history(client, fid)["undo"] == action
+        undone = _ok(client.post(f"/api/label/files/{fid}/undo"))
+        assert undone["action"] == action
+        assert _segs(client, fid) == before, action  # ids and uids come back too
+        assert _history(client, fid)["redo"] == action
+        redone = _ok(client.post(f"/api/label/files/{fid}/redo"))
+        assert redone["action"] == action and _segs(client, fid) == after, action
+        _ok(client.post(f"/api/label/files/{fid}/undo"))
+    # every edit is undone again, so the file is as the run left it, and a restored segment has a new updated_at
+    assert _segs(client, fid) == segs
+    session.expire_all()
+    assert session.get(Segment, c["id"]).updated_at > c_updated
+    # each new edit dropped the edits undone before it, so only the last one can be redone
+    assert _ok(client.post(f"/api/label/files/{fid}/undo"), 409)["detail"] == "There is nothing to undo"
+    assert _history(client, fid) == {"undo": None, "redo": "move"}
+
+
+def test_a_new_edit_clears_redo_and_the_history_keeps_200(labelled, client, session):
+    ds = labelled["unlabelled"]
+    fid = _ok(client.get(f"/api/label/datasets/{ds}/files"))[0]["id"]
+    a = _segs(client, fid)[0]
+    _ok(client.patch(f"/api/label/segments/{a['id']}", json={"text": "One."}))
+    _ok(client.post(f"/api/label/files/{fid}/undo"))
+    assert _history(client, fid) == {"undo": None, "redo": "text edit"}
+    _ok(client.post("/api/label/segments/bulk", json={"ids": [a["id"]], "action": "flag"}))
+    assert _history(client, fid) == {"undo": "flag", "redo": None}
+    assert _ok(client.post(f"/api/label/files/{fid}/redo"), 409)["detail"] == "There is nothing to redo"
+    # an edit that changes nothing is not recorded (flagging a flagged segment again only renews edited_at)
+    _ok(client.post("/api/label/segments/bulk", json={"ids": [a["id"]], "action": "flag"}))
+    assert session.query(SegmentEdit).filter_by(audio_file_id=fid).count() == 1
+    for k in range(205):
+        _ok(client.patch(f"/api/label/segments/{a['id']}", json={"flagged": k % 2 == 0}))
+    rows = session.query(SegmentEdit).filter_by(audio_file_id=fid).order_by(SegmentEdit.id).all()
+    assert len(rows) == 200 and rows[0].action in ("flag", "unflag")
+
+
+def test_a_pseudo_label_run_clears_the_history(labelled, client, session):
+    ds = labelled["unlabelled"]
+    fid = _ok(client.get(f"/api/label/datasets/{ds}/files"))[0]["id"]
+    a, b = _segs(client, fid)[:2]
+    _ok(client.patch(f"/api/label/segments/{a['id']}", json={"text": "Kept by hand."}))
+    assert _history(client, fid)["undo"] == "text edit"
+    label(client, labelled, strategy="rover")
+    assert _history(client, fid) == {"undo": None, "redo": None}
+    assert _ok(client.post(f"/api/label/files/{fid}/undo"), 409)["detail"] == "There is nothing to undo"
+    # a change made around the history (here straight in the database) turns the undo into a 409, and the
+    # history is forgotten
+    _ok(client.patch(f"/api/label/segments/{a['id']}", json={"text": "Edited again."}))
+    session.get(Segment, a["id"]).text = "Changed elsewhere."
+    session.commit()
+    r = _ok(client.post(f"/api/label/files/{fid}/undo"), 409)
+    assert r["detail"] == "This file changed since that edit, so it can't be undone"
+    assert _history(client, fid) == {"undo": None, "redo": None}
+    assert session.get(Segment, a["id"]).text == "Changed elsewhere."
 
 
 def test_live_eval(labelled, client):

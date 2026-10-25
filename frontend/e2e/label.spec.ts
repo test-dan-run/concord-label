@@ -328,6 +328,38 @@ test("annotate: the transport's speed, a wheel pan, and a click that ends a segm
   expect(errors).toEqual([]);
 });
 
+test("annotate: undo a merge with Ctrl+Z, and redo it", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 2 });
+  await expect(page.getByRole("heading", { name: "d03_44k_stereo" })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const rows = page.locator("tbody tr");
+  const history = page.getByRole("group", { name: "History" });
+  await expect(rows.first()).toBeVisible();
+  const n = await rows.count();
+  const texts = await page.getByLabel(/^Transcript at /).evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value));
+  const boxes = page.getByLabel(/^Select segment at /);
+  await boxes.nth(0).click();
+  await boxes.nth(1).click();
+  await page.getByRole("toolbar", { name: "Bulk actions" }).getByRole("button", { name: "Merge" }).click();
+  await expect(rows).toHaveCount(n - 1);
+  await expect(history.getByRole("button", { name: "Undo" })).toHaveAttribute("title", "Undo merge (Ctrl+Z)");
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+z");
+  await expect(rows).toHaveCount(n);
+  await expect(page.getByText("Undid merge")).toBeVisible();
+  await expect.poll(() => page.getByLabel(/^Transcript at /).evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value))).toEqual(texts);
+  await expect(history.getByRole("button", { name: "Redo" })).toHaveAttribute("title", "Redo merge (Ctrl+Shift+Z)");
+  await page.keyboard.press("Control+Shift+z");
+  await expect(rows).toHaveCount(n - 1);
+  await expect(page.getByText("Redid merge")).toBeVisible();
+  await page.keyboard.press("Control+z");
+  await expect(rows).toHaveCount(n);
+  expect(errors).toEqual([]);
+});
+
 test("lexicons: publish house spellings, then use or keep them in Annotate", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/lexicons");

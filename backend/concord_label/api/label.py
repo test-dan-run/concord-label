@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..core.db import get_session
 from ..core.models import AudioFile, Job, Model, Run, RunTask, Segment, SegmentStatus
-from ..label import console, edit, fusion, live, pseudo
+from ..label import console, edit, fusion, history, live, pseudo
 from ..platform import catalog
 from ..runs import jobs
 from .datasets import dataset_json, get_dataset, job_brief
@@ -265,7 +265,7 @@ def split_segment(segment_id: int, body: SplitIn, session: Session = Depends(get
 
 @router.delete("/segments/{segment_id}", status_code=204)
 def delete_segment(segment_id: int, session: Session = Depends(get_session)) -> None:
-    session.delete(_segment(session, segment_id))
+    edit.remove(session, _segment(session, segment_id))
     session.commit()
 
 
@@ -287,6 +287,30 @@ def create_segment(file_id: int, body: SegmentIn, session: Session = Depends(get
 def confirm_auto(file_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
     f = _file(session, file_id)
     return {"confirmed": _commit_or_400(session, lambda: edit.confirm_auto(session, f))}
+
+
+def _history(session: Session, fn):
+    try:
+        out = fn()
+    except history.HistoryError as exc:
+        session.commit()  # a history that no longer matches the file has been forgotten
+        raise HTTPException(409, str(exc)) from None
+    session.commit()
+    return out
+
+
+@router.post("/files/{file_id}/undo")
+def undo_edit(file_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Undo the file's last edit: `{action, ids}` with the ids of the segments it wrote back."""
+    _file(session, file_id)
+    return _history(session, lambda: history.undo(session, file_id))
+
+
+@router.post("/files/{file_id}/redo")
+def redo_edit(file_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Redo the edit undone last: `{action, ids}` with the ids of the segments it wrote back."""
+    _file(session, file_id)
+    return _history(session, lambda: history.redo(session, file_id))
 
 
 # ---------------------------------------------------------------- live evaluation

@@ -127,6 +127,11 @@ const SECTIONS: Section[] = [
           high-confidence</em> confirms every auto-accepted segment in the file at once.
         </p>
         <p className="m-0">
+          <em>Undo</em> and <em>Redo</em> above the timeline take back any change to the file's segments, one change at a time, and their
+          tooltips name the change. Label keeps the last 200 changes for each file, and it keeps them when you leave the page. A pseudo-label run
+          or an imported package clears the history of the files it changes.
+        </p>
+        <p className="m-0">
           The row above the waveform holds the player. It plays the file from the playhead, shows the time, and sets the speed from 0.5× to 2×.
           Label remembers the speed in your browser for the next file. While the file plays, the segment under the playhead has a blue outline
           on the speaker lanes and a blue edge in the table, and the table scrolls to keep it in view.

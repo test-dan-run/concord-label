@@ -418,6 +418,8 @@ export interface AnnotateView {
   diariser: string | null;
   keywords: unknown[];
   thresholds: { high: number; low: number };
+  /** The names of the next undo and redo (e.g. "merge"); null when there is nothing to undo or redo. */
+  history: { undo: string | null; redo: string | null };
   prev_file_id: number | null;
   next_file_id: number | null;
   position: { index: number; of: number };

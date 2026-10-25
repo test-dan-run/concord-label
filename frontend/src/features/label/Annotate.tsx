@@ -142,8 +142,10 @@ function useLabelMutations(fileId: number, datasetId: number) {
   const create = useMutation({ mutationFn: (b: { start: number; end: number; speaker: string | null }) => api.post<Segment>(`/label/files/${fileId}/segments`, b), onSuccess: done });
   const remove = useMutation({ mutationFn: (id: number) => api.del(`/label/segments/${id}`), onSuccess: done });
   const confirmAuto = useMutation({ mutationFn: () => api.post<{ confirmed: number }>(`/label/files/${fileId}/confirm-auto`), onSuccess: done });
-  const error = patch.error ?? move.error ?? bulk.error ?? merge.error ?? split.error ?? create.error ?? remove.error ?? confirmAuto.error;
-  return { patch, move, bulk, merge, split, create, remove, confirmAuto, error };
+  // Undo and redo (label/history.py): a 409 means the history no longer matches the file, and the server forgot it.
+  const history = useMutation({ mutationFn: (way: "undo" | "redo") => api.post<{ action: string; ids: number[] }>(`/label/files/${fileId}/${way}`), onSettled: done });
+  const error = patch.error ?? move.error ?? bulk.error ?? merge.error ?? split.error ?? create.error ?? remove.error ?? confirmAuto.error ?? history.error;
+  return { patch, move, bulk, merge, split, create, remove, confirmAuto, history, error };
 }
 
 const NOT_TEXT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "file", "color"]);
@@ -279,6 +281,27 @@ function Annotator({
     m.split.mutate({ id: current.id, t: inside ? ctl.time : (current.start + current.end) / 2 });
   }, [current, ctl.time, m.split]);
 
+  // "Undid merge": what the last undo or redo did, for a few seconds.
+  const [undoNote, setUndoNote] = useState("");
+  useEffect(() => {
+    if (!undoNote) return;
+    const t = window.setTimeout(() => setUndoNote(""), 4000);
+    return () => window.clearTimeout(t);
+  }, [undoNote]);
+  const step = useCallback(
+    (way: "undo" | "redo") => {
+      if (m.history.isPending || !v?.history[way]) return;
+      m.history.mutate(way, {
+        onSuccess: ({ action, ids }) => {
+          setUndoNote(`${way === "undo" ? "Undid" : "Redid"} ${action}`);
+          setSel(new Set());
+          if (ids.length) setCur(ids[0]);
+        },
+      });
+    },
+    [m.history, v],
+  );
+
   const mergeSel = useCallback(() => {
     if (sel.size >= 2) {
       m.merge.mutate([...sel]);
@@ -295,6 +318,15 @@ function Annotator({
         if (current && h) {
           e.preventDefault();
           applyHint(current, h);
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !isTyping(e)) {
+        // outside text fields only, so the browser's own undo still works while you type
+        const k = e.key.toLowerCase();
+        if (k === "z" || k === "y") {
+          e.preventDefault();
+          step(k === "y" || e.shiftKey ? "redo" : "undo");
         }
         return;
       }
@@ -345,7 +377,7 @@ function Annotator({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [ctl, current, segs, visible, cur, high, targets, splitAtPlayhead, mergeSel, confirm, speakers, hints, hasHint, applyHint, zoomAround, setView, duration, range]);
+  }, [ctl, current, segs, visible, cur, high, targets, splitAtPlayhead, mergeSel, confirm, speakers, hints, hasHint, applyHint, zoomAround, setView, duration, range, step]);
 
   if (q.isLoading || !v) return <Spinner />;
 
@@ -386,7 +418,16 @@ function Annotator({
           <button type="button" disabled title="Keyword spotting is not built yet (Q6)" className="min-h-8 px-3 text-xs border-0 bg-transparent text-subtle cursor-not-allowed">Both</button>
         </span>
         <span className="text-xs text-muted num">{fileIndex >= 0 ? `${fileIndex + 1}/${files.length}` : ""}</span>
-        <span className="ml-auto flex gap-2">
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted" aria-live="polite">{undoNote}</span>
+          <span role="group" aria-label="History" className="flex gap-1.5">
+            <Button size="sm" disabled={!v.history.undo || m.history.isPending} title={v.history.undo ? `Undo ${v.history.undo} (Ctrl+Z)` : "Nothing to undo"} onClick={() => step("undo")}>
+              Undo
+            </Button>
+            <Button size="sm" disabled={!v.history.redo || m.history.isPending} title={v.history.redo ? `Redo ${v.history.redo} (Ctrl+Shift+Z)` : "Nothing to redo"} onClick={() => step("redo")}>
+              Redo
+            </Button>
+          </span>
           <Button size="sm" disabled={!autoCount || m.confirmAuto.isPending} onClick={() => m.confirmAuto.mutate()}>
             <I.Check size={13} /> Confirm all high-confidence ({autoCount})
           </Button>

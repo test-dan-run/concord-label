@@ -2,8 +2,8 @@
 
 The tables Concord Bench also has (dataset, audio_file, segment, keyword_event, model, model_output,
 job) started identical to Bench's and may change separately; only CONTRACTS.md must stay
-compatible. Label's own: `run` (label runs only), `sync_package`, `reference_export`, `lexicon` and
-`lexicon_version`.
+compatible. Label's own: `run` (label runs only), `sync_package`, `reference_export`, `lexicon`,
+`lexicon_version` and `segment_edit`.
 
 `dataset.uid` names a dataset across apps: it is `source.dataset_uid` in the reference packages sent to
 Concord Bench (CONTRACTS.md §2) and in the flags that come back (§3).
@@ -168,6 +168,23 @@ class Segment(Base):
     def reviewed(self) -> bool:
         """Reviewed work: confirmed, or touched by a person. Pseudo-labels never overwrite it."""
         return self.status == SegmentStatus.confirmed or self.edited_at is not None
+
+
+class SegmentEdit(Base):
+    """One edit a person made to a file's segments, for Annotate's undo and redo (label/history.py).
+
+    `before` and `after` hold every column of each segment the edit changed, removed or added, as it was
+    before and after. `undone` marks an edit that was undone and can be redone. Edits run in `id` order."""
+
+    __tablename__ = "segment_edit"
+    __table_args__ = (Index("ix_segment_edit_file", "audio_file_id", "id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    audio_file_id: Mapped[int] = mapped_column(ForeignKey("audio_file.id", ondelete="CASCADE"))
+    action: Mapped[str] = mapped_column(String(40))
+    before: Mapped[list[Any]] = mapped_column(default=list)
+    after: Mapped[list[Any]] = mapped_column(default=list)
+    undone: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class KeywordEvent(Base):

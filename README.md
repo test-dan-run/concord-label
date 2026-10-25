@@ -121,6 +121,9 @@ one-second window, and the mouse wheel moves along the file. You can drag across
 stretch of the file, including a stretch that crosses speakers. In the segment table, you edit
 transcripts, change speakers, merge and split segments, and confirm segments one at a time or in bulk.
 
+You can undo and redo any change to a file's segments, and Label keeps the last 200 changes for each
+file. A pseudo-label run or an imported package clears that history for the files it changes.
+
 Any edit marks a segment as checked by a person, and later pseudo-label runs never replace it. The Docs
 page in the app lists the keyboard shortcuts.
 

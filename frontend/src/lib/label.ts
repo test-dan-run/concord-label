@@ -52,6 +52,8 @@ export const SHORTCUTS: { key: string; short: string; does: string }[] = [
   { key: "↑ ↓", short: "move", does: "Moves the selection to the previous or next segment." },
   { key: "= and -", short: "zoom", does: "Zooms the timeline in or out around the playhead, and Ctrl with the scroll wheel zooms at the pointer." },
   { key: "0", short: "whole file", does: "Shows the whole file on the timeline." },
+  { key: "Ctrl+Z", short: "undo", does: "Undoes the last change to the file's segments." },
+  { key: "Ctrl+Shift+Z and Ctrl+Y", short: "redo", does: "Redoes the last change that was undone." },
   { key: "Esc", short: "clear selection", does: "Clears the selected rows and the waveform selection." },
   { key: "Shift-click", short: "select range", does: "Selects a range of segments in the table." },
 ];

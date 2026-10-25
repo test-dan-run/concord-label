@@ -62,7 +62,7 @@ from ..datasets.audio import cut, load_derived
 from ..platform import catalog
 from ..runs import cache
 from ..runs.cache import Key
-from . import fusion
+from . import fusion, history
 from .eta import Eta, Stage, saved_rtf
 
 Log = Callable[[str], None]
@@ -541,6 +541,7 @@ def write_segments(session: Session, run: Run, files: list[AudioFile]) -> dict[s
             continue
         existing = list(session.scalars(select(Segment).where(Segment.audio_file_id == f.id)))
         reviewed = [s for s in existing if s.reviewed]
+        history.forget(session, [f.id])  # Annotate's undo history no longer matches the file
         for s in existing:
             if not s.reviewed and is_machine(s):
                 session.delete(s)
