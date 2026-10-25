@@ -15,9 +15,12 @@ one model is leased at a time:
 
 Before a stage takes its lease, its outputs are looked up in batches (runs/cache.py): Label's own rows,
 then the catalog's output index, where outputs Concord Bench already made are read from Bench and copied
-here. A stage with nothing missing takes no lease ("Re-fuse 4 saved outputs"). Outputs are committed per
-file, so a failed or interrupted run that is retried skips what it already did. A cancelled run stops
-before its next stage or cut (`check_cancel`, runs/jobs.py), and fusion runs only when every stage finished.
+here. A stage with nothing missing takes no lease ("Re-fuse 4 saved outputs"). The rest is sent several
+calls at a time (`in_flight`: the catalog's batch recommendation for the model), so the model's server or
+vLLM batches them; worker threads only make the calls, and the outputs are stored on the session's thread.
+Outputs are committed per file, and the finished calls of a failed stage too, so a failed or interrupted
+run that is retried skips what it already did. A cancelled run stops before its next stage or cut
+(`check_cancel`, runs/jobs.py), and fusion runs only when every stage finished.
 How long a run has left is estimated stage by stage (label/eta.py) and reported through `on_eta`.
 
 Writing segments follows one rule: reviewed work (confirmed, or touched by a person) is never replaced.
@@ -33,10 +36,14 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Iterator
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from typing import Any
 
 import httpx
+import numpy as np
+from aicore.batching import DEFAULT as DEFAULT_BATCH
+from aicore.batching import batch_size
 from aicore.catalog import CatalogError
 from aicore.catalog import span as index_span
 from sqlalchemy import select
@@ -61,6 +68,7 @@ Check = Callable[[], None]  # raises when the run should stop
 OVERLAP_DROP = 0.5  # a new segment overlapping reviewed work by more than this share of itself is dropped
 MIN_ASR_SPAN = 0.05
 SEG_SHARE = 0.3  # progress: stage 1 is the first 30 %, stage 2 runs to 90 %, fusion the rest
+MAX_IN_FLIGHT = 32  # calls a stage keeps open at most; the servers would only queue more
 
 
 class LabelError(Exception):
@@ -261,27 +269,69 @@ def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple
         todo = [(f, ks) for f, ks in todo if ks]
         total = sum(len(ks) for _, ks in todo)
         log(f"{what}: {len(keys) - total} of {len(keys)} outputs saved, {total} to run on {len(todo)} file(s)")
+        todo_s = sum(key_audio_s(f, k) for f, ks in todo for k in ks)
+        n = in_flight(model, todo_s / total)
+        log(f"{what}: {n} call(s) at a time")
         if eta:
-            eta.start(model.catalog_id, total, sum(key_audio_s(f, k) for f, ks in todo for k in ks))
+            eta.start(model.catalog_id, total, todo_s)
+        calls = iter([(f, k) for f, ks in todo for k in ks])
+        left = {f.id: len(ks) for f, ks in todo}
+        audio: dict[int, np.ndarray] = {}
+        running: dict[Future, tuple[AudioFile, Key]] = {}
+        failure: Exception | None = None
         lost = False
-        for f, ks in todo:
-            if getattr(lease, "lost", None) and not lost:
-                lost = True
-                log(f"the lease on {model.catalog_id} was lost ({lease.lost}); calls still go through the gateway")
-            audio = load_derived(paths.derived(f.sha256))
-            for k in ks:
-                check_cancel()
-                samples = audio if k[2] == cache.WHOLE else cut(audio, k[1], k[2])
-                found[k] = oc.run(samples, *k)
-                ran += 1
-                if eta:
-                    eta.advance(model.catalog_id, key_audio_s(f, k))
-            session.commit()  # keep outputs (a retry skips them), release the write lock
+        with ThreadPoolExecutor(n, thread_name_prefix=f"{model.catalog_id}-call") as pool:
+            while True:
+                try:
+                    while failure is None and len(running) < n and (call := next(calls, None)):
+                        check_cancel()
+                        f, k = call
+                        if f.id not in audio:
+                            if getattr(lease, "lost", None) and not lost:
+                                lost = True
+                                log(f"the lease on {model.catalog_id} was lost ({lease.lost}); "
+                                    "calls still go through the gateway")
+                            audio[f.id] = load_derived(paths.derived(f.sha256))
+                        samples = audio[f.id] if k[2] == cache.WHOLE else cut(audio[f.id], k[1], k[2])
+                        running[pool.submit(oc.infer, samples, *k)] = (f, k)
+                except Exception as exc:  # noqa: BLE001 - raised once the calls in flight are stored
+                    failure = exc
+                if not running:
+                    break
+                done, _ = wait(running, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    f, k = running.pop(fut)
+                    try:
+                        found[k] = oc.store(*k, *fut.result())
+                    except Exception as exc:  # noqa: BLE001 - as above
+                        failure = failure or exc
+                        continue
+                    ran += 1
+                    if eta:
+                        eta.advance(model.catalog_id, key_audio_s(f, k))
+                    left[f.id] -= 1
+                    if not left[f.id]:
+                        del audio[f.id]
+                        session.commit()  # keep outputs (a retry skips them), release the write lock
+                        oc.record_index()
+                        progress(ran / total, f"{what}: {f.rel_path}")
+        if failure is not None:
+            session.commit()  # the calls that finished are kept for the retry
             oc.record_index()
-            progress(ran / total, f"{what}: {f.rel_path}")
+            raise failure
     if eta:
         eta.finish(model.catalog_id)
     return found, ran
+
+
+def in_flight(model: Model, item_s: float) -> int:
+    """How many calls a stage keeps open, so that the server batches them: the catalog's batch for items of
+    `item_s` seconds (aicore's default without one), at most MAX_IN_FLIGHT."""
+    try:
+        n = batch_size(model.catalog_id, item_s=item_s, catalog=catalog.get_catalog())
+    except Exception:  # noqa: BLE001 - a batch size is never worth failing a run over
+        n = DEFAULT_BATCH
+    return max(1, min(MAX_IN_FLIGHT, n))
 
 
 def key_audio_s(f: AudioFile, k: Key) -> float:

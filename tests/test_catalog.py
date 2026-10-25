@@ -1,10 +1,11 @@
 """The Model Catalog as Label uses it, on aicore's FakeCatalog (no catalog, no GPU): models listed from it,
-one lease per pipeline stage, waiting in its queue, blocked jobs, the output index (outputs Bench holds are
+one lease per pipeline stage, calls in flight as its batch profile recommends, waiting in its queue, blocked jobs, the output index (outputs Bench holds are
 copied, not computed; nothing is indexed without a build key), POST /api/outputs/batch and the app's
 registration at startup."""
 
 from __future__ import annotations
 
+import threading
 import time
 
 import httpx
@@ -127,6 +128,60 @@ def test_outputs_carry_the_build_key_and_are_indexed(labelled, session, replay_c
     hits = replay_catalog.index_lookup("bench", keys)
     assert all(h and h["owner"] == "label" for h in hits)
     assert sorted(h["output_id"] for h in hits) == sorted(r.id for r in rows)
+
+
+def _in_flight(monkeypatch, fail_at: int | None = None) -> dict[str, list[int]]:
+    """Wrap OutputCache.infer: per service, how many calls were open as each one started. With `fail_at`, that
+    call of the first ASR member fails like the 30 s + 16 samples crash."""
+    infer, lock = cache.OutputCache.infer, threading.Lock()
+    open_: dict[str, int] = {}
+    seen: dict[str, list[int]] = {}
+
+    def slow(self, *a, **kw):
+        with lock:
+            open_[self.service] = open_.get(self.service, 0) + 1
+            seen.setdefault(self.service, []).append(open_[self.service])
+            n = len(seen[self.service])
+        try:
+            time.sleep(0.02)
+            if self.service == ASR_MODELS[0] and n == fail_at:
+                raise RuntimeError("Padding size should be less than the corresponding input dimension")
+            return infer(self, *a, **kw)
+        finally:
+            with lock:
+                open_[self.service] -= 1
+
+    monkeypatch.setattr(cache.OutputCache, "infer", slow)
+    return seen
+
+
+def test_calls_run_as_many_at_a_time_as_the_catalog_recommends(label_flow, client, replay_catalog, monkeypatch):
+    replay_catalog.update(ASR_MODELS[0], batch={"recommendation": {"batch": 3}})
+    replay_catalog.update(ASR_MODELS[1], batch={"recommendation": {"batch": 500}})
+    seen = _in_flight(monkeypatch)
+    started, _ = label(client, label_flow)
+    log = _ok(client.get(f"/api/jobs/{started['job']['id']}"))["log"]
+    assert len(seen[ASR_MODELS[0]]) > 3 and max(seen[ASR_MODELS[0]]) == 3
+    assert any(f"{ASR_MODELS[1]}: 32 call(s) at a time" in line for line in log)  # at most MAX_IN_FLIGHT
+    assert any(f"{SEG}: 8 call(s) at a time" in line for line in log)  # no profile: aicore's default
+    assert max(seen[SEG]) > 1
+
+
+def test_a_failed_call_keeps_the_calls_that_finished(label_flow, client, replay_catalog, monkeypatch, session):
+    replay_catalog.update(ASR_MODELS[0], batch={"recommendation": {"batch": 2}})
+    _in_flight(monkeypatch, fail_at=3)
+    started = _start(client, label_flow)
+    jobs.run_pending()
+    job = _ok(client.get(f"/api/jobs/{started['job']['id']}"))
+    assert job["status"] == "failed" and "Padding size" in job["error"]
+    kept = session.query(ModelOutput).filter_by(model_name=ASR_MODELS[0]).count()
+    assert kept >= 2  # the two before it, and any other call in flight, are committed
+    monkeypatch.undo()
+    _ok(client.post(f"/api/jobs/{job['id']}/retry"))
+    jobs.run_pending()
+    job = _ok(client.get(f"/api/jobs/{job['id']}"))
+    assert job["status"] == "done"
+    assert any(f"{ASR_MODELS[0]}: {kept} of " in line and "outputs saved" in line for line in job["log"])
 
 
 def test_waiting_job_shows_its_queue_position(label_flow, client, replay_catalog, monkeypatch):
