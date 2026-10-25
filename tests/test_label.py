@@ -259,10 +259,19 @@ def test_live_eval(labelled, client):
     ds = labelled["unlabelled"]
     lv = _ok(client.get(f"/api/label/datasets/{ds}/live"))
     assert lv["asr"]["confirmed"] == 0 and lv["asr"]["models"] == [] and lv["kws"] == {"available": False}
-    # cpWER needs fully reviewed files, and it uses the speakers of the run's diariser
+    # cpWER uses the speakers of the run's diariser, and it needs reviewed segments at the start of a file
     cp = lv["cpwer"]
     assert cp["files"] == 0 and cp["of"] == 6 and cp["diariser"] == "pyannote-diarization" and cp["models"] == []
-    assert "every segment is reviewed" in cp["reason"]
+    assert "at the start of a file" in cp["reason"]
+    # a file reviewed partway counts up to the first segment nobody has reviewed
+    f0 = _ok(client.get(f"/api/label/datasets/{ds}/files"))[0]["id"]
+    segs0 = sorted(_ok(client.get(f"/api/label/files/{f0}"))["segments"], key=lambda x: x["start"])
+    _ok(client.post("/api/label/segments/bulk", json={"ids": [x["id"] for x in segs0[:3]], "action": "confirm"}))
+    cp = _ok(client.get(f"/api/label/datasets/{ds}/live"))["cpwer"]
+    assert cp["files"] == 1 and cp["complete"] == 0 and cp["seconds"] == pytest.approx(segs0[3]["start"])
+    assert {m["service"] for m in cp["models"]} == {"whisper-large-v3", "faster-whisper-large-v3"}
+    assert all(m["files"] == 1 and m["words"] > 0 for m in cp["models"])
+    partial = {m["service"]: m["words"] for m in cp["models"]}
     # confirm every segment of every file
     for f in _ok(client.get(f"/api/label/datasets/{ds}/files")):
         ids = [x["id"] for x in _ok(client.get(f"/api/label/files/{f['id']}"))["segments"]]
@@ -283,13 +292,13 @@ def test_live_eval(labelled, client):
     assert min(m["wer"] for m in a["models"]) < 0.5
     assert lv["der"]["files"] == 6 and {m["name"] for m in lv["der"]["models"]} >= {"pyannote-diarization"}
     cp = lv["cpwer"]
-    assert cp["files"] == 6 and cp["reason"] is None
+    assert cp["files"] == 6 and cp["complete"] == 6 and cp["reason"] is None
+    assert all(m["words"] > partial[m["service"]] for m in cp["models"])
     assert {m["service"] for m in cp["models"]} == {"whisper-large-v3", "faster-whisper-large-v3"}
     assert all(m["files"] == 6 and m["words"] > 0 for m in cp["models"])
     # the confirmed text is a member's output and the speakers are the diariser's, so the best model is close
     assert cp["models"][0]["cpwer"] < 0.5
     # giving every segment of a file to one speaker puts that file's other speaker's words on the wrong speaker
-    f0 = _ok(client.get(f"/api/label/datasets/{ds}/files"))[0]["id"]
     ids = [x["id"] for x in _ok(client.get(f"/api/label/files/{f0}"))["segments"]]
     _ok(client.post("/api/label/segments/bulk", json={"ids": ids, "action": "assign_speaker", "speaker": "solo"}))
     worse = {m["service"]: m["cpwer"] for m in _ok(client.get(f"/api/label/datasets/{ds}/live"))["cpwer"]["models"]}

@@ -142,10 +142,11 @@ draft, and you publish it as a new version.
 ### Live evaluation
 
 Live evaluation scores each model against the confirmed segments, using saved outputs only, so it never
-runs a model. It shows WER (word error rate) with 95% intervals. On fully reviewed files, it shows cpWER
-(concatenated minimum-permutation WER), which scores each transcript together with the speakers that the
-last pseudo-label run's diariser found. It also shows DER (diarisation error rate) and JER (Jaccard error
-rate) on those files.
+runs a model. It shows WER (word error rate) with 95% intervals, and cpWER (concatenated
+minimum-permutation WER), which scores each transcript together with the speakers that the last
+pseudo-label run's diariser found. cpWER scores each file up to the first segment nobody has reviewed, so
+a file counts before you finish it. Live evaluation also shows DER (diarisation error rate) and JER
+(Jaccard error rate) on fully reviewed files.
 
 ### Sync
 

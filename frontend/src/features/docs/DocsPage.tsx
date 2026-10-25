@@ -250,8 +250,8 @@ const SECTIONS: Section[] = [
           <li>
             cpWER (concatenated minimum-permutation WER) scores the transcript and the speakers together. For each model, it puts each speaker's
             words in a row, with the speakers the last pseudo-label run's diariser found, and it matches the speakers to the confirmed ones in the
-            way that gives the fewest errors. A word given to the wrong speaker counts twice. cpWER uses only fully reviewed files, so speech
-            nobody has labelled yet never counts as an error.
+            way that gives the fewest errors. A word given to the wrong speaker counts twice. cpWER scores each file up to the first segment
+            nobody has reviewed, so a file counts before you finish it, and speech nobody has labelled yet never counts as an error.
           </li>
           <li>DER (diarisation error rate) and JER (Jaccard error rate) measure the speaker turns on fully reviewed files. They use a 0.25-second collar, which ignores small timing differences at each segment edge.</li>
           <li>The standings show a 95% interval for each model, computed by resampling the segments many times (bootstrapping).</li>

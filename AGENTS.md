@@ -214,5 +214,6 @@ These changes came from the updated design canvas and from requests that followe
   edge alone. A double-click on a lane adds a 2 second segment, a double-click on a lane's name renames the
   speaker (`rename_speaker` in `edit.bulk`), and a wide enough block shows its text.
 - Live evaluation shows cpWER beside WER (`cp_card` in `label/live.py`). It scores each ASR model with the
-  speakers of the last pseudo-label run's diariser, on fully reviewed files. Ctrl+Enter in Annotate goes to
+  speakers of the last pseudo-label run's diariser, on each file up to the first segment nobody has reviewed
+  (`reviewed_until`). Ctrl+Enter in Annotate goes to
   the next segment that isn't confirmed, auto-accepted ones included, instead of the next one to review.

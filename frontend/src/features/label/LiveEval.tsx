@@ -4,7 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, qs, type LiveEval, type LiveModel } from "../../lib/api";
 import { C, MODEL_SERIES } from "../../lib/colors";
 import { useNormaliser, useNormalisers } from "../../lib/config";
-import { ago, clock, deltaPts, num, pct } from "../../lib/format";
+import { ago, clock, deltaPts, hours, num, pct } from "../../lib/format";
 import { Empty, ErrorNote, Fact, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 import { Crumbs, DatasetChooser, LabelTabs } from "./common";
 import { PublishOrDownload } from "./PublishToCatalog";
@@ -167,8 +167,9 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
       <p className="m-0 text-xs text-muted">
         {d.cpwer.reason ?? (
           <>
-            cpWER scores the transcript and the speakers together, with the speakers {d.cpwer.diariser ?? "the diariser"} found, on {num(d.cpwer.files)} of{" "}
-            {num(d.cpwer.of)} files where every segment is reviewed. A word given to the wrong speaker counts twice.
+            cpWER scores the transcript and the speakers together, with the speakers {d.cpwer.diariser ?? "the diariser"} found. It scores each file up to
+            the first segment nobody has reviewed: {hours(d.cpwer.seconds / 3600)} of audio in {num(d.cpwer.files)} of {num(d.cpwer.of)} files so far,{" "}
+            {num(d.cpwer.complete)} of them reviewed to the end. A word given to the wrong speaker counts twice.
           </>
         )}
       </p>

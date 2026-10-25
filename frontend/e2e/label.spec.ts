@@ -736,9 +736,9 @@ test("live evaluation loads standings and DER; Publish or Download, no locked sc
   await expect(page.getByRole("heading", { name: "WER vs confirmed segments" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Standings" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Diarisation (DER)" })).toBeVisible();
-  // cpWER sits beside WER, with the diariser's speakers, on the fully reviewed files
+  // cpWER sits beside WER, with the diariser's speakers, on each file up to where its review has got
   await expect(page.getByRole("columnheader", { name: "cpWER" })).toBeVisible();
-  await expect(page.getByText(/with the speakers pyannote-diarization found, on [1-9]\d* of 6 files/)).toBeVisible();
+  await expect(page.getByText(/with the speakers pyannote-diarization found\. .* of audio in [1-9]\d* of 6 files so far, [1-9]\d* of them reviewed to the end/)).toBeVisible();
   const row = page.getByRole("row", { name: /whisper-large-v3/ }).first();
   await expect(row.getByRole("cell").nth(4)).toHaveText(/\d+\.\d%/);
   // Publish to Dataset Catalog replaces Promote and Send to Bench; without the catalog the panel builds a package to
