@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Segment } from "../lib/api";
-import { confidenceColor, labelButton, nextToReview, overlapRegions, playingSegment, segmentAt, selectRange, shortcutKeys, SHORTCUTS, timedWords, wordAt } from "../lib/label";
+import { confidenceColor, labelButton, nextToReview, nextUnconfirmed, overlapRegions, playingSegment, segmentAt, selectRange, shortcutKeys, SHORTCUTS, timedWords, wordAt } from "../lib/label";
 import { C } from "../lib/colors";
 
 function seg(id: number, over: Partial<Segment> = {}): Segment {
@@ -127,5 +127,18 @@ describe("timedWords", () => {
     expect(timedWords("Hello there!", words)).toBeNull();
     expect(timedWords("Hello", words)).toBeNull();
     expect(timedWords("Hello there.", null)).toBeNull();
+  });
+});
+
+describe("nextUnconfirmed", () => {
+  const segs = [seg(1, { status: "confirmed" }), seg(2, { status: "auto", confidence: 0.99 }), seg(3, { status: "confirmed" }), seg(4), seg(5, { status: "rejected" })];
+  it("goes to the next segment that isn't confirmed, auto-accepted ones too", () => {
+    expect(nextUnconfirmed(segs, 1)).toBe(2);
+    expect(nextUnconfirmed(segs, 2)).toBe(4);
+    expect(nextUnconfirmed(segs, 2, [4])).toBe(5);
+  });
+  it("wraps around, and gives null when everything is confirmed", () => {
+    expect(nextUnconfirmed(segs, 5)).toBe(2);
+    expect(nextUnconfirmed(segs, 4, [2, 4, 5])).toBeNull();
   });
 });

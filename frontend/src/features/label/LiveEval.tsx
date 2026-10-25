@@ -109,6 +109,7 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
   // The locked benchmark score comes from Concord Bench (BENCH_URL); hidden when Bench is not reachable or has no
   // package of this dataset.
   const showLocked = d.asr.models.some((m) => m.locked !== null);
+  const cp = new Map(d.cpwer.models.map((m) => [m.service, m]));
   return (
     <Panel title="Standings" subtitle={d.asr.ranked ? "95% intervals: bootstrap over segments." : `Too few to rank: ${d.asr.min_rank} confirmed segments needed.`}>
       {d.asr.models.length === 0 && <span className="text-[13px] text-muted">No models to compare yet.</span>}
@@ -121,6 +122,7 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
                 <th scope="col" className="font-medium px-2 py-2 border-b border-line">Model</th>
                 <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right">WER</th>
                 <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right">95% CI</th>
+                <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right" title="Concatenated minimum-permutation WER: the transcript and the speakers together">cpWER</th>
                 {showLocked && <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right" title="Benchmark score in Concord Bench (locked references)">Locked</th>}
               </tr>
             </thead>
@@ -137,6 +139,13 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
                   </td>
                   <td className="px-2 py-2 text-right num">{pct(m.wer)}</td>
                   <td className="px-2 py-2 text-right num text-muted">{m.ci ? `${pct(m.ci[0])}–${pct(m.ci[1])}` : "—"}</td>
+                  <td className="px-2 py-2 text-right num">
+                    {cp.get(m.service) ? (
+                      <span title={`${num(cp.get(m.service)!.errors)} errors in ${num(cp.get(m.service)!.words)} words, on ${cp.get(m.service)!.files} files`}>{pct(cp.get(m.service)!.cpwer)}</span>
+                    ) : (
+                      <span className="text-subtle">—</span>
+                    )}
+                  </td>
                   {showLocked && (
                     <td className="px-2 py-2 text-right num">
                       {m.locked ? (
@@ -155,6 +164,14 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
           </table>
         </div>
       )}
+      <p className="m-0 text-xs text-muted">
+        {d.cpwer.reason ?? (
+          <>
+            cpWER scores the transcript and the speakers together, with the speakers {d.cpwer.diariser ?? "the diariser"} found, on {num(d.cpwer.files)} of{" "}
+            {num(d.cpwer.of)} files where every segment is reviewed. A word given to the wrong speaker counts twice.
+          </>
+        )}
+      </p>
     </Panel>
   );
 }

@@ -130,7 +130,7 @@ const SECTIONS: Section[] = [
           You can review a file from the keyboard. Tab goes to the next segment to review, which is a segment with low confidence or a spelling
           hint, and it plays the segment. The row above the timeline counts the segments left to review. Enter opens the text in the editor, and
           Enter again saves it. A click on the text also opens the editor, with the cursor where you clicked. When a segment has word timings
-          and the audio is paused, that click also moves the playhead to the word, and the word that is playing is highlighted. Ctrl+Enter confirms the segment and goes to the next one to review.
+          and the audio is paused, that click also moves the playhead to the word, and the word that is playing is highlighted. Ctrl+Enter confirms the segment and goes to the next one that isn't confirmed yet, including auto-accepted segments.
           Space plays or pauses from the playhead, Shift+Space plays the selected segment, and the arrow keys move the playhead. The table
           under <em>Keyboard shortcuts</em> lists every key.
         </p>
@@ -247,6 +247,12 @@ const SECTIONS: Section[] = [
         </p>
         <ul className="m-0 pl-5 flex flex-col gap-1.5">
           <li>WER (word error rate) compares each model's transcripts with the confirmed ones, after the selected normaliser removes differences such as case and punctuation.</li>
+          <li>
+            cpWER (concatenated minimum-permutation WER) scores the transcript and the speakers together. For each model, it puts each speaker's
+            words in a row, with the speakers the last pseudo-label run's diariser found, and it matches the speakers to the confirmed ones in the
+            way that gives the fewest errors. A word given to the wrong speaker counts twice. cpWER uses only fully reviewed files, so speech
+            nobody has labelled yet never counts as an error.
+          </li>
           <li>DER (diarisation error rate) and JER (Jaccard error rate) measure the speaker turns on fully reviewed files. They use a 0.25-second collar, which ignores small timing differences at each segment edge.</li>
           <li>The standings show a 95% interval for each model, computed by resampling the segments many times (bootstrapping).</li>
         </ul>

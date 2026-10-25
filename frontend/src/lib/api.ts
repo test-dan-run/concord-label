@@ -444,6 +444,15 @@ export interface LiveModel {
 export interface LiveEval {
   dataset: { id: number; name: string };
   asr: { normaliser: string; confirmed: number; min_rank: number; ranked: boolean; models: LiveModel[] };
+  /** cpWER of each ASR model with the speakers of the last pseudo-label run's diariser, on fully reviewed files;
+   *  `reason` says why there are no scores. */
+  cpwer: {
+    files: number;
+    of: number;
+    diariser: string | null;
+    reason: string | null;
+    models: { model_id: number; name: string; service: string; cpwer: number | null; errors: number; words: number; files: number }[];
+  };
   der: { files: number; of: number; collar: number; models: { model_id: number; name: string; der: number | null; jer: number | null; files: number }[] };
   kws: { available: boolean };
   feed: { id: number; file_id: number; file: string; start: number; end: number; speaker: string | null; text: string | null; confirmed_at: string }[];

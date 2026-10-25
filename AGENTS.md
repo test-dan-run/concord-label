@@ -88,7 +88,8 @@ modules:
 
 - Backend: `core/`, `datasets/`, `platform/`, `adapters/`, `runs/cache.py`, `runs/jobs.py`,
   `runs/worker.py`, `cuts.py` (`prepare_cuts` and `usable_files`), and `metrics/` (`wer`, `der`,
-  `normalisers` and `vad`).
+  `normalisers`, `vad` and `cpwer`). Label copied `metrics/cpwer.py` from Bench unchanged for the cpWER
+  column on Live evaluation.
 - Frontend: `components/` (`AudioPlayer`, `Timeline`, `timelineMath`, `TagInput`, `icons` and `ui`),
   `lib/`, and the Models, Jobs and Upload pages.
 
@@ -212,3 +213,6 @@ These changes came from the updated design canvas and from requests that followe
   segments share moves all of them through `POST /label/segments/boundary`, as one edit, and Alt moves one
   edge alone. A double-click on a lane adds a 2 second segment, a double-click on a lane's name renames the
   speaker (`rename_speaker` in `edit.bulk`), and a wide enough block shows its text.
+- Live evaluation shows cpWER beside WER (`cp_card` in `label/live.py`). It scores each ASR model with the
+  speakers of the last pseudo-label run's diariser, on fully reviewed files. Ctrl+Enter in Annotate goes to
+  the next segment that isn't confirmed, auto-accepted ones included, instead of the next one to review.

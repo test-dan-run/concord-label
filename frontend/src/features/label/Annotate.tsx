@@ -16,7 +16,7 @@ import { api, qs, type AnnotateView, type LabelFile, type SegStatus, type Segmen
 import { houseSpelled, Matcher, norm, type ActiveLexicon, type Hint } from "../../lib/lexicon";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { lowConfidence, nextToReview, overlapRegions, playingSegment, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS } from "../../lib/label";
+import { lowConfidence, nextToReview, nextUnconfirmed, overlapRegions, playingSegment, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS } from "../../lib/label";
 import { useAudio } from "../../components/AudioPlayer";
 import { Timeline } from "../../components/Timeline";
 import * as I from "../../components/icons";
@@ -313,7 +313,7 @@ function Annotator({
     const k = segs.findIndex((s) => s.id === id);
     return segs[k + 1]?.id ?? null;
   };
-  // The next segment to review after `from` (Tab, Shift+Tab, Ctrl+Enter); `done` were just confirmed.
+  // The next segment to review after `from` (Tab and Shift+Tab); `done` were just confirmed.
   const toReview = useCallback(
     (from: number | null, direction: 1 | -1, done: number[] = []) =>
       nextToReview(done.length ? segs.map((s) => (done.includes(s.id) ? { ...s, status: "confirmed" as const, reviewed: true } : s)) : segs, from, direction, high, hasHint),
@@ -335,11 +335,12 @@ function Annotator({
     (ids: number[] = targets()) => {
       if (!ids.length) return;
       m.bulk.mutate({ ids, action: "confirm" });
+      // on to the next segment in the list that isn't confirmed, auto-accepted ones included
       const from = cur ?? ids[0];
-      goTo(toReview(from, 1, ids) ?? nextId(from) ?? from);
+      goTo(nextUnconfirmed(visible, from, ids) ?? from);
       setSel(new Set());
     },
-    [targets, cur, segs, toReview, goTo],
+    [targets, cur, visible, goTo],
   );
 
   // S and Split: the segment under the playhead, the selected one first where segments overlap.

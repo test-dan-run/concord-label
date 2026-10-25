@@ -550,6 +550,12 @@ test("annotate: the segment list reads like pseudolabel's, and Tab plays the nex
   await expect(menu).toHaveCount(0);
 
   await expect(page.getByRole("group", { name: "Review" })).toContainText("Nothing left to review");
+  // Ctrl+Enter confirms the segment and goes to the next one that isn't confirmed, auto-accepted ones too
+  await row.click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+Enter");
+  await expect(row).toContainText("Confirmed");
+  await expect(rows.nth(3)).toHaveAttribute("aria-current", "true");
+  await expect(rows.nth(3)).toContainText("Auto-accepted");
 
   // Tab goes to the next segment to review and plays it from start to end (d06 has one left after the keys test)
   await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 5 });
@@ -719,12 +725,22 @@ test("annotate: adding a segment keeps the list where you are working", async ({
 test("live evaluation loads standings and DER; Publish or Download, no locked score without Bench", async ({ page, request }) => {
   const errors = watchErrors(page);
   const catalog = await catalogOn(request);
+  // confirm every segment of one file, so cpWER has a fully reviewed file to score
+  const ds = ((await (await request.get("/api/datasets")).json()) as { id: number; name: string }[]).find((d) => d.name === "Unlabelled calls")!;
+  const file = ((await (await request.get(`/api/label/datasets/${ds.id}/files`)).json()) as { id: number; stem: string }[]).find((f) => f.stem === "d02_8k")!;
+  const ids = ((await (await request.get(`/api/label/files/${file.id}`)).json()) as { segments: { id: number }[] }).segments.map((x) => x.id);
+  expect((await request.post("/api/label/segments/bulk", { data: { ids, action: "confirm" } })).ok()).toBe(true);
   await page.goto("/label/live");
   await page.getByRole("main").getByRole("link", { name: /Unlabelled calls/ }).click();
   await expect(page.getByRole("heading", { name: "Live evaluation" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "WER vs confirmed segments" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Standings" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Diarisation (DER)" })).toBeVisible();
+  // cpWER sits beside WER, with the diariser's speakers, on the fully reviewed files
+  await expect(page.getByRole("columnheader", { name: "cpWER" })).toBeVisible();
+  await expect(page.getByText(/with the speakers pyannote-diarization found, on [1-9]\d* of 6 files/)).toBeVisible();
+  const row = page.getByRole("row", { name: /whisper-large-v3/ }).first();
+  await expect(row.getByRole("cell").nth(4)).toHaveText(/\d+\.\d%/);
   // Publish to Dataset Catalog replaces Promote and Send to Bench; without the catalog the panel builds a package to
   // download. Without BENCH_URL the locked score is hidden.
   await expect(page.getByRole("heading", { name: "Promote to benchmark dataset" })).toHaveCount(0);

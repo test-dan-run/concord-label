@@ -48,7 +48,7 @@ export const SHORTCUTS: { key: string; short: string; does: string }[] = [
   { key: "↑ and ↓", short: "previous / next", does: "Selects the previous or next segment, and moves the playhead to its start." },
   { key: "Tab and Shift+Tab", short: "next / previous to review", does: "Goes to the next or previous segment to review: one with low confidence, or one with a spelling hint." },
   { key: "Enter", short: "edit text", does: "Starts editing the selected segment's text. In the editor, Enter saves, Esc cancels, and Tab saves and goes to the next segment to review." },
-  { key: "Ctrl+Enter", short: "confirm", does: "Confirms the selected segments and goes to the next segment to review. In the editor, it saves the text first." },
+  { key: "Ctrl+Enter", short: "confirm", does: "Confirms the selected segments and goes to the next segment that isn't confirmed yet, auto-accepted ones included. In the editor, it saves the text first." },
   { key: "S", short: "split", does: "Splits the segment under the playhead at the playhead." },
   { key: "M", short: "merge", does: "Merges the selected segments, or the selected segment with the next one." },
   { key: "Delete", short: "delete", does: "Deletes the selected segment." },
@@ -136,6 +136,17 @@ export function nextToReview(segs: Segment[], fromId: number | null, direction: 
   for (let i = 1; i <= n; i++) {
     const s = segs[(((k + direction * i) % n) + n) % n];
     if (want(s)) return s.id;
+  }
+  return null;
+}
+
+/** "Ctrl+Enter": the next segment after `fromId` that isn't confirmed yet, wrapping around; the ids in `done`
+ * were just confirmed. Auto-accepted segments count, because nobody has checked them. */
+export function nextUnconfirmed(segs: Pick<Segment, "id" | "status">[], fromId: number | null, done: number[] = []): number | null {
+  const k = fromId === null ? -1 : segs.findIndex((s) => s.id === fromId);
+  for (let i = 1; i <= segs.length; i++) {
+    const s = segs[(k + i) % segs.length];
+    if (s.status !== "confirmed" && !done.includes(s.id)) return s.id;
   }
   return null;
 }

@@ -91,7 +91,7 @@ export function SegmentRow({
   onMenu: (m: RowMenu) => void;
   /** Tab and Shift+Tab in the editor: save, then go to the next or previous segment to review. */
   onNext: (direction: 1 | -1) => void;
-  /** Ctrl+Enter in the editor: save, confirm, and go to the next segment to review. */
+  /** Ctrl+Enter in the editor: save, confirm, and go to the next segment that isn't confirmed. */
   onConfirmNext: () => void;
 }) {
   const chip = useRef<HTMLButtonElement>(null);
