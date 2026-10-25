@@ -216,11 +216,20 @@ class OutputCache:
 
     def run(self, audio: np.ndarray, sha256: str, start: float = 0.0, end: float = WHOLE) -> ModelOutput:
         """Run the model (through the catalog's gateway) and store the output. `audio` is the exact samples."""
+        return self.store(sha256, start, end, *self.infer(audio, sha256, start, end))
+
+    def infer(self, audio: np.ndarray, sha256: str, start: float = 0.0,
+              end: float = WHOLE) -> tuple[dict[str, Any], float]:
+        """(output, latency) of one call. It does not touch the session, so worker threads can call it."""
+        k = key(sha256, start, end)
+        return self.adapter.run(audio, AudioRef(sha256, k[1], k[2]))
+
+    def store(self, sha256: str, start: float, end: float, output: dict[str, Any], latency: float) -> ModelOutput:
+        """Store the output of one call (`infer`), on the session's thread."""
         k = key(sha256, start, end)
         if not self.build_key:
             self._once("no build", f"{self.service}: the catalog has no build key for it yet (weights still being "
                                    "hashed?): its outputs are kept but cannot be reused or shared")
-        output, latency = self.adapter.run(audio, AudioRef(sha256, k[1], k[2]))
         row = ModelOutput(model_name=self.service, audio_sha256=sha256, span_start=k[1], span_end=k[2],
                           params_hash=self.phash, build_key=self.build_key, params=self.adapter.params, output=output,
                           latency_s=latency, image=self.image)

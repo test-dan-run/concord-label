@@ -100,6 +100,9 @@ Bench's copies don't have these recent Label changes yet:
   `paths.job_cancel` and the cancel in `runs/jobs.py` are Label's, because Bench has no pseudo-label jobs.
 - `lib/format.ts`: `duration`, `etaText` and `stageText`, and `lib/api.ts`: `JobEta`. The estimate itself
   (`label/eta.py`) is Label's.
+- `runs/cache.py`: `OutputCache.run` is split into `infer`, which makes the call, and `store`, which saves the
+  output. Worker threads call `infer`, and the session stays on one thread. Pseudo-labelling keeps several
+  calls open at once (`in_flight` in `label/pseudo.py`), so the model's server batches them.
 - `core/settings.py`: a blank `AICORE_ENDPOINTS`, `REPLAY_DIR` or `RECORD_DIR` in `.env` means unset. Bench
   does this for `DATASET_STORE` only, so a blank `RECORD_DIR=` there still records into the current folder.
 
