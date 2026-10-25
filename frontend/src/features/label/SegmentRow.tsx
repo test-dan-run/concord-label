@@ -1,8 +1,9 @@
 // A row of Annotate's segment list, laid out like pseudolabel's transcript: the checkbox, play and the start
 // time (a click there moves the playhead); the speaker chip, which opens a menu of the speakers; the text,
-// which wraps and shows as text until you edit it (Enter, a double-click or the pen); and a narrow column with
-// the confidence, the status, and confirm and reject. With word timings, each word moves the playhead to
-// itself, and the word under the playhead is highlighted while the segment plays. Spelling hints are
+// which wraps and shows as text until you edit it (Enter, a click on the text, or the pen); and a narrow
+// column with the confidence, the status, and confirm and reject. A click on the text opens the editor with
+// the cursor where you clicked. With word timings, the click also moves the playhead to the word while the
+// audio is paused, and the word under the playhead is highlighted while the segment plays. Spelling hints are
 // underlined, with a choice to use the house spelling or keep the text.
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
@@ -95,6 +96,11 @@ export function SegmentRow({
 }) {
   const chip = useRef<HTMLButtonElement>(null);
   const hint = typeof menu === "number" && hints[menu] ? hints[menu] : null;
+  // Where the editor puts the cursor: where the text was clicked, else at the end.
+  const [caret, setCaret] = useState<number | null>(null);
+  useEffect(() => {
+    if (!editing) setCaret(null);
+  }, [editing]);
   return (
     <tr ref={rowRef} onClick={onFocus} aria-current={current || undefined} data-playing={playing || undefined} className={cx("border-b border-track align-top", current ? "bg-active" : playing ? "bg-focus/10" : "hover:bg-track/60", s.status === "rejected" && "opacity-60")}>
       <td className={cx("pl-2 pr-1 py-2", playing && "shadow-[inset_3px_0_0_var(--color-focus)]")}>
@@ -152,10 +158,13 @@ export function SegmentRow({
       </td>
       <td className="px-2 py-1.5 w-full">
         {editing ? (
-          <Editor s={s} onText={onText} onEdit={onEdit} onNext={onNext} onConfirmNext={onConfirmNext} />
+          <Editor s={s} caret={caret} onText={onText} onEdit={onEdit} onNext={onNext} onConfirmNext={onConfirmNext} />
         ) : (
           <div className="flex flex-col gap-1.5">
-            <Transcript s={s} hints={hints} open={typeof menu === "number" ? menu : null} playing={playing} ctl={ctl} onFocus={onFocus} onEdit={() => onEdit(true)} onHint={(k) => onMenu(menu === k ? null : k)} />
+            <Transcript s={s} hints={hints} open={typeof menu === "number" ? menu : null} playing={playing} ctl={ctl} onFocus={onFocus} onEdit={(c) => {
+                setCaret(c ?? null);
+                onEdit(true);
+              }} onHint={(k) => onMenu(menu === k ? null : k)} />
             {hint && (
               <div role="group" aria-label="Spelling hint" className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded-md border border-line bg-canvas text-xs text-muted" onClick={(e) => e.stopPropagation()}>
                 House spelling <span className="num text-fg">{hint.word}</span>
@@ -209,34 +218,27 @@ function Transcript({
   playing: boolean;
   ctl: AudioController;
   onFocus: () => void;
-  onEdit: () => void;
+  /** Open the editor, with the cursor at `caret` in the text (at the end without one). */
+  onEdit: (caret?: number) => void;
   onHint: (k: number) => void;
 }) {
   const text = s.text ?? "";
   const words = timedWords(s.text, s.words);
   const now = playing && words ? wordAt(words, ctl.time) : null;
-  // A plain stretch of the text starting at `at`: with word timings, each word is a button.
+  // A plain stretch of the text starting at `at`. Each span knows where it starts in the text (`data-at`), so a
+  // click can put the cursor there; with word timings, each word also knows its timing (`data-word`).
   const plain = (str: string, at: number, key: string): ReactNode => {
-    if (!words) return <span key={key}>{str}</span>;
+    if (!words) return <span key={key} data-at={at}>{str}</span>;
     let o = at;
     return str.split(/(\s+)/).map((part, j) => {
       const here = o;
       o += part.length;
       const k = words.findIndex((w: TimedWord) => w.start === here);
-      if (!part.trim() || k < 0) return <span key={`${key}.${j}`}>{part}</span>;
+      if (!part.trim() || k < 0) return <span key={`${key}.${j}`} data-at={here}>{part}</span>;
       return (
-        <button
-          key={`${key}.${j}`}
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onFocus();
-            ctl.seek(words[k].t0);
-          }}
-          className={cx("p-0 border-0 rounded-sm text-fg text-[13px] leading-[inherit] cursor-pointer hover:bg-track", k === now ? "bg-focus/30" : "bg-transparent")}
-        >
+        <span key={`${key}.${j}`} data-at={here} data-word={k} className={cx("rounded-sm hover:bg-track", k === now && "bg-focus/30")}>
           {part}
-        </button>
+        </span>
       );
     });
   };
@@ -244,9 +246,11 @@ function Transcript({
   return (
     <div
       data-transcript
-      onDoubleClick={(e) => {
-        e.stopPropagation();
-        onEdit();
+      onClick={(e) => {
+        if (window.getSelection()?.toString()) return; // text being selected to copy it
+        const word = (e.target as HTMLElement).closest<HTMLElement>("[data-word]");
+        if (word && words && !ctl.playing) ctl.seek(words[Number(word.dataset.word)].t0);
+        onEdit(caretAt(e.clientX, e.clientY) ?? undefined);
       }}
       className="group/t px-1.5 py-1 rounded border border-transparent hover:border-line text-fg text-[13px] leading-relaxed whitespace-pre-wrap break-words cursor-text"
     >
@@ -281,7 +285,7 @@ function Transcript({
       <button
         type="button"
         aria-label={`Edit transcript at ${clock(s.start)}`}
-        title="Edit (Enter or double-click)"
+        title="Edit (Enter, or a click on the text)"
         onClick={(e) => {
           e.stopPropagation();
           onFocus();
@@ -295,9 +299,24 @@ function Transcript({
   );
 }
 
+/** The place in the text under a click at (x, y): the offset within the span under it plus where that span
+ * starts (`data-at`); null when the click was not on the text. */
+function caretAt(x: number, y: number): number | null {
+  const d = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const p = d.caretPositionFromPoint?.(x, y);
+  const r = p ? null : d.caretRangeFromPoint?.(x, y);
+  const node = p?.offsetNode ?? r?.startContainer;
+  const offset = node?.nodeType === Node.TEXT_NODE ? (p?.offset ?? r?.startOffset ?? 0) : 0;
+  const span = (node?.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement | undefined))?.closest<HTMLElement>("[data-at]");
+  return span ? Number(span.dataset.at) + offset : null;
+}
+
 /** The text editor: a text area that grows with the text. Enter saves, Esc cancels, Tab saves and goes on to
  * the next segment to review, and Ctrl+Enter saves and confirms. Leaving it saves. */
-function Editor({ s, onText, onEdit, onNext, onConfirmNext }: { s: Segment; onText: (t: string) => void; onEdit: (on: boolean) => void; onNext: (direction: 1 | -1) => void; onConfirmNext: () => void }) {
+function Editor({ s, caret, onText, onEdit, onNext, onConfirmNext }: { s: Segment; caret: number | null; onText: (t: string) => void; onEdit: (on: boolean) => void; onNext: (direction: 1 | -1) => void; onConfirmNext: () => void }) {
   const [draft, setDraft] = useState(s.text ?? "");
   const box = useRef<HTMLTextAreaElement>(null);
   const grow = () => {
@@ -311,7 +330,8 @@ function Editor({ s, onText, onEdit, onNext, onConfirmNext }: { s: Segment; onTe
     const el = box.current;
     if (!el) return;
     el.focus();
-    el.setSelectionRange(el.value.length, el.value.length);
+    const at = caret === null ? el.value.length : Math.min(caret, el.value.length);
+    el.setSelectionRange(at, at);
   }, []);
   // Set while a key closes the editor, so the blur that follows doesn't save (or cancel) a second time.
   const closing = useRef(false);

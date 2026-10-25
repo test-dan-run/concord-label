@@ -128,8 +128,8 @@ file. A pseudo-label run or an imported package clears that history for the file
 Any edit marks a segment as checked by a person, and later pseudo-label runs never replace it.
 
 You can review a file from the keyboard. Tab goes to the next segment to review and plays it, Enter
-edits its text, and Ctrl+Enter confirms it. The speaker chip in each row opens a menu of the speakers,
-and with word timings a click on a word moves the playhead to it. Space plays or pauses from the playhead, S splits the segment under the
+edits its text, and Ctrl+Enter confirms it. A click on the text opens the editor with the cursor where you
+clicked. The speaker chip in each row opens a menu of the speakers. Space plays or pauses from the playhead, S splits the segment under the
 playhead, and Ctrl+Z undoes the last change. The Docs page in the app lists every key.
 
 ### Lexicons

@@ -254,34 +254,58 @@ function Annotator({
   useEffect(() => setMenu(null), [segs]);
 
   // Pick a starting segment once loaded: the requested one, else the one at the requested time (and the
-  // playhead goes there), else the first low-confidence one.
+  // playhead goes there), else the first low-confidence one. Later, when the selected segment goes away
+  // (merged, deleted, or taken back by an undo), select the one nearest where it was. An id the list hasn't
+  // loaded yet (a segment just added, or one an undo brings back) is waited for, so the list stays put.
   const seeked = useRef(false);
+  const picked = useRef(false);
+  const loaded = useRef(new Set<number>());
+  const curAt = useRef<number | null>(null);
   useEffect(() => {
-    if (!v || (cur !== null && segs.some((s) => s.id === cur))) return;
-    const atTime = initialTime !== null && !seeked.current ? segmentAt(segs, initialTime) : null;
-    setCur(atTime ?? nextToReview(segs, null, 1, high) ?? segs[0]?.id ?? null);
+    if (current) curAt.current = current.start;
+  }, [current]);
+  useEffect(() => {
+    if (!v) return;
+    const had = loaded.current;
+    loaded.current = new Set(segs.map((s) => s.id));
+    const first = !picked.current;
+    picked.current = true;
+    if (cur !== null && loaded.current.has(cur)) return;
+    if (first) {
+      const atTime = initialTime !== null && !seeked.current ? segmentAt(segs, initialTime) : null;
+      setCur(atTime ?? nextToReview(segs, null, 1, high) ?? segs[0]?.id ?? null);
+    } else if (cur !== null && had.has(cur)) {
+      setCur(curAt.current !== null ? segmentAt(segs, curAt.current) : null);
+    }
   }, [v, segs, cur, high, initialTime]);
   useEffect(() => {
     if (!v || initialTime === null || seeked.current) return;
     seeked.current = true;
     ctl.seek(Math.max(0, Math.min(initialTime, v.file.duration)));
   }, [v, initialTime, ctl]);
-  useEffect(() => {
-    if (cur !== null) rowRefs.current.get(cur)?.scrollIntoView({ block: "nearest" });
-  }, [cur]);
-  // The segment under the playhead, highlighted on the lanes and in the list; during playback the list
-  // scrolls just enough to keep its row in sight (the list alone, so the page stays where it is).
-  const playingId = useMemo(() => playingSegment(segs, ctl.time), [segs, ctl.time]);
-  useEffect(() => {
-    const row = playingId !== null ? rowRefs.current.get(playingId) : undefined;
+  // Scroll the list (the list alone, so the page stays where it is) just enough to show segment `id`'s row.
+  const showRow = useCallback((id: number | null) => {
+    const row = id !== null ? rowRefs.current.get(id) : undefined;
     const box = listBox.current;
-    if (!ctl.playing || !row || !box) return;
+    if (!row || !box) return false;
     const r = row.getBoundingClientRect();
     const b = box.getBoundingClientRect();
     const head = box.querySelector("thead")?.getBoundingClientRect().height ?? 0;
     if (r.top < b.top + head) box.scrollTop -= b.top + head - r.top;
     else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
-  }, [ctl.playing, playingId]);
+    return true;
+  }, []);
+  // The selected row comes into view once, when it is selected or, for a new segment, when its row appears.
+  const shown = useRef<number | null>(null);
+  useEffect(() => {
+    if (cur !== shown.current && showRow(cur)) shown.current = cur;
+  }, [cur, segs, showRow]);
+  // The segment under the playhead, highlighted on the lanes and in the list; during playback the list
+  // scrolls just enough to keep its row in sight.
+  const playingId = useMemo(() => playingSegment(segs, ctl.time), [segs, ctl.time]);
+  useEffect(() => {
+    if (ctl.playing) showRow(playingId);
+  }, [ctl.playing, playingId, showRow]);
 
   const targets = useCallback((): number[] => (sel.size ? [...sel] : cur !== null ? [cur] : []), [sel, cur]);
   const speakerForKey = (k: number) => speakers[k - 1] ?? `spk${k - 1}`;
@@ -545,7 +569,7 @@ function Annotator({
           <Button size="sm" disabled={!autoCount || m.confirmAuto.isPending} onClick={() => m.confirmAuto.mutate()}>
             <I.Check size={13} /> Confirm all high-confidence ({autoCount})
           </Button>
-          <Button size="sm" onClick={() => m.create.mutate({ start: Math.max(0, Math.min(ctl.time, v.file.duration - 1)), end: Math.min(v.file.duration, Math.max(ctl.time, 0) + 1), speaker: current?.speaker ?? null })}>
+          <Button size="sm" onClick={() => m.create.mutate({ start: Math.max(0, Math.min(ctl.time, v.file.duration - 1)), end: Math.min(v.file.duration, Math.max(ctl.time, 0) + 1), speaker: current?.speaker ?? null }, { onSuccess: (s) => setCur(s.id) })}>
             <I.Plus size={13} /> Segment at playhead
           </Button>
         </span>

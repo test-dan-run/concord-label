@@ -68,8 +68,8 @@ test("annotate: edit, shortcuts, multi-select, bulk confirm, audio", async ({ pa
   await expect(page.getByRole("heading", { name: /Segments · \d+/ })).toBeVisible();
   await expect(page.locator("[data-lane]").first()).toBeVisible();
   await page.getByRole("button", { name: "All", exact: true }).click();
-  // a double-click edits the text, and Enter saves it
-  await page.locator("[data-transcript]").first().dblclick();
+  // a click edits the text, and Enter saves it
+  await page.locator("[data-transcript]").first().click();
   const first = page.getByLabel(/^Transcript at /);
   await first.fill("Edited in the browser.");
   await first.press("Enter");
@@ -502,19 +502,27 @@ test("annotate: the segment list reads like pseudolabel's, and Tab plays the nex
   const at = (await row.getByTitle("Move the playhead to the start of the segment").textContent())!;
   await expect.poll(t).toBeCloseTo(Number(at.slice(0, 2)) * 60 + Number(at.slice(3)), 2);
 
-  // with word timings, each word is a button that moves the playhead to it
-  const words = row.locator("[data-transcript] > button:not([aria-label])");
-  await expect(words.first()).toBeVisible();
-  const before = await t();
-  await words.nth(2).click();
-  await expect.poll(t).toBeGreaterThan(before);
-
-  // the editor opens with Enter and with a double-click; Enter saves and Esc cancels
+  // a single click on the text opens the editor with the cursor where you clicked; with word timings, a
+  // click on a word also moves the playhead to it while the audio is paused
   const shown = row.locator("[data-transcript]");
   const text = (await shown.textContent())!;
-  await shown.dblclick();
+  const word = row.locator("[data-transcript] [data-word]").nth(2);
+  const wordText = (await word.textContent())!;
+  const before = await t();
+  await word.click({ position: { x: 1, y: 5 } });
+  await expect.poll(t).toBeGreaterThan(before);
   const editor = row.getByLabel(/^Transcript at /);
   await expect(editor).toBeFocused();
+  const caret = await editor.evaluate((el: HTMLTextAreaElement) => el.selectionStart);
+  expect(caret - text.indexOf(wordText)).toBeGreaterThanOrEqual(0);
+  expect(caret - text.indexOf(wordText)).toBeLessThanOrEqual(1);
+  await page.keyboard.press("Escape");
+  await expect(editor).toHaveCount(0);
+
+  // Enter saves, and Enter opens the editor again
+  await shown.click();
+  await expect(editor).toBeFocused();
+  await page.keyboard.press("Control+End");
   await page.keyboard.type(" Twice.");
   await page.keyboard.press("Enter");
   await expect(shown).toHaveText(`${text} Twice.`);
@@ -670,6 +678,41 @@ test("annotate: drag a shared edge, rename a lane, and double-click to add a seg
   await page.locator("body").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("Control+z");
   await expect(page.locator(`[data-lane="${other}"]`)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("annotate: adding a segment keeps the list where you are working", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 0 });
+  await expect(page.getByRole("heading", { name: "d01" })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const list = page.locator("div.overflow-auto:has(> table)");
+  const rows = page.locator("tbody tr");
+  const n = await rows.count();
+  // work near the end of the file: select a late segment, so the list scrolls down to it
+  await rows.nth(n - 2).click({ position: { x: 5, y: 5 } });
+  await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
+  // add a segment late in the file with a double-click on an empty part of a lane
+  await page.locator("[data-lane]").first().scrollIntoViewIfNeeded();
+  const lane = (await page.locator("[data-lane]").first().boundingBox())!;
+  const bars = await page.locator("[data-lane]").first().locator("span[title]").evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => [r.left, r.right]));
+  let x = 0;
+  for (let k = bars.length - 1; k > 0 && !x; k--) if (bars[k][0] - bars[k - 1][1] > 40) x = (bars[k][0] + bars[k - 1][1]) / 2;
+  expect(x).toBeGreaterThan(lane.x + lane.width / 2);
+  await page.mouse.dblclick(x, lane.y + lane.height / 2);
+  await expect(rows).toHaveCount(n + 1);
+  // the new segment is selected, and the list stays down there instead of jumping to the top
+  await expect(page.locator("tbody tr[aria-current]")).toContainText("New · manual");
+  await page.waitForTimeout(300);
+  expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
+  // the same for a segment added at the playhead
+  await rows.nth(n - 3).getByTitle("Move the playhead to the start of the segment").click();
+  await page.getByRole("button", { name: "Segment at playhead" }).click();
+  await expect(rows).toHaveCount(n + 2);
+  await page.waitForTimeout(300);
+  expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
   expect(errors).toEqual([]);
 });
 

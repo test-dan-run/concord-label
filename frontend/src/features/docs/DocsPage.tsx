@@ -129,8 +129,8 @@ const SECTIONS: Section[] = [
         <p className="m-0">
           You can review a file from the keyboard. Tab goes to the next segment to review, which is a segment with low confidence or a spelling
           hint, and it plays the segment. The row above the timeline counts the segments left to review. Enter opens the text in the editor, and
-          Enter again saves it. You can also double-click the text to edit it. When a segment has word timings, a click on a word moves the
-          playhead to it, and the word that is playing is highlighted. Ctrl+Enter confirms the segment and goes to the next one to review.
+          Enter again saves it. A click on the text also opens the editor, with the cursor where you clicked. When a segment has word timings
+          and the audio is paused, that click also moves the playhead to the word, and the word that is playing is highlighted. Ctrl+Enter confirms the segment and goes to the next one to review.
           Space plays or pauses from the playhead, Shift+Space plays the selected segment, and the arrow keys move the playhead. The table
           under <em>Keyboard shortcuts</em> lists every key.
         </p>
