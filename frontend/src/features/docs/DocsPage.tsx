@@ -92,6 +92,10 @@ const SECTIONS: Section[] = [
           a run on <Link to="/jobs">Jobs</Link> while it works.
         </p>
         <p className="m-0">
+          While a run works, the Pseudo-label page shows its stage and about how long it has left. The estimate uses how fast each model ran
+          before, and how fast it runs now. It doesn't count time spent waiting for compute.
+        </p>
+        <p className="m-0">
           To stop a run, use Cancel run on the Pseudo-label page, or Cancel on the job in Jobs. The run stops before its next segment, and
           it writes no new segments. The model outputs from the files it finished are saved, so a retry or a new run doesn't repeat them.
         </p>

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, qs, type CacheState, type LabelPreview, type LabelResults, type LabelSummary, type Model, type ModelList, type Run, type Job } from "../../lib/api";
-import { capLabel, clock, coldStart, jobStatusText, num, pct, timingLabel } from "../../lib/format";
+import { ago, capLabel, clock, coldStart, etaText, jobStatusText, num, pct, stageText, timingLabel } from "../../lib/format";
 import { confidenceColor, labelButton, STATUS_LABELS } from "../../lib/label";
 import { C } from "../../lib/colors";
 import * as I from "../../components/icons";
@@ -314,6 +314,18 @@ function Results({ r, running, loading, onCancel, cancelError }: { r?: LabelResu
       >
         <StatusBar p={r.progress} className="h-3" />
         <BarLegend p={r.progress} />
+        {running && r.job?.eta && (
+          <div className="flex flex-col gap-1.5 pt-1">
+            <span className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-[13px]">
+              <span>{stageText(r.job.eta)}</span>
+              <span className="num text-muted">
+                {etaText(r.job)}
+                {r.job.started_at && <span className="text-subtle"> · started {ago(r.job.started_at)}</span>}
+              </span>
+            </span>
+            <Bar value={r.job.progress} />
+          </div>
+        )}
         {running && r.job?.status === "waiting" && !r.job.cancelling && (
           <span className="text-xs text-warn">{jobStatusText(r.job)}{r.job.waiting?.waiting_for ? `: ${r.job.waiting.waiting_for}` : ""}</span>
         )}

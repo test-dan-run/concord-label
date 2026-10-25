@@ -18,6 +18,7 @@ then the catalog's output index, where outputs Concord Bench already made are re
 here. A stage with nothing missing takes no lease ("Re-fuse 4 saved outputs"). Outputs are committed per
 file, so a failed or interrupted run that is retried skips what it already did. A cancelled run stops
 before its next stage or cut (`check_cancel`, runs/jobs.py), and fusion runs only when every stage finished.
+How long a run has left is estimated stage by stage (label/eta.py) and reported through `on_eta`.
 
 Writing segments follows one rule: reviewed work (confirmed, or touched by a person) is never replaced.
 Earlier machine segments nobody touched are replaced; a new segment that mostly overlaps reviewed
@@ -51,6 +52,7 @@ from ..platform import catalog
 from ..runs import cache
 from ..runs.cache import Key
 from . import fusion
+from .eta import Eta, Stage, saved_rtf
 
 Log = Callable[[str], None]
 Progress = Callable[[float, str], None]
@@ -228,7 +230,8 @@ def required_models(pv: dict[str, Any]) -> list[str]:
 
 def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple[AudioFile, list[Key]]],
               leases: Leases, log: Log, progress: Callable[[float, str | None], None],
-              what: str, check_cancel: Check = lambda: None) -> tuple[dict[Key, ModelOutput], int]:
+              what: str, check_cancel: Check = lambda: None,
+              eta: Eta | None = None) -> tuple[dict[Key, ModelOutput], int]:
     """One model over its work: (rows by key, outputs computed). Saved and copied outputs first, in one
     batch; the rest under one lease on this model alone, committed (and indexed) file by file."""
     b = catalog.current_build(model)
@@ -241,6 +244,8 @@ def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple
         log(f"{what}: all {len(keys)} outputs saved" + (f" ({oc.copied} copied from Concord Bench)" if oc.copied else "")
             + "; no inference")
         progress(1.0, None)
+        if eta:
+            eta.finish(model.catalog_id)
         return found, 0
     ran = 0
     check_cancel()
@@ -256,6 +261,8 @@ def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple
         todo = [(f, ks) for f, ks in todo if ks]
         total = sum(len(ks) for _, ks in todo)
         log(f"{what}: {len(keys) - total} of {len(keys)} outputs saved, {total} to run on {len(todo)} file(s)")
+        if eta:
+            eta.start(model.catalog_id, total, sum(key_audio_s(f, k) for f, ks in todo for k in ks))
         lost = False
         for f, ks in todo:
             if getattr(lease, "lost", None) and not lost:
@@ -267,14 +274,38 @@ def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple
                 samples = audio if k[2] == cache.WHOLE else cut(audio, k[1], k[2])
                 found[k] = oc.run(samples, *k)
                 ran += 1
+                if eta:
+                    eta.advance(model.catalog_id, key_audio_s(f, k))
             session.commit()  # keep outputs (a retry skips them), release the write lock
             oc.record_index()
             progress(ran / total, f"{what}: {f.rel_path}")
+    if eta:
+        eta.finish(model.catalog_id)
     return found, ran
 
 
+def key_audio_s(f: AudioFile, k: Key) -> float:
+    """Seconds of audio in a call: the whole file, or the cut."""
+    return (f.duration or 0.0) if k[2] == cache.WHOLE else k[2] - k[1]
+
+
+def eta_stages(session: Session, run: Run, seg_model: Model, asr_models: list[Model],
+               files: list[AudioFile]) -> list[Stage]:
+    """The run's stages for its estimate. A stage the preview found saved has no work; until the cuts are
+    known, an ASR stage counts all the audio."""
+    states = (run.params.get("preview") or {}).get("states") or {}
+    audio = sum(f.duration or 0.0 for f in files)
+    out = []
+    for m, kind in [(seg_model, "seg"), *((a, "asr") for a in asr_models)]:
+        rec = _record(m) or {}
+        cold = 0.0 if rec.get("state") == "running" else float(rec.get("cold_start_s") or 0.0)
+        work = 0.0 if states.get(m.catalog_id) in ("saved", "bench") else audio
+        out.append(Stage(m.catalog_id, kind, work, rtf=saved_rtf(session, m.catalog_id), cold_s=cold))
+    return out
+
+
 def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Leases | None = None,
-            check_cancel: Check = lambda: None) -> None:
+            check_cancel: Check = lambda: None, on_eta: Callable[[dict[str, Any]], None] | None = None) -> None:
     leases = leases or Leases(f"{catalog.APP}:run-{run.id}")
     ds: Dataset = run.dataset
     p = run.params
@@ -291,6 +322,8 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
     run.image_tags = {m.catalog_id: catalog.current_build(m) for m in [seg_model, *asr_models]}
     run.params = {**p, "seg_adapter": seg.params, "asr_adapters": {n: a.params for n, a in members.items()}}
     session.commit()
+    eta = Eta(eta_stages(session, run, seg_model, asr_models, files), on_eta)
+    eta.report(force=True)
 
     # stage 1: the segmenter over every file
     def seg_progress(x: float, msg: str | None) -> None:
@@ -298,14 +331,16 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
 
     seg_progress(0.0, f"stage 1: {seg_model.display_name} on {len(files)} files")
     seg_rows, seg_ran = run_stage(session, seg_model, seg, [(f, [cache.key(f.sha256)]) for f in files], leases,
-                                  log, seg_progress, f"stage 1, {seg_model.catalog_id}", check_cancel)
+                                  log, seg_progress, f"stage 1, {seg_model.catalog_id}", check_cancel, eta)
 
     # the cuts of every file
     cuts: dict[int, list[tuple[Any, tuple[float, float] | None]]] = {}
     for f in files:
         cuts[f.id] = file_spans(seg_rows[cache.key(f.sha256)].output, f.duration or 0.0)
     work = [(f, [cache.key(f.sha256, *sp) for _, sp in cuts[f.id] if sp]) for f in files]
-    n_keys = len({k for _, ks in work for k in ks})
+    cut_audio = {k: key_audio_s(f, k) for f, ks in work for k in ks}
+    n_keys = len(cut_audio)
+    eta.asr_audio(sum(cut_audio.values()))
 
     # stage 2: each ASR member over every cut, one at a time, in the catalog's order
     order = list(members)
@@ -315,6 +350,7 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
                   log)
         planned = [s["model"] for s in (pl or {}).get("steps") or [] if s.get("model") in members]
         order = list(dict.fromkeys(planned + order))
+        eta.order(order)
     by_id = {m.catalog_id: m for m in asr_models}
     member_rows: dict[str, dict[Key, ModelOutput]] = {}
     calls = ran_asr = 0
@@ -327,7 +363,7 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
 
         asr_progress(0.0, f"stage 2: {by_id[name].display_name} on {n_keys} cuts")
         member_rows[name], ran = run_stage(session, by_id[name], members[name], work, leases, log, asr_progress,
-                                           f"stage 2, {name}", check_cancel)
+                                           f"stage 2, {name}", check_cancel, eta)
         calls += n_keys
         ran_asr += ran
 

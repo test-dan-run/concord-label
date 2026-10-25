@@ -57,12 +57,13 @@ class JobContext:
         self._progress = 0.0
         self._message = ""
         self._waiting: dict[str, Any] | None = None
+        self._eta: dict[str, Any] | None = None
 
     def _write_progress(self) -> None:
         p = paths.job_progress(self.job_id)
         tmp = p.with_suffix(".tmp")
         tmp.write_text(json.dumps({"progress": self._progress, "message": self._message[:300],
-                                   "waiting": self._waiting}))
+                                   "waiting": self._waiting, "eta": self._eta}))
         tmp.replace(p)
 
     def log(self, msg: str) -> None:
@@ -75,6 +76,11 @@ class JobContext:
         self._progress = max(0.0, min(1.0, p))
         if msg:
             self._message = msg
+        self._write_progress()
+
+    def eta(self, eta: dict[str, Any]) -> None:
+        """How long the job has left (label/eta.py)."""
+        self._eta = eta
         self._write_progress()
 
     def waiting(self, lease: dict[str, Any]) -> None:
@@ -204,7 +210,8 @@ def _handle_label(session: Session, job: Job, ctx: JobContext) -> dict[str, Any]
     if run is None:
         raise ValueError(f"run {job.payload['run_id']} not found")
     try:
-        pseudo.execute(session, run, ctx.log, ctx.progress, pseudo.Leases(holder_for(job.id), ctx), ctx.check_cancel)
+        pseudo.execute(session, run, ctx.log, ctx.progress, pseudo.Leases(holder_for(job.id), ctx), ctx.check_cancel,
+                       ctx.eta)
         run.status = "done"
         session.commit()
     except Exception as exc:

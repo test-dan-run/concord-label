@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type Job } from "../../lib/api";
-import { ago, jobStatusText } from "../../lib/format";
+import { ago, etaText, jobStatusText, stageText } from "../../lib/format";
 import { Button, cx, Empty, ErrorNote, JobPill, PageHeader, Panel, Spinner } from "../../components/ui";
 
 export function JobsPage() {
@@ -42,6 +42,7 @@ export function JobsPage() {
               ) : (
                 <span className="text-xs text-muted truncate max-w-[360px]">{j.status === "done" ? "" : j.error ?? j.message ?? ""}</span>
               )}
+              {etaText(j) && <span className="text-xs num">{etaText(j)}</span>}
               <span className="text-xs text-subtle">{ago(j.finished_at ?? j.started_at ?? j.created_at)}</span>
             </button>
           ))}
@@ -61,6 +62,12 @@ export function JobsPage() {
           {log.data && (
             <>
               <span className="text-xs text-muted">{log.data.label} · models with work: {log.data.required_services.join(", ") || "none"}</span>
+              {log.data.eta && ["running", "waiting"].includes(log.data.status) && !log.data.cancelling && (
+                <span className="text-xs">
+                  {stageText(log.data.eta)}
+                  {etaText(log.data) && <span className="text-muted"> · {etaText(log.data)}</span>}
+                </span>
+              )}
               {log.data.cancelling && <span className="text-xs text-warn">Cancelling. The job stops before its next cut or stage.</span>}
               {log.data.status === "waiting" && !log.data.cancelling && (
                 <span className="text-xs text-warn">

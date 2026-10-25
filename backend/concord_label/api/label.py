@@ -125,7 +125,8 @@ def start_label_run(dataset_id: int, body: LabelRunIn, session: Session = Depend
                       "strategy": body.strategy, "single_model_id": single.id if single else None,
                       "high": body.high, "low": body.low,
                       "preview": {"saved_members": pv["saved_members"], "bench_members": pv["bench_members"],
-                                  "new_members": pv["new_members"], "plan": pv["plan"]}})
+                                  "new_members": pv["new_members"], "plan": pv["plan"],
+                                  "states": {x["service"]: x["state"] for x in [pv["seg"], *pv["members"]]}}})
     session.add(run)
     session.flush()
     session.refresh(run)

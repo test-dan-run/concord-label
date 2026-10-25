@@ -67,6 +67,30 @@ export function coldStart(s: number | null | undefined, measured = true): string
   return measured ? t : `${t} (est.)`;
 }
 
+/** A span of time in words: "less than a minute", "12 min", "1 h 5 min". */
+export function duration(s: number): string {
+  if (s < 60) return "less than a minute";
+  const m = Math.round(s / 60);
+  if (m < 90) return `${m} min`;
+  return `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+/** How long a running job has left: "about 12 min left", or after the wait for compute. Empty without an estimate. */
+export function etaText(j: { status: string; cancelling?: boolean; eta?: { remaining_s: number | null; fusing: boolean } | null }): string {
+  if (!j.eta || j.cancelling || !["running", "waiting"].includes(j.status)) return "";
+  if (j.eta.fusing) return "almost done";
+  if (j.eta.remaining_s === null) return "estimating time left";
+  if (j.status === "waiting") return `about ${duration(j.eta.remaining_s)} once it gets compute`;
+  return j.eta.remaining_s < 60 ? "less than a minute left" : `about ${duration(j.eta.remaining_s)} left`;
+}
+
+/** Where a pseudo-label run is: "Stage 2 of 3: whisper-large-v3, 41 of 162 cuts". */
+export function stageText(e: { stage: number; stages: number; model: string | null; unit: string | null; done: number | null; total: number | null; fusing: boolean }): string {
+  if (e.fusing) return "Fusing the transcripts";
+  const count = e.total ? `, ${e.done ?? 0} of ${e.total} ${e.unit}` : "";
+  return `Stage ${e.stage} of ${e.stages}: ${e.model}${count}`;
+}
+
 /** A job's status in a few words: "waiting for compute #2" while its lease is queued in the catalog. */
 export function jobStatusText(j: { status: string; progress: number; waiting?: { position: number | null } | null; cancelling?: boolean }): string {
   if (j.cancelling) return "cancelling";
