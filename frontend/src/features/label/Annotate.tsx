@@ -146,13 +146,24 @@ function useLabelMutations(fileId: number, datasetId: number) {
     },
     onSettled: done,
   });
+  // A shared edge dragged on the lanes: every segment that ends or starts there moves at once, as one edit.
+  const boundary = useMutation({
+    mutationFn: (b: { ids: number[]; t: number; ends: number[] }) => api.post<Segment[]>(`/label/segments/boundary`, { ids: b.ids, t: b.t }),
+    onMutate: async ({ ids, t, ends }) => {
+      await qc.cancelQueries({ queryKey: ["annotate", fileId] });
+      qc.setQueryData<AnnotateView>(["annotate", fileId], (v) =>
+        v && { ...v, segments: v.segments.map((s) => (!ids.includes(s.id) ? s : ends.includes(s.id) ? { ...s, end: t } : { ...s, start: t })).sort((a, b) => a.start - b.start || a.end - b.end) },
+      );
+    },
+    onSettled: done,
+  });
   const create = useMutation({ mutationFn: (b: { start: number; end: number; speaker: string | null }) => api.post<Segment>(`/label/files/${fileId}/segments`, b), onSuccess: done });
   const remove = useMutation({ mutationFn: (id: number) => api.del(`/label/segments/${id}`), onSuccess: done });
   const confirmAuto = useMutation({ mutationFn: () => api.post<{ confirmed: number }>(`/label/files/${fileId}/confirm-auto`), onSuccess: done });
   // Undo and redo (label/history.py): a 409 means the history no longer matches the file, and the server forgot it.
   const history = useMutation({ mutationFn: (way: "undo" | "redo") => api.post<{ action: string; ids: number[] }>(`/label/files/${fileId}/${way}`), onSettled: done });
-  const error = patch.error ?? move.error ?? bulk.error ?? merge.error ?? split.error ?? create.error ?? remove.error ?? confirmAuto.error ?? history.error;
-  return { patch, move, bulk, merge, split, create, remove, confirmAuto, history, error };
+  const error = patch.error ?? move.error ?? boundary.error ?? bulk.error ?? merge.error ?? split.error ?? create.error ?? remove.error ?? confirmAuto.error ?? history.error;
+  return { patch, move, boundary, bulk, merge, split, create, remove, confirmAuto, history, error };
 }
 
 const NOT_TEXT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "file", "color"]);
@@ -346,6 +357,31 @@ function Annotator({
       });
     },
     [m.history, v],
+  );
+
+  // A lane's speaker renamed on every segment of the file (one edit). A lane added by hand that has no
+  // segments yet is renamed on the page alone; a name another speaker has merges the two, after asking.
+  const renameSpeaker = useCallback(
+    (from: string, to: string) => {
+      const ids = segs.filter((s) => s.speaker === from).map((s) => s.id);
+      const drop = (names: string[]) => names.filter((n) => n !== from);
+      if (!ids.length) {
+        setSeen(drop);
+        setAdded((a) => (a.includes(to) || speakers.includes(to) ? drop(a) : a.map((n) => (n === from ? to : n))));
+        return;
+      }
+      if (speakers.includes(to) && !window.confirm(`${to} is already a speaker. Give all of ${from}'s segments to ${to}?`)) return;
+      m.bulk.mutate(
+        { ids, action: "rename_speaker", speaker: to },
+        {
+          onSuccess: () => {
+            setSeen(drop);
+            setAdded(drop);
+          },
+        },
+      );
+    },
+    [segs, speakers, m.bulk],
   );
 
   const mergeSel = useCallback(() => {
@@ -566,6 +602,8 @@ function Annotator({
             if (hit !== undefined) setCur(hit);
           }}
           onCommit={(id, edit) => m.move.mutateAsync({ id, ...edit })}
+          onBoundary={(ends, starts, t) => m.boundary.mutateAsync({ ids: [...ends, ...starts], t, ends })}
+          onRename={renameSpeaker}
           onCreate={(edit) => m.create.mutate(edit, { onSuccess: (s) => setCur(s.id) })}
         />
         <Overview view={view} duration={duration} time={ctl.time} onView={(w) => setView(() => w)} />

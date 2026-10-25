@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { drawn, laneAt, moved, nextSpeakerName, nudged, timeAt, trimmed } from "./laneDrag";
+import { boundaryAt, drawn, laneAt, MIN_LEN, moved, nextSpeakerName, nudged, placed, timeAt, touching, trimmed } from "./laneDrag";
 
 const seg = { start: 2, end: 4 };
 
@@ -52,5 +52,43 @@ describe("lane drag maths", () => {
   it("names an added speaker with the first free spkN", () => {
     expect(nextSpeakerName(["spk0", "spk1"])).toBe("spk2");
     expect(nextSpeakerName(["spk1", "agent"])).toBe("spk0");
+  });
+});
+
+describe("shared edges", () => {
+  const segs = [
+    { id: 1, start: 0, end: 4 },
+    { id: 2, start: 4.01, end: 6 }, // on another lane, 10 ms after 1 ends
+    { id: 3, start: 3, end: 5 }, // overlaps, touches nothing
+    { id: 4, start: 6, end: 9 },
+  ];
+  it("finds the segments that start where one ends, and end where one starts, within 20 ms", () => {
+    expect(touching(segs, segs[0], "end").map((s) => s.id)).toEqual([2]);
+    expect(touching(segs, segs[1], "start").map((s) => s.id)).toEqual([1]);
+    expect(touching(segs, segs[1], "end").map((s) => s.id)).toEqual([4]);
+    expect(touching(segs, segs[2], "end")).toEqual([]);
+    expect(touching(segs, segs[0], "start")).toEqual([]);
+  });
+  it("keeps a dragged boundary inside both sides", () => {
+    expect(boundaryAt([segs[0]], [segs[1]], 5, 10)).toBe(5);
+    expect(boundaryAt([segs[0]], [segs[1]], 7, 10)).toBe(6 - MIN_LEN);
+    expect(boundaryAt([segs[0]], [segs[1]], -1, 10)).toBe(MIN_LEN);
+  });
+});
+
+describe("placed (double-click on a lane)", () => {
+  const lane = [{ start: 1, end: 2 }, { start: 5, end: 6 }];
+  it("adds 2 seconds centred on the click where there is room", () => {
+    expect(placed(3.5, lane, 10)).toEqual({ start: 2.5, end: 4.5 });
+  });
+  it("stops short of the segments next to it, and of the file's ends", () => {
+    expect(placed(2.4, lane, 10)).toEqual({ start: 2, end: 3.4 });
+    expect(placed(4.8, lane, 10)).toEqual({ start: 3.8, end: 5 });
+    expect(placed(0.3, lane, 10)).toEqual({ start: 0, end: 1 });
+    expect(placed(9.5, lane, 10)).toEqual({ start: 8.5, end: 10 });
+  });
+  it("adds nothing on a segment or in a gap too short for one", () => {
+    expect(placed(1.5, lane, 10)).toBeNull();
+    expect(placed(2.05, [{ start: 1, end: 2 }, { start: 2.1, end: 3 }], 10)).toBeNull();
   });
 });

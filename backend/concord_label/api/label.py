@@ -230,7 +230,7 @@ def patch_segment(segment_id: int, body: SegmentPatch, session: Session = Depend
 
 class BulkIn(BaseModel):
     ids: list[int] = Field(min_length=1)
-    action: str  # confirm | reject | review | assign_speaker | flag | unflag
+    action: str  # confirm | reject | review | assign_speaker | rename_speaker | flag | unflag
     speaker: str | None = None
 
 
@@ -250,6 +250,19 @@ def merge_segments(body: MergeIn, session: Session = Depends(get_session)) -> di
     segs = _segments(session, body.ids)
     s = _commit_or_400(session, lambda: edit.merge(session, segs))
     return edit.segment_json(s)
+
+
+class BoundaryIn(BaseModel):
+    ids: list[int] = Field(min_length=2)
+    t: float
+
+
+@router.post("/segments/boundary")
+def move_boundary(body: BoundaryIn, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    """Move the edge where these segments touch (a drag on the speaker lanes) to `t`, as one edit."""
+    segs = _segments(session, body.ids)
+    out = _commit_or_400(session, lambda: edit.boundary(session, segs, body.t))
+    return [edit.segment_json(s) for s in out]
 
 
 class SplitIn(BaseModel):

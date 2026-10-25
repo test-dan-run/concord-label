@@ -111,9 +111,10 @@ Annotate shows one file at a time, with a timeline of the whole file above a tab
 can edit segments on the speaker lanes under the waveform:
 
 - Drag a segment to move it, or drag it onto another lane to give it to that speaker.
-- Drag a segment's grips to trim it, or use the arrow keys on a grip.
-- Drag across empty space in a lane to draw a segment, and use Add speaker to add lanes, up to 8
-  speakers.
+- Drag a segment's grips to trim it, or use the arrow keys on a grip. Where two segments touch, the
+  drag moves the edge they share, and Alt moves one edge alone.
+- Drag across empty space in a lane to draw a segment, or double-click there to add a 2 second one.
+- Use Add speaker to add lanes, up to 8 speakers, and double-click a lane's name to rename the speaker.
 
 The player above the timeline plays the file from the playhead at a speed from 0.5× to 2×, and the
 segment under the playhead stands out on the lanes and in the table. You can zoom the timeline down to a

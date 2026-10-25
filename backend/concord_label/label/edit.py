@@ -21,6 +21,7 @@ from . import console, history
 
 EDITABLE = ("text", "speaker", "start", "end", "status", "flagged", "flag_note", "spelling_kept")
 MIN_LEN = 0.05
+TOUCH = 0.02  # two segments touch when one ends within this many seconds of where the other starts
 
 
 class EditError(ValueError):
@@ -103,11 +104,12 @@ def update(session: Session, s: Segment, fields: dict[str, Any]) -> Segment:
 
 
 BULK_ACTIONS = {"confirm": "confirm", "reject": "reject", "review": "review", "assign_speaker": "speaker change",
-                "flag": "flag", "unflag": "unflag"}
+                "rename_speaker": "speaker rename", "flag": "flag", "unflag": "unflag"}
 
 
-def bulk(session: Session, segs: list[Segment], action: str, speaker: str | None = None, name: str | None = None) -> int:
-    """`action` on every segment; `name` is the edit's name in the history (by default from BULK_ACTIONS)."""
+def bulk(session: Session, segs: list[Segment], action: str, speaker: str | None = None,
+         history_name: str | None = None) -> int:
+    """`action` on every segment; `history_name` names the edit in the history (by default from BULK_ACTIONS)."""
     if action not in BULK_ACTIONS:
         raise EditError(f"unknown action {action!r}")
     before = history.snapshot(segs)
@@ -120,10 +122,11 @@ def bulk(session: Session, segs: list[Segment], action: str, speaker: str | None
     elif action == "review":
         for s in segs:
             s.status = SegmentStatus.pseudo
-    elif action == "assign_speaker":
+    elif action in ("assign_speaker", "rename_speaker"):
+        # rename_speaker is assign_speaker on every segment of one speaker (Annotate's lane names)
         name = (speaker or "").strip()
         if not name:
-            raise EditError("assign_speaker needs a speaker")
+            raise EditError(f"{action} needs a speaker")
         for s in segs:
             s.speaker = name
     elif action == "flag":
@@ -135,7 +138,7 @@ def bulk(session: Session, segs: list[Segment], action: str, speaker: str | None
     for s in segs:
         _touch(s)
     session.flush()
-    _record(session, name or BULK_ACTIONS[action], before, history.snapshot(segs))
+    _record(session, history_name or BULK_ACTIONS[action], before, history.snapshot(segs))
     return len(segs)
 
 
@@ -168,6 +171,39 @@ def merge(session: Session, segs: list[Segment]) -> Segment:
     session.flush()
     _record(session, "merge", before, history.snapshot([keep]))
     return keep
+
+
+def boundary(session: Session, segs: list[Segment], t: float) -> list[Segment]:
+    """Move the edge where these segments touch to `t`: the ends of the ones that end there and the starts of
+    the ones that start there, so a change of speaker stays in the same place on every lane. One edit."""
+    if len(segs) < 2:
+        raise EditError("a shared boundary needs at least two segments")
+    if len({s.audio_file_id for s in segs}) != 1:
+        raise EditError("only segments of the same file share a boundary")
+    ends = [s.end for s in segs if any(abs(s.end - o.start) <= TOUCH for o in segs if o is not s)]
+    if not ends:
+        raise EditError("these segments don't touch")
+    x = sum(ends) / len(ends)
+    left = [s for s in segs if abs(s.end - x) <= TOUCH]
+    right = [s for s in segs if abs(s.start - x) <= TOUCH and s not in left]
+    if len(left) + len(right) != len(segs) or not right:
+        raise EditError("these segments don't share one boundary")
+    t = round(float(t), 3)
+    for s in left:
+        _check_span(s.audio_file, s.start, t)
+    for s in right:
+        _check_span(s.audio_file, t, s.end)
+    before = history.snapshot(segs)
+    for s in left:
+        s.end = t
+    for s in right:
+        s.start = t
+    for s in segs:
+        s.meta = {k: v for k, v in (s.meta or {}).items() if k not in ("members", "span", "words")}
+        _touch(s)
+    session.flush()
+    _record(session, "boundary move", before, history.snapshot(segs))
+    return segs
 
 
 def _split_text(s: Segment, t: float) -> tuple[str | None, str | None, list | None, list | None]:
@@ -227,7 +263,7 @@ def confirm_auto(session: Session, f: AudioFile) -> int:
     """'Confirm all high-confidence': every auto-accepted segment of the file becomes confirmed."""
     segs = list(session.scalars(select(Segment).where(Segment.audio_file_id == f.id,
                                                       Segment.status == SegmentStatus.auto)))
-    return bulk(session, segs, "confirm", name="confirm all high-confidence") if segs else 0
+    return bulk(session, segs, "confirm", history_name="confirm all high-confidence") if segs else 0
 
 
 # ---------------------------------------------------------------- views

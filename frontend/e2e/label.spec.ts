@@ -152,7 +152,7 @@ test("annotate: speaker lanes move, trim, draw and add a speaker", async ({ page
 
   // add a speaker, then draw a segment on its empty lane
   await page.getByRole("button", { name: "Add speaker" }).click();
-  await expect(lane("spk2")).toContainText("Drag here to add a segment for spk2, or press 3 on a selected one.");
+  await expect(lane("spk2")).toContainText("Drag or double-click here to add a segment for spk2, or press 3 on a selected one.");
   await expect(page.getByText("1 added by you")).toBeVisible();
   const l2 = (await lane("spk2").boundingBox())!;
   await page.mouse.move(l2.x + l2.width * 0.1, l2.y + l2.height / 2);
@@ -597,6 +597,79 @@ test("lexicons: publish house spellings, then use or keep them in Annotate", asy
   await expect(page.getByRole("link", { name: /· 0 spelling hints/ })).toBeVisible();
   await page.getByRole("button", { name: "All", exact: true }).click();
   await expect.poll(transcripts).toContain("before noon.");
+  expect(errors).toEqual([]);
+});
+
+test("annotate: drag a shared edge, rename a lane, and double-click to add a segment", async ({ page, request }) => {
+  const errors = watchErrors(page);
+  type Seg = { id: number; start: number; end: number; speaker: string | null; status: string };
+  const ds = ((await (await request.get("/api/datasets")).json()) as { id: number; name: string }[]).find((d) => d.name === "Unlabelled calls")!;
+  const file = ((await (await request.get(`/api/label/datasets/${ds.id}/files`)).json()) as { id: number; stem: string; duration: number }[]).find((f) => f.stem === "d04")!;
+  const view = async () => (await (await request.get(`/api/label/files/${file.id}`)).json()) as { segments: Seg[] };
+  const live = (await view()).segments.filter((x) => x.status !== "rejected");
+  // two segments of different speakers made to touch: the first now ends where the second starts
+  const k = live.findIndex((x, j) => live[j + 1] && live[j + 1].speaker !== x.speaker && live[j + 1].start - x.start > 1);
+  const [a, b] = [live[k], live[k + 1]];
+  expect((await request.patch(`/api/label/segments/${a.id}`, { data: { end: b.start } })).ok()).toBe(true);
+  const clk = (t: number) => `${String(Math.floor(t / 60)).padStart(2, "0")}:${(t % 60).toFixed(3).padStart(6, "0")}`;
+  await page.goto(`/label/annotate/${ds.id}?file=${file.id}`);
+  await expect(page.getByRole("heading", { name: "d04" })).toBeVisible();
+  const bar = (x: Seg) => page.locator(`[data-lane="${x.speaker}"] span[title*="${clk(x.start)} – "]`);
+  const after = async () => Object.fromEntries((await view()).segments.map((x) => [x.id, x]));
+
+  // dragging the end of the first moves the start of the second with it, as one edit
+  await bar(a).hover();
+  const grip = bar(a).getByRole("button", { name: /^End of segment/ });
+  const g = (await grip.boundingBox())!;
+  await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(g.x + g.width / 2 - 25, g.y + g.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await after())[a.id].end).toBeLessThan(b.start);
+  const moved = await after();
+  expect(moved[b.id].start).toBe(moved[a.id].end);
+  await expect(page.getByRole("group", { name: "History" }).getByRole("button", { name: "Undo" })).toHaveAttribute("title", "Undo boundary move (Ctrl+Z)");
+  // with Alt, the edge moves alone
+  const g2 = (await grip.boundingBox())!;
+  await page.keyboard.down("Alt");
+  await page.mouse.move(g2.x + g2.width / 2, g2.y + g2.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(g2.x + g2.width / 2 - 25, g2.y + g2.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Alt");
+  await expect.poll(async () => (await after())[a.id].end).toBeLessThan(moved[a.id].end);
+  expect((await after())[b.id].start).toBe(moved[b.id].start);
+
+  // a double-click on an empty part of a lane adds a 2 second segment there
+  const spk = a.speaker!;
+  const mine = (await view()).segments.filter((x) => x.speaker === spk && x.status !== "rejected").sort((p, q) => p.start - q.start);
+  const edges = [0, ...mine.flatMap((x) => [x.start, x.end]), file.duration];
+  let gap = 0;
+  for (let j = 0; j < edges.length; j += 2) if (edges[j + 1] - edges[j] > 3) { gap = (edges[j] + edges[j + 1]) / 2; break; }
+  expect(gap).toBeGreaterThan(0);
+  const l = (await page.locator(`[data-lane="${spk}"]`).boundingBox())!;
+  const n = await page.locator(`[data-lane="${spk}"] span[title]`).count();
+  await page.mouse.dblclick(l.x + (l.width * gap) / file.duration, l.y + l.height / 2);
+  await expect(page.locator(`[data-lane="${spk}"] span[title]`)).toHaveCount(n + 1);
+  const added = (await view()).segments.find((x) => x.speaker === spk && x.start < gap && gap < x.end)!;
+  expect(added.end - added.start).toBeCloseTo(2, 1);
+
+  // a double-click on a lane's name renames the speaker on every segment; Esc cancels
+  const other = b.speaker!;
+  await page.getByTitle(`${other} (double-click to rename)`, { exact: true }).locator("span.truncate").dblclick();
+  await page.getByLabel(`Rename ${other}`).fill("Caller");
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel(`Rename ${other}`)).toHaveCount(0);
+  await page.getByTitle(`${other} (double-click to rename)`, { exact: true }).locator("span.truncate").dblclick();
+  await page.getByLabel(`Rename ${other}`).fill("Caller");
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-lane="Caller"]')).toBeVisible();
+  await expect(page.locator(`[data-lane="${other}"]`)).toHaveCount(0);
+  expect((await view()).segments.filter((x) => x.speaker === other)).toEqual([]);
+  // and the rename can be undone
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+z");
+  await expect(page.locator(`[data-lane="${other}"]`)).toBeVisible();
   expect(errors).toEqual([]);
 });
 

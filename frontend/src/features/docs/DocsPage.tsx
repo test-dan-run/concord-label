@@ -7,7 +7,7 @@ import * as I from "../../components/icons";
 import { Chip, Empty, PageHeader } from "../../components/ui";
 import type { SegStatus } from "../../lib/api";
 import { SHORTCUTS, STATUS_TONE, statusLabel } from "../../lib/label";
-import { MAX_SPEAKERS, MIN_LEN, NUDGE, NUDGE_SHIFT } from "../label/laneDrag";
+import { MAX_SPEAKERS, MIN_LEN, NUDGE, NUDGE_SHIFT, PLACED_LEN } from "../label/laneDrag";
 
 const STEPS: { n: number; to: string; title: string; text: string }[] = [
   { n: 1, to: "/datasets", title: "Upload a dataset", text: "You upload audio, with references if you have them." },
@@ -162,8 +162,13 @@ const SECTIONS: Section[] = [
         <ul className="m-0 pl-5 flex flex-col gap-1.5">
           <li>To move a segment, drag it sideways. To give it to another speaker, drag it onto that speaker's lane, and press Escape while you drag to cancel.</li>
           <li>To trim a segment, drag the grip at either end. When a grip has the focus, the arrow keys move it by {NUDGE} seconds, or by {NUDGE_SHIFT} seconds with Shift.</li>
-          <li>To add a segment, drag across empty space in a lane. Label ignores a segment shorter than {MIN_LEN} seconds, and <em>Segment at playhead</em> adds a one-second segment where the playhead is.</li>
+          <li>
+            Where one segment ends and another starts at the same time, on any lane, a drag of that edge moves both segments, so a change of
+            speaker stays in the same place. To move one edge alone, hold Alt while you drag.
+          </li>
+          <li>To add a segment, drag across empty space in a lane. Label ignores a segment shorter than {MIN_LEN} seconds. A double-click on empty space adds a {PLACED_LEN} second segment that stops short of the segments next to it, and <em>Segment at playhead</em> adds a one-second segment where the playhead is.</li>
           <li>To add a speaker that the diarisation model missed, use <em>Add speaker</em>. A file can have up to {MAX_SPEAKERS} speakers.</li>
+          <li>To rename a speaker, double-click its name beside the lane, type the new name, and press Enter. When another speaker already has that name, Label asks before it gives that speaker all the segments.</li>
         </ul>
         <p className="m-0">
           To change a segment's speaker, click the speaker chip in the table and pick a speaker from the menu, or press a number from 1 to 8.

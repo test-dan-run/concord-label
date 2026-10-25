@@ -10,6 +10,8 @@ The other docs are in `docs/`, and code comments cite them by file name, e.g., "
   links shows every screen, and where the canvas and HANDOFF.md disagree, HANDOFF.md wins.
 - [docs/CONTRACTS.md](docs/CONTRACTS.md) holds the formats and endpoints that Concord Label and Concord
   Bench agree on.
+- [docs/ANNOTATE_PLAN.md](docs/ANNOTATE_PLAN.md) brought the annotating interactions of the owner's earlier
+  app, pseudolabel, into Annotate. Where it differs from HANDOFF.md, the plan's decisions win.
 - [docs/PLAN.md](docs/PLAN.md) and [docs/SPLIT_PLAN.md](docs/SPLIT_PLAN.md) are the original build plans,
   kept for history.
 
@@ -206,3 +208,7 @@ These changes came from the updated design canvas and from requests that followe
   `features/label/SegmentRow.tsx`, with the speaker chip's menu, words that seek, and a text area that
   grows. Tab and Shift+Tab play the segment they land on, and the row above the timeline counts the
   segments to review.
+- Annotate's speaker lanes gained pseudolabel's gestures (ANNOTATE_PLAN.md phase 5). A drag of an edge that
+  segments share moves all of them through `POST /label/segments/boundary`, as one edit, and Alt moves one
+  edge alone. A double-click on a lane adds a 2 second segment, a double-click on a lane's name renames the
+  speaker (`rename_speaker` in `edit.bulk`), and a wide enough block shows its text.

@@ -2,7 +2,7 @@
 
 This plan brings the annotating interactions of the owner's earlier app, pseudolabel, into Annotate. The
 owner found Annotate hard to use, and pseudolabel's waveform player, keys and transcript list were easier.
-The plan was written on 2026-10-25, and nothing in it is built yet.
+The plan was written on 2026-10-25, and all five phases were built the same day, one commit each.
 
 pseudolabel lives at `github.com/test-dan-run/pseudolabel`. The repository is private, so clone it over
 SSH. Its annotation UI is in `services/frontend/src`, and the files this plan draws on are `App.tsx` (the
@@ -283,6 +283,18 @@ Tests for phase 5:
 - `laneDrag.test.ts` covers touching edges and the double-click segment next to neighbours.
 - `tests/test_label.py` covers the boundary route, `rename_speaker`, and the undo of both.
 - Playwright drags a shared edge, renames a lane, and adds a segment with a double-click.
+
+## Where the build differs from the plan
+
+- Undo and redo don't compare `updated_at`. An undo gives each restored segment a new `updated_at`, so that
+  check would refuse every redo. They compare every other column instead, and `edited_at` only by whether
+  it is set.
+- During playback the segment list scrolls itself, instead of calling `scrollIntoView`, so the page doesn't
+  jump to the list while you watch the timeline.
+- `nextToReview` came in phase 3, because Shift+Tab needs it. Ctrl+Z came into `SHORTCUTS` in phase 2,
+  together with the key.
+- The arrow keys on a focused grip still move one edge alone, even where two segments touch.
+- Ctrl+Enter confirms, and the owner can still pick another key.
 
 ## Order of work and checks
 

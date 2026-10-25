@@ -159,6 +159,8 @@ def test_undo_and_redo_each_kind_of_edit(labelled, client, session):
         ("new segment", lambda: client.post(f"/api/label/files/{fid}/segments", json={"start": 0.0, "end": 0.4, "speaker": "x"})),
         ("delete", lambda: client.delete(f"/api/label/segments/{c['id']}")),
         ("confirm all high-confidence", lambda: client.post(f"/api/label/files/{fid}/confirm-auto")),
+        ("speaker change", lambda: client.post("/api/label/segments/bulk", json={"ids": [b["id"]], "action": "assign_speaker",
+                                                                               "speaker": "agent"})),
         ("move", lambda: client.patch(f"/api/label/segments/{b['id']}", json={"start": b["start"] + 0.1, "end": b["end"] + 0.1,
                                                                              "speaker": "spk7"})),
     ]
@@ -220,6 +222,37 @@ def test_a_pseudo_label_run_clears_the_history(labelled, client, session):
     assert r["detail"] == "This file changed since that edit, so it can't be undone"
     assert _history(client, fid) == {"undo": None, "redo": None}
     assert session.get(Segment, a["id"]).text == "Changed elsewhere."
+
+
+def test_shared_boundary_and_speaker_rename(labelled, client):
+    ds = labelled["unlabelled"]
+    fid = _ok(client.get(f"/api/label/datasets/{ds}/files"))[0]["id"]
+    segs = _segs(client, fid)
+    # two segments that touch: the first ends where the second starts (moved there by hand)
+    a, b, c = segs[0], segs[1], segs[2]
+    _ok(client.patch(f"/api/label/segments/{a['id']}", json={"end": b["start"] - 0.01}))
+    before = _segs(client, fid)
+    t = round(b["start"] + 0.2, 3)
+    out = _ok(client.post("/api/label/segments/boundary", json={"ids": [b["id"], a["id"]], "t": t}))
+    assert {(x["id"], x["start"], x["end"]) for x in out} == {(a["id"], a["start"], t), (b["id"], t, b["end"])}
+    assert _history(client, fid)["undo"] == "boundary move"
+    _ok(client.post(f"/api/label/files/{fid}/undo"))
+    assert _segs(client, fid) == before
+    # segments that don't touch, a boundary past the end of a segment, and one segment alone are refused
+    _ok(client.post("/api/label/segments/boundary", json={"ids": [a["id"], c["id"]], "t": t}), 422)
+    _ok(client.post("/api/label/segments/boundary", json={"ids": [a["id"], b["id"]], "t": b["end"]}), 422)
+    _ok(client.post("/api/label/segments/boundary", json={"ids": [a["id"]], "t": t}), 422)
+
+    # renaming a speaker gives every one of its segments the new name, as one edit
+    old = a["speaker"]
+    ids = [x["id"] for x in before if x["speaker"] == old]
+    out = _ok(client.post("/api/label/segments/bulk", json={"ids": ids, "action": "rename_speaker", "speaker": "Agent"}))
+    assert out["updated"] == len(ids) and {x["speaker"] for x in out["segments"]} == {"Agent"}
+    v = _ok(client.get(f"/api/label/files/{fid}"))
+    assert old not in v["speakers"] and "Agent" in v["speakers"] and v["history"]["undo"] == "speaker rename"
+    _ok(client.post(f"/api/label/files/{fid}/undo"))
+    assert _segs(client, fid) == before
+    _ok(client.post("/api/label/segments/bulk", json={"ids": ids, "action": "rename_speaker", "speaker": " "}), 422)
 
 
 def test_live_eval(labelled, client):
