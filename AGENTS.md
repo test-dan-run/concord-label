@@ -103,6 +103,8 @@ Bench's copies don't have these recent Label changes yet:
 - `runs/cache.py`: `OutputCache.run` is split into `infer`, which makes the call, and `store`, which saves the
   output. Worker threads call `infer`, and the session stays on one thread. Pseudo-labelling keeps several
   calls open at once (`in_flight` in `label/pseudo.py`), so the model's server batches them.
+- `runs/cache.py`: `outputs_for` reads its ids in chunks of 500. SQLite takes at most 32766 variables in one
+  query, and fusing 4 members on 8341 cuts needed 33364.
 - `core/settings.py`: a blank `AICORE_ENDPOINTS`, `REPLAY_DIR` or `RECORD_DIR` in `.env` means unset. Bench
   does this for `DATASET_STORE` only, so a blank `RECORD_DIR=` there still records into the current folder.
 

@@ -11,6 +11,7 @@ import time
 import httpx
 import pytest
 from aicore.catalog import Catalog, FakeCatalog, LeaseFailed, index_key
+from sqlalchemy import select
 
 from concord_label.core import paths
 from concord_label.core.models import Job, Model, ModelOutput, Run, Segment
@@ -526,6 +527,17 @@ def test_outputs_batch_serves_rows_by_id(labelled, client, session):
     assert (a["span_start"], a["span_end"]) == (asr_row.span_start, asr_row.span_end)
     assert s["params"] == {"adapter": "OIPSegmenter"} and s["build_key"] == seg_row.build_key
     assert client.post("/api/outputs/batch", json={"ids": []}).json() == {"outputs": []}
+
+
+def test_outputs_for_reads_more_ids_than_sqlite_takes_in_one_query(session):
+    # 4 members on 8341 cuts made 33364 ids, over SQLite's 32766 variables, and fusion failed
+    n = 33_000
+    session.execute(ModelOutput.__table__.insert(), [
+        {"model_name": "m", "audio_sha256": "a" * 64, "span_start": float(i), "span_end": i + 1.0,
+         "params_hash": "p", "output": {"text": str(i)}, "latency_s": 0.0} for i in range(n)])
+    ids = list(session.scalars(select(ModelOutput.id)))
+    rows = cache.outputs_for(session, [*ids, None])
+    assert len(rows) == n and rows[ids[-1]].output == {"text": str(n - 1)}
 
 
 def test_the_app_registers_with_the_catalog_at_startup(data_dir, monkeypatch, fake_catalog):

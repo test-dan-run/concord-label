@@ -261,10 +261,13 @@ class OutputCache:
 
 
 def outputs_for(session: Session, ids: list[int]) -> dict[int, ModelOutput]:
-    ids = [i for i in ids if i is not None]
-    if not ids:
-        return {}
-    return {r.id: r for r in session.scalars(select(ModelOutput).where(ModelOutput.id.in_(ids)))}
+    """Rows by id, in chunks: SQLite allows at most 32766 variables in one query."""
+    ids = sorted({i for i in ids if i is not None})
+    out: dict[int, ModelOutput] = {}
+    for i in range(0, len(ids), CHUNK):
+        out.update({r.id: r for r in session.scalars(select(ModelOutput).where(
+            ModelOutput.id.in_(ids[i:i + CHUNK])))})
+    return out
 
 
 def as_dict(row: ModelOutput) -> dict[str, Any]:
