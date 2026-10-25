@@ -124,8 +124,11 @@ transcripts, change speakers, merge and split segments, and confirm segments one
 You can undo and redo any change to a file's segments, and Label keeps the last 200 changes for each
 file. A pseudo-label run or an imported package clears that history for the files it changes.
 
-Any edit marks a segment as checked by a person, and later pseudo-label runs never replace it. The Docs
-page in the app lists the keyboard shortcuts.
+Any edit marks a segment as checked by a person, and later pseudo-label runs never replace it.
+
+You can review a file from the keyboard. Tab goes to the next segment to review, Enter edits its text,
+and Ctrl+Enter confirms it. Space plays or pauses from the playhead, S splits the segment under the
+playhead, and Ctrl+Z undoes the last change. The Docs page in the app lists every key.
 
 ### Lexicons
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Segment } from "../lib/api";
-import { confidenceColor, cycleSpeaker, labelButton, nextLowConfidence, overlapRegions, playingSegment, segmentAt, selectRange } from "../lib/label";
+import { confidenceColor, cycleSpeaker, labelButton, nextToReview, overlapRegions, playingSegment, segmentAt, selectRange, shortcutKeys, SHORTCUTS } from "../lib/label";
 import { C } from "../lib/colors";
 
 function seg(id: number, over: Partial<Segment> = {}): Segment {
@@ -51,15 +51,27 @@ describe("overlapRegions", () => {
   });
 });
 
-describe("nextLowConfidence", () => {
-  const segs = [seg(1, { confidence: 0.9, status: "auto" }), seg(2), seg(3, { reviewed: true }), seg(4, { confidence: null })];
-  it("skips high-confidence and reviewed segments, wrapping around", () => {
-    expect(nextLowConfidence(segs, null)).toBe(2);
-    expect(nextLowConfidence(segs, 2)).toBe(4);
-    expect(nextLowConfidence(segs, 4)).toBe(2);
+describe("nextToReview", () => {
+  const segs = [seg(1, { confidence: 0.9 }), seg(2, { confidence: 0.4 }), seg(3, { confidence: 0.5, reviewed: true }), seg(4, { confidence: null }), seg(5, { confidence: 0.95 })];
+  it("skips high-confidence and reviewed segments, forwards and backwards", () => {
+    expect(nextToReview(segs, null)).toBe(2);
+    expect(nextToReview(segs, 2)).toBe(4);
+    expect(nextToReview(segs, 4, -1)).toBe(2);
+    expect(nextToReview(segs, null, -1)).toBe(4);
+  });
+  it("wraps around at either end", () => {
+    expect(nextToReview(segs, 4)).toBe(2);
+    expect(nextToReview(segs, 5)).toBe(2);
+    expect(nextToReview(segs, 2, -1)).toBe(4);
+    expect(nextToReview(segs, 1, -1)).toBe(4);
+  });
+  it("also takes the segments `also` picks, e.g. ones with a spelling hint", () => {
+    expect(nextToReview(segs, 2, 1, 0.85, (s) => s.id === 3)).toBe(3);
+    expect(nextToReview(segs, 2, -1, 0.85, (s) => s.id === 5)).toBe(5);
   });
   it("returns null when nothing needs review", () => {
-    expect(nextLowConfidence([seg(1, { status: "confirmed", reviewed: true })], null)).toBeNull();
+    expect(nextToReview([seg(1, { status: "confirmed", reviewed: true })], null)).toBeNull();
+    expect(nextToReview([], 3, -1)).toBeNull();
   });
 });
 
@@ -100,5 +112,14 @@ describe("playingSegment", () => {
   it("leaves out rejected segments and gaps", () => {
     expect(playingSegment(segs, 3.5)).toBeNull();
     expect(playingSegment(segs, 4.5)).toBeNull();
+  });
+});
+
+describe("SHORTCUTS", () => {
+  it("lists each key once", () => {
+    const keys = SHORTCUTS.flatMap((k) => shortcutKeys(k.key));
+    expect(keys.length).toBe(new Set(keys).size);
+    expect(keys).toEqual(expect.arrayContaining(["Space", "Shift+Space", "←", "↓", "Tab", "Shift+Tab", "Enter", "Ctrl+Enter", "S", "Delete", "Ctrl+Y", "8"]));
+    expect(keys).not.toContain("V");
   });
 });

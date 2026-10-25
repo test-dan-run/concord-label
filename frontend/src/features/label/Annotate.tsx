@@ -1,9 +1,13 @@
 // Annotate (annotation only, no metrics): whole-file timeline with editable speaker lanes (SpeakerLanes),
-// segment grid with multi-select and a bulk bar, inline transcript editing with autosave per segment, and
-// the AeroAudio shortcuts:
-// Space play/pause · Tab next low-confidence or lexicon hint · Alt+Enter use house spelling · 1–8 assign
-// speaker · V split · M merge · Enter confirm. Variants the published lexicons flag are underlined in the
-// transcript with a choice to use the house spelling or keep the text; the text never changes on its own.
+// a transport row (Transport), segment grid with multi-select and a bulk bar, inline transcript editing with
+// autosave per segment, undo and redo (label/history.py on the server), and the keys of the owner's earlier
+// app, pseudolabel (docs/ANNOTATE_PLAN.md; SHORTCUTS in lib/label.ts lists them for the strip and the Docs page):
+// Space play/pause from the playhead · Shift+Space play the waveform selection or the segment · ←/→ skip 2 s ·
+// ↑/↓ previous/next segment · Tab/Shift+Tab next/previous to review · Enter edit · Ctrl+Enter confirm ·
+// S split at the playhead · M merge · Delete · Ctrl+Z undo · Ctrl+Shift+Z or Ctrl+Y redo · Esc close/clear ·
+// 1–8 assign speaker · Alt+Enter use house spelling · = - 0 zoom. Variants the published lexicons flag are
+// underlined in the transcript with a choice to use the house spelling or keep the text; the text never
+// changes on its own.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
@@ -12,7 +16,7 @@ import { api, qs, type AnnotateView, type LabelFile, type SegStatus, type Segmen
 import { houseSpelled, Matcher, norm, type ActiveLexicon, type Hint } from "../../lib/lexicon";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, playingSegment, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS, STATUS_TONE, statusLabel } from "../../lib/label";
+import { confidenceColor, cycleSpeaker, nextToReview, overlapRegions, playingSegment, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS, STATUS_TONE, statusLabel } from "../../lib/label";
 import { PlayFrom, useAudio } from "../../components/AudioPlayer";
 import { Timeline } from "../../components/Timeline";
 import * as I from "../../components/icons";
@@ -25,6 +29,8 @@ import { Transport } from "./Transport";
 import { fit, follow, reveal, STEP, zoomAt, type Window } from "./zoom";
 
 type Show = "all" | SegStatus;
+/** ← and → move the playhead this many seconds. */
+const SKIP = 2;
 const SHOW: { value: Show; label: string }[] = [
   { value: "all", label: "All" },
   { value: "pseudo", label: "Needs review" },
@@ -184,6 +190,9 @@ function Annotator({
   const [anchor, setAnchor] = useState<number | null>(null);
   const [show, setShow] = useState<Show>(initialShow);
   const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
+  // The row whose text is in the editor, and the menu open on a row (a spelling hint's); Esc closes them.
+  const [editing, setEditing] = useState<number | null>(null);
+  const [menu, setMenu] = useState<{ id: number; hint: number } | null>(null);
   const listBox = useRef<HTMLDivElement>(null);
 
   const v = q.data;
@@ -229,6 +238,7 @@ function Annotator({
   const hasHint = useCallback((s: Segment) => (hints.get(s.id)?.length ?? 0) > 0, [hints]);
   const applyHint = useCallback((s: Segment, h: Hint) => s.text !== null && m.patch.mutate({ id: s.id, text: houseSpelled(s.text, h) }), [m.patch]);
   const keepHint = useCallback((s: Segment, h: Hint) => m.patch.mutate({ id: s.id, spelling_kept: [...s.spelling_kept, norm(h.found)] }), [m.patch]);
+  useEffect(() => setMenu(null), [segs]);
 
   // Pick a starting segment once loaded: the requested one, else the one at the requested time (and the
   // playhead goes there), else the first low-confidence one.
@@ -236,7 +246,7 @@ function Annotator({
   useEffect(() => {
     if (!v || (cur !== null && segs.some((s) => s.id === cur))) return;
     const atTime = initialTime !== null && !seeked.current ? segmentAt(segs, initialTime) : null;
-    setCur(atTime ?? nextLowConfidence(segs, null, high) ?? segs[0]?.id ?? null);
+    setCur(atTime ?? nextToReview(segs, null, 1, high) ?? segs[0]?.id ?? null);
   }, [v, segs, cur, high, initialTime]);
   useEffect(() => {
     if (!v || initialTime === null || seeked.current) return;
@@ -266,20 +276,46 @@ function Annotator({
     const k = segs.findIndex((s) => s.id === id);
     return segs[k + 1]?.id ?? null;
   };
+  // The next segment to review after `from` (Tab, Shift+Tab, Ctrl+Enter); `done` were just confirmed.
+  const toReview = useCallback(
+    (from: number | null, direction: 1 | -1, done: number[] = []) =>
+      nextToReview(done.length ? segs.map((s) => (done.includes(s.id) ? { ...s, status: "confirmed" as const, reviewed: true } : s)) : segs, from, direction, high, hasHint),
+    [segs, high, hasHint],
+  );
+  const goTo = useCallback((id: number | null) => {
+    if (id !== null) setCur(id);
+  }, []);
 
-  const confirm = useCallback(() => {
-    const ids = targets();
-    if (!ids.length) return;
-    m.bulk.mutate({ ids, action: "confirm" });
-    if (!sel.size && cur !== null) setCur(nextLowConfidence(segs, cur, high) ?? nextId(cur) ?? cur);
-    setSel(new Set());
-  }, [targets, sel, cur, segs, high]);
+  const confirm = useCallback(
+    (ids: number[] = targets()) => {
+      if (!ids.length) return;
+      m.bulk.mutate({ ids, action: "confirm" });
+      const from = cur ?? ids[0];
+      goTo(toReview(from, 1, ids) ?? nextId(from) ?? from);
+      setSel(new Set());
+    },
+    [targets, cur, segs, toReview, goTo],
+  );
 
+  // S and Split: the segment under the playhead, the selected one first where segments overlap.
+  const splitTarget = useMemo(() => {
+    const inside = (s: Segment) => ctl.time > s.start + 0.05 && ctl.time < s.end - 0.05;
+    if (current && inside(current)) return current;
+    const s = segs.find((x) => x.id === playingId);
+    return s && inside(s) ? s : null;
+  }, [current, segs, playingId, ctl.time]);
   const splitAtPlayhead = useCallback(() => {
+    if (splitTarget) m.split.mutate({ id: splitTarget.id, t: ctl.time }, { onSuccess: ([a]) => setCur(a.id) });
+  }, [splitTarget, ctl.time, m.split]);
+
+  // Delete: the selected segment goes, and the next one (or the one before the last) is selected.
+  const removeCurrent = useCallback(() => {
     if (!current) return;
-    const inside = ctl.time > current.start + 0.05 && ctl.time < current.end - 0.05;
-    m.split.mutate({ id: current.id, t: inside ? ctl.time : (current.start + current.end) / 2 });
-  }, [current, ctl.time, m.split]);
+    const k = segs.findIndex((s) => s.id === current.id);
+    m.remove.mutate(current.id);
+    setSel((old) => new Set([...old].filter((id) => id !== current.id)));
+    setCur((segs[k + 1] ?? segs[k - 1])?.id ?? null);
+  }, [current, segs, m.remove]);
 
   // "Undid merge": what the last undo or redo did, for a few seconds.
   const [undoNote, setUndoNote] = useState("");
@@ -312,6 +348,10 @@ function Annotator({
   }, [sel, cur, segs, m.merge]);
 
   useEffect(() => {
+    // Tab and Shift+Tab are the page's on the page itself, the timeline and the segment list; elsewhere
+    // (the header, the file picker, the bulk bar) Tab keeps its usual meaning.
+    const tabHere = (t: EventTarget | null) =>
+      t === document.body || (t instanceof Node && (!!timelineBox.current?.contains(t) || !!listBox.current?.contains(t)));
     const onKey = (e: KeyboardEvent) => {
       if (e.altKey && e.key === "Enter" && !isTyping(e)) {
         const h = current && hints.get(current.id)?.[0];
@@ -327,6 +367,9 @@ function Annotator({
         if (k === "z" || k === "y") {
           e.preventDefault();
           step(k === "y" || e.shiftKey ? "redo" : "undo");
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          confirm();
         }
         return;
       }
@@ -334,23 +377,28 @@ function Annotator({
       if (e.key === " ") {
         e.preventDefault();
         const span = range ? { start: range.t0, end: range.t1 } : current;
-        if (ctl.playing) ctl.pause();
-        else if (span) ctl.play(ctl.time > span.start && ctl.time < span.end - 0.05 ? ctl.time : span.start, span.end);
-        else ctl.play();
+        if (e.shiftKey && span) ctl.play(span.start, span.end);
+        else if (e.shiftKey) return;
+        else if (ctl.playing) ctl.pause();
+        else ctl.play(ctl.time >= duration - 0.05 ? 0 : ctl.time);
       } else if (e.key === "Tab") {
+        if (!tabHere(e.target)) return;
         e.preventDefault();
-        const n = nextLowConfidence(segs, cur, high, hasHint);
-        if (n !== null) setCur(n);
+        goTo(toReview(cur, e.shiftKey ? -1 : 1));
       } else if (/^[1-8]$/.test(e.key)) {
         const ids = targets();
         if (ids.length) m.bulk.mutate({ ids, action: "assign_speaker", speaker: speakerForKey(Number(e.key)) });
-      } else if (e.key === "v" || e.key === "V") {
+      } else if (e.key === "s" || e.key === "S") {
         splitAtPlayhead();
       } else if (e.key === "m" || e.key === "M") {
         mergeSel();
+      } else if (e.key === "Delete") {
+        removeCurrent();
       } else if (e.key === "Enter") {
+        // a focused button or link keeps Enter
+        if ((e.target as HTMLElement | null)?.closest?.("button, a") || !current) return;
         e.preventDefault();
-        confirm();
+        setEditing(current.id);
       } else if (e.key === "=" || e.key === "+") {
         zoomAround(STEP);
       } else if (e.key === "-" || e.key === "_") {
@@ -358,13 +406,21 @@ function Annotator({
       } else if (e.key === "0") {
         setView(() => fit(duration));
       } else if (e.key === "Escape") {
-        setSel(new Set());
-        setRange(null);
+        if (menu) setMenu(null);
+        else if (editing !== null) setEditing(null);
+        else if (sel.size) setSel(new Set());
+        else setRange(null);
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        ctl.skip(e.key === "ArrowLeft" ? -SKIP : SKIP);
       } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         const k = visible.findIndex((s) => s.id === cur);
         const n = visible[Math.max(0, Math.min(visible.length - 1, k + (e.key === "ArrowDown" ? 1 : -1)))];
-        if (n) setCur(n.id);
+        if (n) {
+          setCur(n.id);
+          ctl.seek(n.start);
+        }
       }
     };
     // Space plays and pauses, so its keyup must not also press the button or tick the box that has the focus.
@@ -377,7 +433,7 @@ function Annotator({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [ctl, current, segs, visible, cur, high, targets, splitAtPlayhead, mergeSel, confirm, speakers, hints, hasHint, applyHint, zoomAround, setView, duration, range, step]);
+  }, [ctl, current, segs, visible, cur, sel, menu, editing, targets, splitAtPlayhead, mergeSel, removeCurrent, confirm, toReview, goTo, speakers, hints, applyHint, zoomAround, setView, duration, range, step]);
 
   if (q.isLoading || !v) return <Spinner />;
 
@@ -445,9 +501,9 @@ function Annotator({
           onClearRange={() => setRange(null)}
           view={view}
           onView={(w) => setView(() => w)}
-          split={{ onClick: splitAtPlayhead, disabled: !current, title: "Split the selected segment at the playhead (V)" }}
+          split={{ onClick: splitAtPlayhead, disabled: !splitTarget, title: "Split the segment under the playhead (S)" }}
           merge={{ onClick: mergeSel, disabled: sel.size < 2 && (cur === null || nextId(cur) === null), title: "Merge the selected segments, or the selected segment with the next one (M)" }}
-          remove={{ onClick: () => current && m.remove.mutate(current.id), disabled: !current, title: "Delete the selected segment" }}
+          remove={{ onClick: removeCurrent, disabled: !current, title: "Delete the selected segment (Delete)" }}
         />
         <div ref={timelineBox}>
         <Timeline
@@ -578,6 +634,12 @@ function Annotator({
                       onKeepHint={(h) => keepHint(s, h)}
                       onConfirm={() => m.bulk.mutate({ ids: [s.id], action: "confirm" })}
                       onReject={() => m.bulk.mutate({ ids: [s.id], action: "reject" })}
+                      editing={editing === s.id}
+                      onEdit={(on) => setEditing((e) => (on ? s.id : e === s.id ? null : e))}
+                      menu={menu?.id === s.id ? menu.hint : null}
+                      onMenu={(k) => setMenu(k === null ? null : { id: s.id, hint: k })}
+                      onNext={(direction) => goTo(toReview(s.id, direction))}
+                      onConfirmNext={() => confirm([s.id])}
                     />
                   ))}
                 </tbody>
@@ -675,6 +737,12 @@ function SegmentRow({
   onKeepHint,
   onConfirm,
   onReject,
+  editing,
+  onEdit,
+  menu,
+  onMenu,
+  onNext,
+  onConfirmNext,
 }: {
   s: Segment;
   rowRef: (el: HTMLTableRowElement | null) => void;
@@ -695,24 +763,54 @@ function SegmentRow({
   onKeepHint: (h: Hint) => void;
   onConfirm: () => void;
   onReject: () => void;
+  /** The text is in the editor (Enter, a click, or the pen with spelling hints). */
+  editing: boolean;
+  onEdit: (on: boolean) => void;
+  /** The spelling hint whose menu is open. */
+  menu: number | null;
+  onMenu: (k: number | null) => void;
+  /** Tab and Shift+Tab in the editor: save, then go to the next or previous segment to review. */
+  onNext: (direction: 1 | -1) => void;
+  /** Ctrl+Enter in the editor: save, confirm, and go to the next segment to review. */
+  onConfirmNext: () => void;
 }) {
   const [draft, setDraft] = useState(s.text ?? "");
   // With spelling hints the transcript shows as text with the variants underlined; a click elsewhere edits it.
-  const [editing, setEditing] = useState(false);
-  const [open, setOpen] = useState<number | null>(null);
-  useEffect(() => setOpen(null), [s.text, s.spelling_kept]);
+  const open = menu;
+  const setOpen = onMenu;
   useEffect(() => setDraft(s.text ?? ""), [s.text]);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (editing) input.current?.focus();
+  }, [editing]);
+  // Set while a key closes the editor, so the blur that follows doesn't save (or cancel) a second time.
+  const closing = useRef(false);
   const save = () => {
     if (draft !== (s.text ?? "")) onText(draft);
   };
+  const close = (keep: boolean) => {
+    if (keep) save();
+    else setDraft(s.text ?? "");
+    closing.current = true;
+    input.current?.blur();
+    closing.current = false;
+    onEdit(false);
+  };
   const onKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      save();
-      (e.target as HTMLInputElement).blur();
+      close(true);
+      onConfirmNext();
+    } else if (e.key === "Enter" && !e.altKey) {
+      e.preventDefault();
+      close(true);
     } else if (e.key === "Escape") {
-      setDraft(s.text ?? "");
-      (e.target as HTMLInputElement).blur();
+      e.preventDefault();
+      close(false);
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      close(true);
+      onNext(e.shiftKey ? -1 : 1);
     }
   };
   return (
@@ -755,7 +853,7 @@ function SegmentRow({
       <td className="px-2 py-1.5 w-full">
         {hints.length > 0 && !editing && s.text !== null ? (
           <div className="flex flex-col gap-1.5">
-            <div onClick={() => setEditing(true)} className="group/t px-1.5 py-1 rounded border border-transparent hover:border-line text-fg text-[13px] cursor-text">
+            <div onClick={() => onEdit(true)} className="group/t px-1.5 py-1 rounded border border-transparent hover:border-line text-fg text-[13px] cursor-text">
               {pieces(s.text, hints).map((p, k) =>
                 typeof p === "string" ? (
                   <span key={k}>{p}</span>
@@ -781,7 +879,7 @@ function SegmentRow({
                 aria-label={`Edit transcript at ${clock(s.start)}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setEditing(true);
+                  onEdit(true);
                 }}
                 className="ml-1.5 p-0 border-0 bg-transparent text-subtle hover:text-fg cursor-pointer align-middle opacity-0 group-hover/t:opacity-100 focus-visible:opacity-100"
               >
@@ -801,15 +899,19 @@ function SegmentRow({
           </div>
         ) : (
           <input
+            ref={input}
             aria-label={`Transcript at ${clock(s.start)}`}
             value={draft}
-            autoFocus={editing}
             placeholder={s.text === null ? "(no transcript)" : ""}
-            onFocus={onFocus}
+            onFocus={() => {
+              onFocus();
+              onEdit(true);
+            }}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => {
+              if (closing.current) return;
               save();
-              setEditing(false);
+              onEdit(false);
             }}
             onKeyDown={onKey}
             className="w-full bg-transparent border border-transparent hover:border-line focus:border-focus rounded px-1.5 py-1 text-fg text-[13px] outline-none"
@@ -825,7 +927,7 @@ function SegmentRow({
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
         <span className="flex gap-1">
-          <button type="button" aria-label="Confirm" title="Confirm (Enter)" onClick={(e) => { e.stopPropagation(); onConfirm(); }} className="size-7 inline-flex items-center justify-center rounded border border-line bg-transparent text-good cursor-pointer hover:bg-track">
+          <button type="button" aria-label="Confirm" title="Confirm (Ctrl+Enter)" onClick={(e) => { e.stopPropagation(); onConfirm(); }} className="size-7 inline-flex items-center justify-center rounded border border-line bg-transparent text-good cursor-pointer hover:bg-track">
             <I.Check size={12} />
           </button>
           <button type="button" aria-label="Reject" title="Reject" onClick={(e) => { e.stopPropagation(); onReject(); }} className="size-7 inline-flex items-center justify-center rounded border border-line bg-transparent text-bad cursor-pointer hover:bg-track">

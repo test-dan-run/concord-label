@@ -210,8 +210,8 @@ test("annotate: pull a stretch out on the waveform and play it, across speakers"
   await expect.poll(async () => (await state()).paused, { timeout: 15_000 }).toBe(true);
   expect((await state()).t).toBeGreaterThanOrEqual(b - 0.01);
   expect((await state()).t).toBeLessThan(b + 0.25);
-  // Space plays it again from its start, and pauses it
-  await page.keyboard.press("Space");
+  // Shift+Space plays it again from its start, and Space pauses it
+  await page.keyboard.press("Shift+Space");
   await expect.poll(async () => (await state()).paused).toBe(false);
   expect((await state()).t).toBeLessThan(b);
   await page.keyboard.press("Space");
@@ -357,6 +357,127 @@ test("annotate: undo a merge with Ctrl+Z, and redo it", async ({ page }) => {
   await expect(page.getByText("Redid merge")).toBeVisible();
   await page.keyboard.press("Control+z");
   await expect(rows).toHaveCount(n);
+  expect(errors).toEqual([]);
+});
+
+test("annotate: the keys", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 5 });
+  await expect(page.getByRole("heading", { name: "d06" })).toBeVisible();
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const audio = page.locator("audio").first();
+  const t = () => audio.evaluate((a: HTMLAudioElement) => a.currentTime);
+  const paused = () => audio.evaluate((a: HTMLAudioElement) => a.paused);
+  const rows = page.locator("tbody tr");
+  const current = page.locator("tbody tr[aria-current]");
+  const start = async (row: typeof current) => {
+    const m = /(\d\d):(\d\d\.\d{3})/.exec((await row.locator("td").nth(2).textContent())!)!;
+    return Number(m[1]) * 60 + Number(m[2]);
+  };
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+
+  // ↑ and ↓ select the previous or next segment and move the playhead to its start
+  await rows.nth(0).click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("ArrowDown");
+  const second = rows.nth(1);
+  await expect(second).toHaveAttribute("aria-current", "true");
+  await expect.poll(t).toBeCloseTo(await start(second), 2);
+  await page.keyboard.press("ArrowUp");
+  await expect(rows.nth(0)).toHaveAttribute("aria-current", "true");
+  // ← and → skip 2 seconds
+  const t0 = await t();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(t).toBeCloseTo(t0 + 2, 2);
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(t).toBeCloseTo(t0, 2);
+  // Space plays from the playhead and pauses; Shift+Space plays the selected segment to its end
+  await page.keyboard.press("Space");
+  await expect.poll(paused, { timeout: 15_000 }).toBe(false);
+  await page.keyboard.press("Space");
+  await expect.poll(paused).toBe(true);
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Shift+Space");
+  await expect.poll(paused, { timeout: 15_000 }).toBe(false);
+  await expect.poll(paused, { timeout: 15_000 }).toBe(true);
+  const m2 = /\d\d:\d\d\.\d{3}\s*(\d\d):(\d\d\.\d{3})/.exec((await second.locator("td").nth(2).textContent())!)!;
+  expect(await t()).toBeGreaterThanOrEqual(Number(m2[1]) * 60 + Number(m2[2]) - 0.01);
+
+  // Tab and Shift+Tab go to the next and previous segment to review
+  await page.keyboard.press("Tab");
+  await expect(current).toContainText("Needs review");
+  const first = await current.getAttribute("aria-label") ?? (await current.textContent());
+  await page.keyboard.press("Tab");
+  await expect(current).toContainText("Needs review");
+  await expect(current).not.toHaveText(first!);
+  await page.keyboard.press("Shift+Tab");
+  await expect(current).toHaveText(first!);
+  // Tab keeps its usual meaning in the header
+  await page.getByRole("combobox", { name: "File", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Previous file" })).toBeFocused();
+  await expect(current).toHaveText(first!);
+
+  // Enter edits the text: Esc cancels, Enter saves
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Enter");
+  const input = current.getByLabel(/^Transcript at /);
+  await expect(input).toBeFocused();
+  const text = await input.inputValue();
+  await page.keyboard.type(" (draft)");
+  await page.keyboard.press("Escape");
+  await expect(input).toHaveValue(text);
+  await expect(input).not.toBeFocused();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Checked.");
+  await page.keyboard.press("Enter");
+  await expect(input).toHaveValue(`${text} Checked.`);
+  // Ctrl+Enter confirms it and goes to the next segment to review
+  const edited = rows.filter({ has: page.locator(`input[value="${text} Checked."]`) });
+  await page.keyboard.press("Control+Enter");
+  await expect(edited).toContainText("Confirmed");
+  await expect(current).not.toHaveText(await edited.textContent() ?? "");
+
+  // S splits the segment under the playhead; V does nothing now
+  const n = await rows.count();
+  const bar = page.locator('[data-lane] span[title]').first();
+  await bar.click();
+  await page.keyboard.press("v");
+  await page.waitForTimeout(300);
+  await expect(rows).toHaveCount(n);
+  await page.keyboard.press("s");
+  await expect(rows).toHaveCount(n + 1);
+  // M merges it back with the next one, Delete deletes the selected segment, and Ctrl+Z and Ctrl+Y undo and redo
+  await page.keyboard.press("m");
+  await expect(rows).toHaveCount(n);
+  await page.keyboard.press("Delete");
+  await expect(rows).toHaveCount(n - 1);
+  await page.keyboard.press("Control+z");
+  await expect(rows).toHaveCount(n);
+  await page.keyboard.press("Control+y");
+  await expect(rows).toHaveCount(n - 1);
+  await page.keyboard.press("Control+Shift+z");
+  await page.keyboard.press("Control+z");
+  await expect(rows).toHaveCount(n);
+
+  // Esc clears the selected rows first, then the waveform selection
+  const boxes = page.getByLabel(/^Select segment at /);
+  await boxes.nth(0).click();
+  await boxes.nth(1).click();
+  const wave = (await page.locator("canvas").first().boundingBox())!;
+  await page.mouse.move(wave.x + wave.width * 0.6, wave.y + wave.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(wave.x + wave.width * 0.65, wave.y + wave.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const sel = page.getByRole("group", { name: "Waveform selection" });
+  await expect(sel).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("toolbar", { name: "Bulk actions" })).toHaveCount(0);
+  await expect(sel).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sel).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 

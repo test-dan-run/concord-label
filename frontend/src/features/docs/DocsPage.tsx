@@ -127,6 +127,12 @@ const SECTIONS: Section[] = [
           high-confidence</em> confirms every auto-accepted segment in the file at once.
         </p>
         <p className="m-0">
+          You can review a file from the keyboard. Tab goes to the next segment to review, which is a segment with low confidence or a spelling
+          hint. Enter opens its text in the editor, and Enter again saves it. Ctrl+Enter confirms the segment and goes to the next one to review.
+          Space plays or pauses from the playhead, Shift+Space plays the selected segment, and the arrow keys move the playhead. The table
+          under <em>Keyboard shortcuts</em> lists every key.
+        </p>
+        <p className="m-0">
           <em>Undo</em> and <em>Redo</em> above the timeline take back any change to the file's segments, one change at a time, and their
           tooltips name the change. Label keeps the last 200 changes for each file, and it keeps them when you leave the page. A pseudo-label run
           or an imported package clears the history of the files it changes.
@@ -138,7 +144,7 @@ const SECTIONS: Section[] = [
         </p>
         <p className="m-0">
           To listen to any stretch of the file, including a stretch that crosses speakers, drag across the waveform, and the stretch plays at
-          once. Space plays or pauses the stretch again, and Escape or a click on the waveform clears it. When you play a segment with its play
+          once. Shift+Space plays the stretch again, and Escape or a click on the waveform clears it. When you play a segment with its play
           button, a click anywhere else on the timeline stops it there.
         </p>
       </>
@@ -158,8 +164,8 @@ const SECTIONS: Section[] = [
           <li>To add a speaker that the diarisation model missed, use <em>Add speaker</em>. A file can have up to {MAX_SPEAKERS} speakers.</li>
         </ul>
         <p className="m-0">
-          To change a segment's speaker, click the speaker chip in the table to cycle through the speakers, or press a number from 1 to 8. To split a
-          segment at the playhead, press V, and to merge segments, press M.
+          To change a segment's speaker, click the speaker chip in the table to cycle through the speakers, or press a number from 1 to 8. To split the
+          segment under the playhead, press S, and to merge segments, press M. Delete deletes the selected segment, and Ctrl+Z undoes it.
         </p>
         <p className="m-0">
           For fine edits, you can zoom in on the timeline, down to a one-second window. Use the zoom buttons or the <kbd className={kbd}>=</kbd> and{" "}

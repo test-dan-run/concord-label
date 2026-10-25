@@ -42,21 +42,31 @@ export function statusLabel(s: Pick<Segment, "status" | "created">): string {
 
 /** Annotate's keyboard shortcuts: `short` for the strip under the segment table, `does` for the Docs page. */
 export const SHORTCUTS: { key: string; short: string; does: string }[] = [
-  { key: "Space", short: "play / pause", does: "Plays or pauses the stretch selected on the waveform, or the selected segment when no stretch is selected." },
-  { key: "Tab", short: "next low-confidence or spelling hint", does: "Moves to the next low-confidence segment or spelling hint." },
-  { key: "Alt+Enter", short: "use house spelling", does: "Uses the house spelling for the first spelling hint in the selected segment." },
-  { key: "1 to 8", short: "assign speaker", does: "Gives the selected segments to that speaker." },
-  { key: "V", short: "split at playhead", does: "Splits the selected segment at the playhead." },
-  { key: "M", short: "merge", does: "Merges the selected segments, or merges the selected segment with the next one." },
-  { key: "Enter", short: "confirm", does: "Confirms the selected segments." },
-  { key: "↑ ↓", short: "move", does: "Moves the selection to the previous or next segment." },
-  { key: "= and -", short: "zoom", does: "Zooms the timeline in or out around the playhead, and Ctrl with the scroll wheel zooms at the pointer." },
-  { key: "0", short: "whole file", does: "Shows the whole file on the timeline." },
+  { key: "Space", short: "play / pause", does: "Plays or pauses from the playhead." },
+  { key: "Shift+Space", short: "play selection", does: "Plays the stretch selected on the waveform, or else the selected segment." },
+  { key: "← and →", short: "skip 2 s", does: "Moves the playhead 2 seconds back or forward." },
+  { key: "↑ and ↓", short: "previous / next", does: "Selects the previous or next segment, and moves the playhead to its start." },
+  { key: "Tab and Shift+Tab", short: "next / previous to review", does: "Goes to the next or previous segment to review: one with low confidence, or one with a spelling hint." },
+  { key: "Enter", short: "edit text", does: "Starts editing the selected segment's text. In the editor, Enter saves, Esc cancels, and Tab saves and goes to the next segment to review." },
+  { key: "Ctrl+Enter", short: "confirm", does: "Confirms the selected segments and goes to the next segment to review. In the editor, it saves the text first." },
+  { key: "S", short: "split", does: "Splits the segment under the playhead at the playhead." },
+  { key: "M", short: "merge", does: "Merges the selected segments, or the selected segment with the next one." },
+  { key: "Delete", short: "delete", does: "Deletes the selected segment." },
   { key: "Ctrl+Z", short: "undo", does: "Undoes the last change to the file's segments." },
   { key: "Ctrl+Shift+Z and Ctrl+Y", short: "redo", does: "Redoes the last change that was undone." },
-  { key: "Esc", short: "clear selection", does: "Clears the selected rows and the waveform selection." },
+  { key: "Esc", short: "close / clear", does: "Closes the open menu, then the editor, then clears the selected rows, then the waveform selection." },
+  { key: "1 to 8", short: "assign speaker", does: "Gives the selected segments to that speaker." },
+  { key: "Alt+Enter", short: "use house spelling", does: "Uses the house spelling for the first spelling hint in the selected segment." },
+  { key: "= and -", short: "zoom", does: "Zooms the timeline in or out around the playhead, and Ctrl with the scroll wheel zooms at the pointer." },
+  { key: "0", short: "whole file", does: "Shows the whole file on the timeline." },
   { key: "Shift-click", short: "select range", does: "Selects a range of segments in the table." },
 ];
+
+/** The single keys in a SHORTCUTS entry, e.g. "Ctrl+Shift+Z and Ctrl+Y" -> ["Ctrl+Shift+Z", "Ctrl+Y"]. */
+export function shortcutKeys(key: string): string[] {
+  if (key === "1 to 8") return ["1", "2", "3", "4", "5", "6", "7", "8"];
+  return key.split(" and ");
+}
 
 /** Confidence colour (AeroAudio): >= high emerald, >= low amber, below rose, none slate. */
 export function confidenceColor(c: number | null | undefined, high = 0.85, low = 0.5): string {
@@ -117,15 +127,17 @@ export function overlapRegions(segs: Pick<Segment, "start" | "end" | "speaker" |
   return out;
 }
 
-/** "Tab": the next unreviewed segment below the auto-accept threshold after `fromId` (wraps). */
-/** The next segment after `fromId` (wrapping) that is unreviewed and below `high`, or that `also` picks
+/** "Tab" and "Shift+Tab": the next segment to review after `fromId`, or before it when `direction` is -1,
+ * wrapping around the file. A segment to review is unreviewed and below `high`, or one that `also` picks
  * (Annotate: a segment with a spelling hint). */
-export function nextLowConfidence(segs: Segment[], fromId: number | null, high = 0.85, also?: (s: Segment) => boolean): number | null {
+export function nextToReview(segs: Segment[], fromId: number | null, direction: 1 | -1 = 1, high = 0.85, also?: (s: Segment) => boolean): number | null {
   const want = (s: Segment) => (!s.reviewed && s.status !== "confirmed" && (s.confidence === null || s.confidence < high)) || !!also?.(s);
-  const k = fromId === null ? -1 : segs.findIndex((s) => s.id === fromId);
-  for (let i = 1; i <= segs.length; i++) {
-    const s = segs[(k + i) % segs.length];
-    if (s && want(s)) return s.id;
+  const n = segs.length;
+  const at = fromId === null ? -1 : segs.findIndex((s) => s.id === fromId);
+  const k = at >= 0 ? at : direction === 1 ? -1 : n;
+  for (let i = 1; i <= n; i++) {
+    const s = segs[(((k + direction * i) % n) + n) % n];
+    if (want(s)) return s.id;
   }
   return null;
 }

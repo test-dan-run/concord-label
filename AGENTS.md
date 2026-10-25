@@ -199,3 +199,6 @@ These changes came from the updated design canvas and from requests that followe
 - Annotate can undo and redo (ANNOTATE_PLAN.md phase 2). Migration `label_0008` added the `segment_edit`
   table, and `POST /label/files/{file_id}/undo` and `/redo` restore the segments with their old ids and
   uids.
+- Annotate's keys follow pseudolabel (ANNOTATE_PLAN.md phase 3), and HANDOFF.md §7 now lists them. S splits
+  the segment under the playhead, Enter edits the text, Ctrl+Enter confirms, Delete deletes, and Shift+Tab
+  goes back. The page takes Tab only on the page itself, the timeline and the segment list.

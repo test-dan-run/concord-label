@@ -78,7 +78,7 @@ export function Transport({
           size="sm"
           className="!min-h-9 !w-9 !px-0 rounded-full"
           aria-label={ctl.playing ? "Pause" : "Play"}
-          title={ctl.playing ? "Pause" : "Play from the playhead"}
+          title={ctl.playing ? "Pause (Space)" : "Play from the playhead (Space)"}
           onClick={() => (ctl.playing ? ctl.pause() : ctl.play(ctl.time >= duration - 0.05 ? 0 : ctl.time))}
         >
           {ctl.playing ? <I.Pause size={14} /> : <I.Play size={14} />}
