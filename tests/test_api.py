@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from pathlib import Path
 
 from concord_label.runs import jobs
 from conftest import GEN
@@ -36,6 +37,18 @@ def test_default_port_is_8620():
     from concord_label.core.settings import Settings
 
     assert Settings(_env_file=None).concord_port == 8620
+
+
+def test_a_blank_path_in_env_is_unset(tmp_path, monkeypatch):
+    from concord_label.core.settings import Settings
+
+    env = tmp_path / ".env"
+    env.write_text("DATASET_STORE=   \nRECORD_DIR=\nAICORE_ENDPOINTS=\nREPLAY_DIR=~/rec\n")
+    for var in ("DATASET_STORE", "RECORD_DIR", "AICORE_ENDPOINTS", "REPLAY_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    s = Settings(_env_file=env)
+    assert s.dataset_store is None and s.record_dir is None and s.aicore_endpoints is None
+    assert s.replay_dir == Path("~/rec").expanduser()
 
 
 def test_no_benchmark_or_improve_routes(client):

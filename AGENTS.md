@@ -96,6 +96,8 @@ Bench's copies don't have these recent Label changes yet:
   listeners attach even when the element renders after the page loads its data.
 - `Timeline`: the optional `selection` and `onSelection` props, and the exported `LABEL_W`.
 - Models page: the groups by capability.
+- `core/settings.py`: a blank `AICORE_ENDPOINTS`, `REPLAY_DIR` or `RECORD_DIR` in `.env` means unset. Bench
+  does this for `DATASET_STORE` only, so a blank `RECORD_DIR=` there still records into the current folder.
 
 The Dataset Catalog work (the platform's DATASET_CATALOG_PLAN.md, milestones D4 to D6) changed some shared
 modules in both apps, and each app made its own version of the change. These modules now differ on

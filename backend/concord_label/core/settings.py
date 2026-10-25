@@ -6,7 +6,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP = "concord-label"
@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     dataset_store: Path | None = None
     # Built frontend served by FastAPI; absent in development (Vite serves it).
     frontend_dist: Path = Field(default=REPO_ROOT / "frontend" / "dist")
+
+    # A blank value in .env (`DATASET_STORE=`) means unset, not the current folder.
+    @field_validator("aicore_endpoints", "replay_dir", "record_dir", "dataset_store", mode="before")
+    @classmethod
+    def _empty_is_unset(cls, v: object) -> object:
+        if isinstance(v, str):
+            return Path(v.strip()).expanduser() if v.strip() else None
+        return v
 
     @property
     def catalog_root(self) -> str:
