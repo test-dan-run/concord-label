@@ -16,8 +16,8 @@ one model is leased at a time:
 Before a stage takes its lease, its outputs are looked up in batches (runs/cache.py): Label's own rows,
 then the catalog's output index, where outputs Concord Bench already made are read from Bench and copied
 here. A stage with nothing missing takes no lease ("Re-fuse 4 saved outputs"). The rest is sent several
-calls at a time (`in_flight`: the catalog's batch recommendation for the model), so the model's server or
-vLLM batches them; worker threads only make the calls, and the outputs are stored on the session's thread.
+calls at a time (`in_flight`: as many as the model's server batches at once, from the catalog), so the
+server or vLLM batches them; worker threads only make the calls, and the outputs are stored on the session's thread.
 Outputs are committed per file, and the finished calls of a failed stage too, so a failed or interrupted
 run that is retried skips what it already did. With `skip_failed`, a cut an ASR member's server answers
 with an error is skipped: fusion goes on without that member's text for the cut, `summary.skipped` lists
@@ -47,7 +47,7 @@ from typing import Any
 import httpx
 import numpy as np
 from aicore.batching import DEFAULT as DEFAULT_BATCH
-from aicore.batching import batch_size
+from aicore.batching import MAX as MAX_IN_FLIGHT
 from aicore.catalog import CatalogError
 from aicore.catalog import span as index_span
 from sqlalchemy import select
@@ -72,7 +72,6 @@ Check = Callable[[], None]  # raises when the run should stop
 OVERLAP_DROP = 0.5  # a new segment overlapping reviewed work by more than this share of itself is dropped
 MIN_ASR_SPAN = 0.05
 SEG_SHARE = 0.3  # progress: stage 1 is the first 30 %, stage 2 runs to 90 %, fusion the rest
-MAX_IN_FLIGHT = 32  # calls a stage keeps open at most; the servers would only queue more
 SKIP_MIN, SKIP_SHARE = 10, 0.05  # a member skipping more cuts than both fails the run (`skip_failed`)
 
 
@@ -276,8 +275,8 @@ def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple
         total = sum(len(ks) for _, ks in todo)
         log(f"{what}: {len(keys) - total} of {len(keys)} outputs saved, {total} to run on {len(todo)} file(s)")
         todo_s = sum(key_audio_s(f, k) for f, ks in todo for k in ks)
-        n = in_flight(model, todo_s / total)
-        log(f"{what}: {n} call(s) at a time")
+        n, why = in_flight(model, todo_s / total)
+        log(f"{what}: {n} call(s) at a time ({why})")
         if eta:
             eta.start(model.catalog_id, total, todo_s)
         calls = iter([(f, k) for f, ks in todo for k in ks])
@@ -339,14 +338,37 @@ def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple
     return found, ran
 
 
-def in_flight(model: Model, item_s: float) -> int:
-    """How many calls a stage keeps open, so that the server batches them: the catalog's batch for items of
-    `item_s` seconds (aicore's default without one), at most MAX_IN_FLIGHT."""
+def in_flight(model: Model, item_s: float) -> tuple[int, str]:
+    """How many calls a stage keeps open, and why: as many as the model's server batches at once, so each batch
+    is full. That is the catalog's batch limit for the model (`limits.max_batch`: a person's override, else the
+    measured one), and at most the batch that fits in GPU memory for items of `item_s` seconds
+    (`recommendation`). vLLM models are profiled in tokens, so they are asked about items of their longest
+    request (`max_model_len`). A hosted model gets the gateway's `max_concurrency`. Without any of these,
+    aicore's default; never more than aicore's MAX."""
+    hosted = ((_record(model) or {}).get("hosted") or {}).get("max_concurrency")
+    if hosted:
+        return max(1, min(MAX_IN_FLIGHT, int(hosted))), "the hosted model's concurrency limit"
     try:
-        n = batch_size(model.catalog_id, item_s=item_s, catalog=catalog.get_catalog())
+        cat = catalog.get_catalog()
+        info = cat.batch(model.catalog_id, item_s=item_s) or {}
+        prof = info.get("profile") or {}
+        if prof.get("kind") == "kv" and prof.get("max_model_len"):
+            info = cat.batch(model.catalog_id, item_tokens=int(prof["max_model_len"])) or {}
     except Exception:  # noqa: BLE001 - a batch size is never worth failing a run over
-        n = DEFAULT_BATCH
-    return max(1, min(MAX_IN_FLIGHT, n))
+        info = {}
+    limits = info.get("limits") or {}
+    sizes: dict[str, int] = {}
+    if limits.get("max_batch"):
+        source = (limits.get("source") or {}).get("max_batch")
+        sizes["the server's batch limit" + (f", {source}" if source else "")] = int(limits["max_batch"])
+    if (info.get("recommendation") or {}).get("batch"):
+        sizes["the batch that fits in GPU memory"] = int(info["recommendation"]["batch"])
+    if not sizes:
+        return DEFAULT_BATCH, "no batch profile or limit: aicore's default"
+    why, n = min(sizes.items(), key=lambda kv: kv[1])
+    if n > MAX_IN_FLIGHT:
+        return MAX_IN_FLIGHT, f"Label's cap; {why} is {n}"
+    return max(1, n), why
 
 
 def answered_with_error(exc: Exception) -> bool:
