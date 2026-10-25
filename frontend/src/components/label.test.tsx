@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Segment } from "../lib/api";
-import { confidenceColor, cycleSpeaker, labelButton, nextLowConfidence, overlapRegions, segmentAt, selectRange } from "../lib/label";
+import { confidenceColor, cycleSpeaker, labelButton, nextLowConfidence, overlapRegions, playingSegment, segmentAt, selectRange } from "../lib/label";
 import { C } from "../lib/colors";
 
 function seg(id: number, over: Partial<Segment> = {}): Segment {
@@ -87,5 +87,18 @@ describe("segmentAt", () => {
   it("falls back to the nearest segment", () => {
     expect(segmentAt(segs, 7)).toBe(4);
     expect(segmentAt([], 1)).toBeNull();
+  });
+});
+
+describe("playingSegment", () => {
+  const segs = [seg(1, { start: 0, end: 2 }), seg(2, { start: 1.5, end: 3 }), seg(3, { start: 4, end: 5, status: "rejected" })];
+  it("finds the segment that holds the playhead, the later one where two overlap", () => {
+    expect(playingSegment(segs, 0.5)).toBe(1);
+    expect(playingSegment(segs, 1.8)).toBe(2);
+    expect(playingSegment(segs, 2)).toBe(2); // a segment ends where the next part begins
+  });
+  it("leaves out rejected segments and gaps", () => {
+    expect(playingSegment(segs, 3.5)).toBeNull();
+    expect(playingSegment(segs, 4.5)).toBeNull();
   });
 });

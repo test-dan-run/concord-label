@@ -54,6 +54,8 @@ export function SpeakerLanes(props: {
   lanes: Lane[];
   segs: LaneSeg[];
   currentId: number | null;
+  /** The segment under the playhead, outlined unless it is also the selected one. */
+  playingId?: number | null;
   time: number;
   overlaps: Span[];
   flags: Span[];
@@ -66,7 +68,7 @@ export function SpeakerLanes(props: {
   onCommit: (id: number, edit: LaneEdit) => Promise<unknown>;
   onCreate: (edit: LaneEdit) => void;
 }) {
-  const { duration, view, selection, lanes, segs, currentId, time, overlaps, flags, note, canAdd, onAddSpeaker } = props;
+  const { duration, view, selection, lanes, segs, currentId, playingId, time, overlaps, flags, note, canAdd, onAddSpeaker } = props;
   const latest = useRef(props);
   latest.current = props;
   const laneEls = useRef(new Map<string, HTMLDivElement>());
@@ -260,18 +262,20 @@ export function SpeakerLanes(props: {
               ))}
               {bars.map((s) => {
                 const sel = s.id === currentId;
+                const playing = !sel && s.id === playingId;
                 return (
                   <span
                     key={s.id}
                     title={`${lane.label} ${span(s)}${s.created ? " · drawn by hand" : ""}`}
                     onPointerDown={(e) => barDown(e, s, "move")}
+                    data-playing={playing || undefined}
                     className={cx("group absolute top-0.5 bottom-0.5 rounded-sm cursor-grab touch-none", sel && "z-[1]")}
                     style={{
                       left: pct(s.start, view),
                       width: `max(2px, ${len(s.end - s.start, view)})`,
                       background: lane.color,
                       backgroundImage: s.created ? STRIPES : undefined,
-                      boxShadow: sel ? "0 0 0 2px var(--color-fg)" : undefined,
+                      boxShadow: sel ? "0 0 0 2px var(--color-fg)" : playing ? "0 0 0 2px var(--color-focus)" : undefined,
                     }}
                   >
                     {(["start", "end"] as const).map((edge) => (

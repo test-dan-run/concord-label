@@ -12,15 +12,16 @@ import { api, qs, type AnnotateView, type LabelFile, type SegStatus, type Segmen
 import { houseSpelled, Matcher, norm, type ActiveLexicon, type Hint } from "../../lib/lexicon";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS, STATUS_TONE, statusLabel } from "../../lib/label";
-import { AudioPlayer, PlayFrom, useAudio } from "../../components/AudioPlayer";
+import { confidenceColor, cycleSpeaker, nextLowConfidence, overlapRegions, playingSegment, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS, STATUS_TONE, statusLabel } from "../../lib/label";
+import { PlayFrom, useAudio } from "../../components/AudioPlayer";
 import { Timeline } from "../../components/Timeline";
 import * as I from "../../components/icons";
 import { Button, Chip, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 import { Crumbs, DatasetChooser, LabelTabs } from "./common";
 import { MAX_SPEAKERS, nextSpeakerName } from "./laneDrag";
 import { SpeakerLanes, type Lane, type LaneEdit } from "./SpeakerLanes";
-import { Overview, useWheelZoom, ZoomBar } from "./TimelineZoom";
+import { Overview, useWheelZoom } from "./TimelineZoom";
+import { Transport } from "./Transport";
 import { fit, follow, reveal, STEP, zoomAt, type Window } from "./zoom";
 
 type Show = "all" | SegStatus;
@@ -181,6 +182,7 @@ function Annotator({
   const [anchor, setAnchor] = useState<number | null>(null);
   const [show, setShow] = useState<Show>(initialShow);
   const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
+  const listBox = useRef<HTMLDivElement>(null);
 
   const v = q.data;
   const segs = useMemo(() => v?.segments ?? [], [v]);
@@ -242,6 +244,19 @@ function Annotator({
   useEffect(() => {
     if (cur !== null) rowRefs.current.get(cur)?.scrollIntoView({ block: "nearest" });
   }, [cur]);
+  // The segment under the playhead, highlighted on the lanes and in the list; during playback the list
+  // scrolls just enough to keep its row in sight (the list alone, so the page stays where it is).
+  const playingId = useMemo(() => playingSegment(segs, ctl.time), [segs, ctl.time]);
+  useEffect(() => {
+    const row = playingId !== null ? rowRefs.current.get(playingId) : undefined;
+    const box = listBox.current;
+    if (!ctl.playing || !row || !box) return;
+    const r = row.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    const head = box.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+    if (r.top < b.top + head) box.scrollTop -= b.top + head - r.top;
+    else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
+  }, [ctl.playing, playingId]);
 
   const targets = useCallback((): number[] => (sel.size ? [...sel] : cur !== null ? [cur] : []), [sel, cur]);
   const speakerForKey = (k: number) => speakers[k - 1] ?? `spk${k - 1}`;
@@ -320,8 +335,16 @@ function Annotator({
         if (n) setCur(n.id);
       }
     };
+    // Space plays and pauses, so its keyup must not also press the button or tick the box that has the focus.
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === " " && !isTyping(e)) e.preventDefault();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, [ctl, current, segs, visible, cur, high, targets, splitAtPlayhead, mergeSel, confirm, speakers, hints, hasHint, applyHint, zoomAround, setView, duration, range]);
 
   if (q.isLoading || !v) return <Spinner />;
@@ -374,13 +397,17 @@ function Annotator({
       </div>
       <ErrorNote error={m.error} />
       <Panel>
-        <AudioPlayer ctl={ctl} start={0} end={v.file.duration} label="Play file" />
-        <div className="flex flex-wrap items-center gap-3">
-          <RangeBar range={range} ctl={ctl} onClear={() => setRange(null)} />
-          <div className="ml-auto">
-            <ZoomBar view={view} duration={duration} anchor={ctl.time >= view.t0 && ctl.time <= view.t1 ? ctl.time : (view.t0 + view.t1) / 2} onView={(w) => setView(() => w)} />
-          </div>
-        </div>
+        <Transport
+          ctl={ctl}
+          duration={duration}
+          range={range}
+          onClearRange={() => setRange(null)}
+          view={view}
+          onView={(w) => setView(() => w)}
+          split={{ onClick: splitAtPlayhead, disabled: !current, title: "Split the selected segment at the playhead (V)" }}
+          merge={{ onClick: mergeSel, disabled: sel.size < 2 && (cur === null || nextId(cur) === null), title: "Merge the selected segments, or the selected segment with the next one (M)" }}
+          remove={{ onClick: () => current && m.remove.mutate(current.id), disabled: !current, title: "Delete the selected segment" }}
+        />
         <div ref={timelineBox}>
         <Timeline
           fileId={fileId}
@@ -406,6 +433,7 @@ function Annotator({
           lanes={lanes}
           segs={live}
           currentId={cur}
+          playingId={playingId}
           time={ctl.time}
           overlaps={overlapRegions(segs)}
           flags={segs.filter((s) => s.flagged)}
@@ -460,7 +488,7 @@ function Annotator({
           )}
           {visible.length === 0 && <Empty>No segments {show === "all" ? "in this file" : `with status “${STATUS_LABELS[show as SegStatus]}”`}.</Empty>}
           {visible.length > 0 && (
-            <div className="overflow-auto scroll-thin max-h-[60vh] border border-track rounded-md">
+            <div ref={listBox} className="overflow-auto scroll-thin max-h-[60vh] border border-track rounded-md">
               <table className="w-full border-collapse text-[13px]" style={{ minWidth: 720 }}>
                 <thead className="sticky top-0 z-10 bg-panel">
                   <tr className="text-[11px] text-muted uppercase tracking-wider text-left">
@@ -491,6 +519,7 @@ function Annotator({
                         else rowRefs.current.delete(s.id);
                       }}
                       current={s.id === cur}
+                      playing={s.id === playingId}
                       checked={sel.has(s.id)}
                       color={s.speaker ? colors[s.speaker] ?? C.subtle : C.subtle}
                       high={high}
@@ -521,30 +550,10 @@ function Annotator({
           ctl={ctl}
           onUse={(text) => current && m.patch.mutate({ id: current.id, text })}
           onFlag={() => current && m.patch.mutate({ id: current.id, flagged: !current.flagged })}
-          onSplit={splitAtPlayhead}
-          onDelete={() => current && m.remove.mutate(current.id)}
           onLive={() => navigate(`/label/live/${datasetId}`)}
         />
       </div>
     </>
-  );
-}
-
-/** Above the timeline: the stretch pulled out on the waveform, to play again or clear; a hint without one. */
-function RangeBar({ range, ctl, onClear }: { range: Window | null; ctl: ReturnType<typeof useAudio>; onClear: () => void }) {
-  if (!range) return <span className="text-xs text-subtle">Drag across the waveform to play a stretch of the file.</span>;
-  const inside = ctl.time >= range.t0 && ctl.time < range.t1 - 0.05;
-  return (
-    <span role="group" aria-label="Waveform selection" className="flex flex-wrap items-center gap-2 text-xs text-muted">
-      Selection
-      <span className="num text-fg">{clock(range.t0)} – {clock(range.t1)} · {(range.t1 - range.t0).toFixed(2)} s</span>
-      <Button size="sm" aria-label={ctl.playing && inside ? "Pause selection" : "Play selection"} onClick={() => (ctl.playing && inside ? ctl.pause() : ctl.play(inside ? ctl.time : range.t0, range.t1))}>
-        {ctl.playing && inside ? <I.Pause size={12} /> : <I.Play size={12} />}
-      </Button>
-      <Button size="sm" variant="ghost" aria-label="Clear selection" onClick={onClear}>
-        <I.X size={12} />
-      </Button>
-    </span>
   );
 }
 
@@ -610,6 +619,7 @@ function SegmentRow({
   s,
   rowRef,
   current,
+  playing,
   checked,
   color,
   high,
@@ -628,6 +638,8 @@ function SegmentRow({
   s: Segment;
   rowRef: (el: HTMLTableRowElement | null) => void;
   current: boolean;
+  /** Under the playhead. */
+  playing: boolean;
   checked: boolean;
   color: string;
   high: number;
@@ -663,8 +675,8 @@ function SegmentRow({
     }
   };
   return (
-    <tr ref={rowRef} onClick={onFocus} aria-current={current || undefined} className={cx("border-b border-track", current ? "bg-active" : "hover:bg-track/60", s.status === "rejected" && "opacity-60")}>
-      <td className="px-2 py-1.5">
+    <tr ref={rowRef} onClick={onFocus} aria-current={current || undefined} data-playing={playing || undefined} className={cx("border-b border-track", current ? "bg-active" : playing ? "bg-focus/10" : "hover:bg-track/60", s.status === "rejected" && "opacity-60")}>
+      <td className={cx("px-2 py-1.5", playing && "shadow-[inset_3px_0_0_var(--color-focus)]")}>
         <input
           type="checkbox"
           aria-label={`Select segment at ${clock(s.start)}`}
@@ -784,7 +796,7 @@ function SegmentRow({
   );
 }
 
-function SidePanel({ s, ctl, onUse, onFlag, onSplit, onDelete, onLive }: { s: Segment | null; ctl: ReturnType<typeof useAudio>; onUse: (t: string) => void; onFlag: () => void; onSplit: () => void; onDelete: () => void; onLive: () => void }) {
+function SidePanel({ s, ctl, onUse, onFlag, onLive }: { s: Segment | null; ctl: ReturnType<typeof useAudio>; onUse: (t: string) => void; onFlag: () => void; onLive: () => void }) {
   if (!s) return <Panel title="Segment"><span className="text-[13px] text-muted">Select a segment.</span></Panel>;
   return (
     <Panel title="Segment" subtitle={<span className="num">{clock(s.start)} – {clock(s.end)} · {(s.end - s.start).toFixed(2)} s</span>}>
@@ -809,9 +821,7 @@ function SidePanel({ s, ctl, onUse, onFlag, onSplit, onDelete, onLive }: { s: Se
       </div>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" onClick={() => ctl.play(s.start, s.end)}><I.Play size={11} /> Play</Button>
-        <Button size="sm" onClick={onSplit} title="Split at the playhead (V)">Split at playhead</Button>
         <Button size="sm" variant={s.flagged ? "danger" : "outline"} onClick={onFlag} aria-pressed={s.flagged}><I.Flag size={12} /> {s.flagged ? "Unflag" : "Flag"}</Button>
-        <Button size="sm" variant="ghost" onClick={onDelete}>Delete</Button>
       </div>
       <span className="text-xs text-muted">
         {s.reviewed ? "Reviewed: pseudo-labelling will not replace this segment." : "Not reviewed yet: a new pseudo-label run may replace it."}

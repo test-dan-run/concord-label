@@ -94,6 +94,9 @@ Bench's copies don't have these recent Label changes yet:
 
 - `AudioPlayer`: `useAudio` takes the `<audio>` element through a callback ref, so its play and pause
   listeners attach even when the element renders after the page loads its data.
+- `AudioPlayer`: `useAudio` has `skip(seconds)`, and a seek ends the playback of a span, so a segment
+  started with its play button stops when you click somewhere else. Annotate renders its own `<audio>` in
+  `features/label/Transport.tsx` and no longer uses `<AudioPlayer>`.
 - `Timeline`: the optional `selection` and `onSelection` props, and the exported `LABEL_W`.
 - Models page: the groups by capability.
 - `JobPill` and `StatusDot`: the `cancelling` and `cancelled` states, and `jobStatusText` says "cancelling".
@@ -185,3 +188,7 @@ These changes came from the updated design canvas and from requests that followe
 - Contract version 3 replaced "Send to Bench" with Publish to Dataset Catalog. Without the catalog, the
   panel builds a reference package to download. Earlier sends stay in the history. Flags, "Open in
   Label" and the locked score find a dataset by its `catalog_dataset_id`.
+- Annotate follows the owner's earlier app, pseudolabel ([docs/ANNOTATE_PLAN.md](docs/ANNOTATE_PLAN.md),
+  phase 1). A transport row above the timeline holds play and pause, the clock, a speed menu, the zoom, and
+  Split, Merge and Delete. A plain mouse wheel over the timeline pans it, and the segment under the playhead
+  is highlighted on the lanes and in the list.

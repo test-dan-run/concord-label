@@ -115,7 +115,9 @@ can edit segments on the speaker lanes under the waveform:
 - Drag across empty space in a lane to draw a segment, and use Add speaker to add lanes, up to 8
   speakers.
 
-You can zoom the timeline down to a one-second window, and you can drag across the waveform to play any
+The player above the timeline plays the file from the playhead at a speed from 0.5× to 2×, and the
+segment under the playhead stands out on the lanes and in the table. You can zoom the timeline down to a
+one-second window, and the mouse wheel moves along the file. You can drag across the waveform to play any
 stretch of the file, including a stretch that crosses speakers. In the segment table, you edit
 transcripts, change speakers, merge and split segments, and confirm segments one at a time or in bulk.
 

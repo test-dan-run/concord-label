@@ -127,8 +127,14 @@ const SECTIONS: Section[] = [
           high-confidence</em> confirms every auto-accepted segment in the file at once.
         </p>
         <p className="m-0">
+          The row above the waveform holds the player. It plays the file from the playhead, shows the time, and sets the speed from 0.5× to 2×.
+          Label remembers the speed in your browser for the next file. While the file plays, the segment under the playhead has a blue outline
+          on the speaker lanes and a blue edge in the table, and the table scrolls to keep it in view.
+        </p>
+        <p className="m-0">
           To listen to any stretch of the file, including a stretch that crosses speakers, drag across the waveform, and the stretch plays at
-          once. Space plays or pauses the stretch again, and Escape or a click on the waveform clears it.
+          once. Space plays or pauses the stretch again, and Escape or a click on the waveform clears it. When you play a segment with its play
+          button, a click anywhere else on the timeline stops it there.
         </p>
       </>
     ),
@@ -152,8 +158,8 @@ const SECTIONS: Section[] = [
         </p>
         <p className="m-0">
           For fine edits, you can zoom in on the timeline, down to a one-second window. Use the zoom buttons or the <kbd className={kbd}>=</kbd> and{" "}
-          <kbd className={kbd}>-</kbd> keys, or hold Ctrl (⌘ on a Mac) and scroll to zoom where the pointer is. To move along the file, hold Shift and
-          scroll, or drag the window on the overview strip, and press <kbd className={kbd}>0</kbd> to see the whole file again. The view follows
+          <kbd className={kbd}>-</kbd> keys, or hold Ctrl (⌘ on a Mac) and scroll to zoom where the pointer is. To move along the file, scroll with the
+          pointer over the timeline, or drag the window on the overview strip, and press <kbd className={kbd}>0</kbd> to see the whole file again. The view follows
           playback and the segment you select.
         </p>
       </>

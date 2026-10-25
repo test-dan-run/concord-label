@@ -128,6 +128,16 @@ export function nextLowConfidence(segs: Segment[], fromId: number | null, high =
   return null;
 }
 
+/** The segment playing at time `t` (Annotate highlights it): one that holds `t`, not rejected, the latest
+ * start when segments overlap; null between segments. */
+export function playingSegment(segs: Pick<Segment, "id" | "start" | "end" | "status">[], t: number): number | null {
+  let best: Pick<Segment, "id" | "start"> | null = null;
+  for (const s of segs) {
+    if (s.status !== "rejected" && s.start <= t && t < s.end && (!best || s.start >= best.start)) best = s;
+  }
+  return best?.id ?? null;
+}
+
 /** The segment at time `t` (a link from Concord Bench): one that contains `t` (not rejected first, then the
  * latest start), else the nearest one. */
 export function segmentAt(segs: Segment[], t: number): number | null {

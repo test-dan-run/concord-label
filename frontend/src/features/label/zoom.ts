@@ -62,3 +62,12 @@ export function reveal(w: Window, start: number, end: number, duration: number):
 export function isFit(w: Window, duration: number): boolean {
   return w.t0 <= 1e-6 && w.t1 >= duration - 1e-6;
 }
+
+/** A wheel turn over the timeline. With `zoom` (Ctrl or ⌘, or a trackpad pinch) it zooms at `frac` of the
+ * way across the lanes; otherwise it pans by the larger of the two deltas, where `width` pixels is the whole
+ * window. Deltas are in pixels. */
+export function wheeled(w: Window, wheel: { dx: number; dy: number; zoom: boolean }, frac: number, width: number, duration: number): Window {
+  if (wheel.zoom) return zoomAt(w, Math.exp(-wheel.dy * 0.002), w.t0 + frac * span(w), duration);
+  const d = Math.abs(wheel.dx) > Math.abs(wheel.dy) ? wheel.dx : wheel.dy;
+  return pan(w, (d / Math.max(1, width)) * span(w), duration);
+}

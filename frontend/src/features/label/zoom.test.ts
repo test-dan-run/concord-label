@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centreOn, clampWindow, fit, follow, isFit, MIN_SPAN, pan, reveal, zoomAt } from "./zoom";
+import { centreOn, clampWindow, fit, follow, isFit, MIN_SPAN, pan, reveal, wheeled, zoomAt } from "./zoom";
 
 const D = 100;
 
@@ -44,5 +44,23 @@ describe("timeline zoom", () => {
   it("knows when the whole file shows", () => {
     expect(isFit(fit(D), D)).toBe(true);
     expect(isFit({ t0: 0, t1: 50 }, D)).toBe(false);
+  });
+});
+
+describe("wheel on the timeline", () => {
+  const w = { t0: 20, t1: 30 };
+  it("a plain vertical wheel pans, a page of pixels being the whole window", () => {
+    expect(wheeled(w, { dx: 0, dy: 400, zoom: false }, 0.5, 800, D)).toEqual({ t0: 25, t1: 35 });
+    expect(wheeled(w, { dx: 0, dy: -800, zoom: false }, 0.5, 800, D)).toEqual({ t0: 10, t1: 20 });
+  });
+  it("a sideways scroll pans by its own delta, and the window stays inside the file", () => {
+    expect(wheeled(w, { dx: 160, dy: 10, zoom: false }, 0.5, 800, D)).toEqual({ t0: 22, t1: 32 });
+    expect(wheeled(w, { dx: 0, dy: -8000, zoom: false }, 0.5, 800, D)).toEqual({ t0: 0, t1: 10 });
+    expect(wheeled(fit(D), { dx: 0, dy: 400, zoom: false }, 0.5, 800, D)).toEqual(fit(D));
+  });
+  it("with Ctrl it zooms at the pointer instead", () => {
+    const z = wheeled(w, { dx: 0, dy: -400, zoom: true }, 0.2, 800, D);
+    expect(z.t1 - z.t0).toBeLessThan(10);
+    expect((22 - z.t0) / (z.t1 - z.t0)).toBeCloseTo(0.2, 6); // 22 s stays a fifth of the way across
   });
 });

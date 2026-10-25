@@ -286,6 +286,48 @@ test("annotate: zoom the timeline for fine edits", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("annotate: the transport's speed, a wheel pan, and a click that ends a segment's playback", async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto("/label");
+  await page.getByRole("row", { name: /Unlabelled calls/ }).getByRole("link", { name: /Review|Confirm|Check/ }).click();
+  await page.getByRole("combobox", { name: "File", exact: true }).selectOption({ index: 4 });
+  await expect(page.getByRole("heading", { name: "d05_clipped" })).toBeVisible();
+  const audio = page.locator("audio").first();
+  // the speed applies at once and carries over to the next page load
+  await page.getByLabel("Playback speed").selectOption("1.5");
+  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.playbackRate)).toBe(1.5);
+  await page.reload();
+  await expect(page.getByLabel("Playback speed")).toHaveValue("1.5");
+  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.playbackRate)).toBe(1.5);
+  await page.getByLabel("Playback speed").selectOption("1");
+
+  // zoomed in, a plain wheel over the lanes pans the timeline and leaves the page where it was
+  const zoom = page.getByRole("group", { name: "Timeline zoom" });
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("=");
+  await page.keyboard.press("=");
+  await expect(zoom).toContainText("00:00.000 – ");
+  const lane = (await page.locator('[data-lane="spk0"]').boundingBox())!;
+  const scrollY = await page.evaluate(() => window.scrollY);
+  await page.mouse.move(lane.x + lane.width / 2, lane.y + lane.height / 2);
+  await page.mouse.wheel(0, 300);
+  await expect(zoom).not.toContainText("00:00.000 – ");
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
+  await page.keyboard.press("0");
+
+  // a segment started with its play button stops when you click somewhere else on the waveform
+  const paused = () => audio.evaluate((a: HTMLAudioElement) => a.paused);
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  await page.getByRole("button", { name: /^Play segment at / }).nth(1).click();
+  await expect.poll(paused, { timeout: 15_000 }).toBe(false);
+  await expect(page.locator("tbody tr[data-playing]")).toHaveCount(1);
+  const wave = (await page.locator("canvas").first().boundingBox())!;
+  await page.mouse.click(wave.x + wave.width * 0.9, wave.y + wave.height / 2);
+  await expect.poll(paused).toBe(true);
+  expect(await audio.evaluate((a: HTMLAudioElement) => a.currentTime)).toBeGreaterThan(30);
+  expect(errors).toEqual([]);
+});
+
 test("lexicons: publish house spellings, then use or keep them in Annotate", async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto("/lexicons");
