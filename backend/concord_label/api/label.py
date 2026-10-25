@@ -92,6 +92,7 @@ class LabelRunIn(BaseModel):
     single_model_id: int | str | None = None
     high: float = Field(default=fusion.DEFAULT_HIGH, ge=0, le=1)
     low: float = Field(default=fusion.DEFAULT_LOW, ge=0, le=1)
+    skip_failed: bool = True  # skip a cut an ASR model's server answers with an error (label/pseudo.py)
 
 
 @router.post("/datasets/{dataset_id}/runs", status_code=202)
@@ -123,7 +124,7 @@ def start_label_run(dataset_id: int, body: LabelRunIn, session: Session = Depend
               params={"tasks": tasks, "seg_model_id": seg.id, "asr_model_ids": [m.id for m in asr],
                       "models": {str(m.id): m.catalog_id for m in [seg, *asr]},
                       "strategy": body.strategy, "single_model_id": single.id if single else None,
-                      "high": body.high, "low": body.low,
+                      "high": body.high, "low": body.low, "skip_failed": body.skip_failed,
                       "preview": {"saved_members": pv["saved_members"], "bench_members": pv["bench_members"],
                                   "new_members": pv["new_members"], "plan": pv["plan"],
                                   "states": {x["service"]: x["state"] for x in [pv["seg"], *pv["members"]]}}})

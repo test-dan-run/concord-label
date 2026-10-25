@@ -60,6 +60,7 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
   const [singleId, setSingleId] = useState<string | null>(null);
   const [high, setHigh] = useState(0.85);
   const [low, setLow] = useState(0.5);
+  const [skipFailed, setSkipFailed] = useState(true);
 
   // Defaults once models load: the first diariser, every ASR model; the last run's settings when there is one.
   const lastParams = results.data?.run?.params as Record<string, unknown> | undefined;
@@ -75,6 +76,7 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
       setSingleId(lastParams.single_model_id ? cid(lastParams.single_model_id) : null);
       setHigh((lastParams.high as number) ?? 0.85);
       setLow((lastParams.low as number) ?? 0.5);
+      setSkipFailed((lastParams.skip_failed as boolean | undefined) ?? true);
       return;
     }
     const diar = segModels.find((m) => m.capabilities.includes("diar")) ?? segModels[0];
@@ -100,6 +102,7 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
         single_model_id: strategy === "single" ? singleId : null,
         high,
         low,
+        skip_failed: skipFailed,
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["label-results", datasetId] });
@@ -240,6 +243,18 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
               <span className="text-xs text-muted">Auto-accepted labels never become references unless you confirm them.</span>
             </fieldset>
           )}
+          {wantAsr && (
+            <fieldset className="border-0 p-0 m-0 flex flex-col gap-2">
+              <legend className="text-[11px] text-muted uppercase tracking-wider mb-1.5">Model errors</legend>
+              <label className="flex items-start gap-2 text-[13px]">
+                <input type="checkbox" checked={skipFailed} onChange={(e) => setSkipFailed(e.target.checked)} className="mt-1" />
+                <span>
+                  Skip a segment when an ASR model fails on it
+                  <span className="block text-xs text-muted">The other models still transcribe it, and a retry tries it again. Without this, the run stops at the first error.</span>
+                </span>
+              </label>
+            </fieldset>
+          )}
           {problems.length > 0 && <ul className="m-0 pl-4 text-xs text-warn">{problems.map((p) => <li key={p}>{p}</li>)}</ul>}
           <ErrorNote error={start.error} />
           <div className="flex flex-wrap items-center gap-3">
@@ -348,6 +363,22 @@ function Results({ r, running, loading, onCancel, cancelError }: { r?: LabelResu
               <Fact k="Earlier pseudo-labels replaced" v={num(s.replaced)} />
               {Object.entries(s.strategy_applied).map(([k, v]) => <Fact key={k} k={`Fused with ${k.replace("_", "-")}`} v={num(v)} />)}
             </div>
+            {!!s.skipped?.length && (
+              <details className="text-[13px]">
+                <summary className="cursor-pointer text-warn">
+                  {num(s.skipped.length)} segment{s.skipped.length === 1 ? "" : "s"} skipped after a model error
+                </summary>
+                <ul className="m-0 mt-2 p-0 list-none flex flex-col gap-1.5 max-h-[240px] overflow-auto scroll-thin">
+                  {s.skipped.map((x, i) => (
+                    <li key={i} className="text-xs">
+                      <span className="text-fg">{name(x.model)}</span>
+                      <span className="text-muted num"> · {x.file.split("/").pop()} · {clock(x.start)} to {clock(x.end)}</span>
+                      <span className="block text-subtle break-words">{x.error}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </Panel>
           {s.agreement.members.length > 1 && (
             <Panel title="Member agreement" subtitle="Pairwise WER: row = reference, column = hypothesis (after the basic normaliser).">

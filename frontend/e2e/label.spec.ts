@@ -47,6 +47,7 @@ test("pseudo-label: saved outputs re-fuse, results show triage and agreement", a
   await expect(page.getByRole("heading", { name: "Triage" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Member agreement" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Chosen as starting hypothesis" })).toBeVisible();
+  await expect(page.getByLabel(/Skip a segment when an ASR model fails on it/)).toBeChecked();
   // re-fuse with ROVER: no inference; a new run replaces the results (one word-timed member, so it
   // falls back to best-aligned)
   const before = await page.getByText(/ from run \d+/).textContent();

@@ -375,6 +375,16 @@ export interface LabelSummary {
   chosen: { member: string; n: number; share: number | null }[];
   strategy_applied: Record<string, number>;
   thresholds: { high: number; low: number };
+  skipped?: SkippedCut[]; // absent in runs from before skip_failed
+}
+
+/** A cut an ASR member's server answered with an error, skipped with skip_failed (label/pseudo.py). */
+export interface SkippedCut {
+  model: string;
+  file: string;
+  start: number;
+  end: number;
+  error: string;
 }
 
 export interface LabelResults {
