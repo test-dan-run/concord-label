@@ -147,12 +147,13 @@ export function Tag({ children }: { children: ReactNode }) {
 
 export function StatusDot({ state }: { state: string }) {
   const color =
-    { up: "bg-good", replay: "bg-secondary", loading: "bg-warn", down: "bg-subtle", unknown: "bg-bad", running: "bg-primary", queued: "bg-subtle", done: "bg-good", failed: "bg-bad", blocked: "bg-warn", waiting: "bg-warn", starting: "bg-warn", stopping: "bg-subtle", stopped: "bg-subtle" }[state] ?? "bg-subtle";
-  return <span aria-hidden className={cx("inline-block size-2 rounded-full shrink-0", color, ["running", "starting", "waiting"].includes(state) && "animate-pulse")} />;
+    { up: "bg-good", replay: "bg-secondary", loading: "bg-warn", down: "bg-subtle", unknown: "bg-bad", running: "bg-primary", queued: "bg-subtle", done: "bg-good", failed: "bg-bad", blocked: "bg-warn", waiting: "bg-warn", starting: "bg-warn", stopping: "bg-subtle", stopped: "bg-subtle", cancelling: "bg-warn", cancelled: "bg-subtle" }[state] ?? "bg-subtle";
+  return <span aria-hidden className={cx("inline-block size-2 rounded-full shrink-0", color, ["running", "starting", "waiting", "cancelling"].includes(state) && "animate-pulse")} />;
 }
 
-export function JobPill({ status, progress }: { status: string; progress?: number }) {
-  const tone = { done: "good", failed: "bad", blocked: "warn", running: "info", waiting: "warn", queued: "default" }[status] as
+export function JobPill({ status, progress, cancelling }: { status: string; progress?: number; cancelling?: boolean }) {
+  const state = cancelling ? "cancelling" : status;
+  const tone = { done: "good", failed: "bad", blocked: "warn", running: "info", waiting: "warn", queued: "default", cancelling: "warn", cancelled: "default" }[state] as
     | "good"
     | "bad"
     | "warn"
@@ -160,9 +161,9 @@ export function JobPill({ status, progress }: { status: string; progress?: numbe
     | "default";
   return (
     <Chip tone={tone ?? "default"}>
-      <StatusDot state={status} />
-      {status}
-      {status === "running" && progress !== undefined && <span className="num">{Math.round(progress * 100)}%</span>}
+      <StatusDot state={state} />
+      {state}
+      {state === "running" && progress !== undefined && <span className="num">{Math.round(progress * 100)}%</span>}
     </Chip>
   );
 }

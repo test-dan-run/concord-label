@@ -7,6 +7,7 @@ describe("catalog wording", () => {
     expect(jobStatusText({ status: "waiting", progress: 0, waiting: { position: null } })).toBe("waiting for compute");
     expect(jobStatusText({ status: "running", progress: 0.42 })).toBe("42%");
     expect(jobStatusText({ status: "blocked", progress: 0 })).toBe("blocked");
+    expect(jobStatusText({ status: "running", progress: 0.42, cancelling: true })).toBe("cancelling");
   });
 
   it("shows cold starts in seconds or minutes, marking estimates", () => {

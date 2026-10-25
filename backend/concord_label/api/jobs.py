@@ -87,8 +87,23 @@ def retry_job(job_id: int, session: Session = Depends(get_session)) -> dict[str,
     j = session.get(Job, job_id)
     if j is None:
         raise HTTPException(404, "job not found")
-    if j.status not in (JobStatus.failed, JobStatus.blocked):
+    if j.status not in (JobStatus.failed, JobStatus.blocked, JobStatus.cancelled):
         raise HTTPException(409, f"job is {j.status}")
     jobs.retry(session, j)
+    session.commit()
+    return job_brief(j)
+
+
+@router.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Cancel a pseudo-label job: a queued one at once, a running one before its next cut or stage."""
+    j = session.get(Job, job_id)
+    if j is None:
+        raise HTTPException(404, "job not found")
+    if j.type not in jobs.CANCEL_JOBS:
+        raise HTTPException(409, "only pseudo-label jobs can be cancelled")
+    if j.status not in ACTIVE:
+        raise HTTPException(409, f"job is {j.status}")
+    jobs.cancel(session, j)
     session.commit()
     return job_brief(j)

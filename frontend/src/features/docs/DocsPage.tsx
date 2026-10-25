@@ -91,6 +91,10 @@ const SECTIONS: Section[] = [
           When the models agree closely on a segment, the segment is auto-accepted. When they disagree, the segment needs review. You can follow
           a run on <Link to="/jobs">Jobs</Link> while it works.
         </p>
+        <p className="m-0">
+          To stop a run, use Cancel run on the Pseudo-label page, or Cancel on the job in Jobs. The run stops before its next segment, and
+          it writes no new segments. The model outputs from the files it finished are saved, so a retry or a new run doesn't repeat them.
+        </p>
         <p className="m-0 flex items-start gap-2 p-3 rounded-md bg-track/60 text-[13px]">
           <span className="text-focus mt-0.5"><I.Info size={14} /></span>
           Auto-accepted segments aren't confirmed, so a new pseudo-label run may replace them until someone confirms them.

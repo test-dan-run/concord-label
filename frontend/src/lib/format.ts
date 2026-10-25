@@ -68,7 +68,8 @@ export function coldStart(s: number | null | undefined, measured = true): string
 }
 
 /** A job's status in a few words: "waiting for compute #2" while its lease is queued in the catalog. */
-export function jobStatusText(j: { status: string; progress: number; waiting?: { position: number | null } | null }): string {
+export function jobStatusText(j: { status: string; progress: number; waiting?: { position: number | null } | null; cancelling?: boolean }): string {
+  if (j.cancelling) return "cancelling";
   if (j.status === "running") return `${Math.round(j.progress * 100)}%`;
   if (j.status === "waiting") return j.waiting?.position ? `waiting for compute #${j.waiting.position}` : "waiting for compute";
   return j.status;

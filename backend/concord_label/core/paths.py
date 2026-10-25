@@ -79,6 +79,10 @@ def job_progress(job_id: int) -> Path:
     return data_root() / "logs" / f"job-{job_id}.progress.json"
 
 
+def job_cancel(job_id: int) -> Path:
+    return data_root() / "logs" / f"job-{job_id}.cancel"
+
+
 def ensure_dirs() -> None:
     for sub in ("originals", "derived", "peaks", "uploads", "exports", "logs", "snapshots", "imports"):
         (data_root() / sub).mkdir(parents=True, exist_ok=True)

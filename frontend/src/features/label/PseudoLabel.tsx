@@ -107,6 +107,14 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
       void qc.invalidateQueries({ queryKey: ["jobs"] });
     },
   });
+  const cancel = useMutation({
+    mutationFn: (jobId: number) => api.post(`/jobs/${jobId}/cancel`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["label-results", datasetId] });
+      void qc.invalidateQueries({ queryKey: ["label-console"] });
+      void qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
 
   const r = results.data;
   const running = !!r?.job && ACTIVE.includes(r.job.status);
@@ -256,7 +264,7 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
             </div>
           )}
         </Panel>
-        <Results r={r} running={running} loading={results.isLoading} />
+        <Results r={r} running={running} loading={results.isLoading} onCancel={(id) => cancel.mutate(id)} cancelError={cancel.error} />
       </div>
     </>
   );
@@ -287,21 +295,36 @@ function TriageBar({ s }: { s: LabelSummary }) {
   );
 }
 
-function Results({ r, running, loading }: { r?: LabelResults; running: boolean; loading: boolean }) {
+function Results({ r, running, loading, onCancel, cancelError }: { r?: LabelResults; running: boolean; loading: boolean; onCancel: (jobId: number) => void; cancelError: unknown }) {
   if (loading || !r) return <Panel title="Results"><Spinner /></Panel>;
   const s = r.summary;
   const name = (svc: string) => (svc === "rover" ? "ROVER fusion" : r.model_names[svc] ?? svc);
   return (
     <div className="flex flex-col gap-5 min-w-0">
-      <Panel title="Dataset progress" actions={r.job && <JobPill status={r.job.status} progress={r.job.progress} />}>
+      <Panel
+        title="Dataset progress"
+        actions={
+          r.job && (
+            <span className="flex items-center gap-2">
+              {running && !r.job.cancelling && <Button size="sm" variant="danger" onClick={() => onCancel(r.job!.id)}>Cancel run</Button>}
+              <JobPill status={r.job.status} progress={r.job.progress} cancelling={r.job.cancelling} />
+            </span>
+          )
+        }
+      >
         <StatusBar p={r.progress} className="h-3" />
         <BarLegend p={r.progress} />
-        {running && r.job?.status === "waiting" && (
+        {running && r.job?.status === "waiting" && !r.job.cancelling && (
           <span className="text-xs text-warn">{jobStatusText(r.job)}{r.job.waiting?.waiting_for ? `: ${r.job.waiting.waiting_for}` : ""}</span>
         )}
         {running && r.job?.status !== "waiting" && r.job?.message && <span className="text-xs text-muted num">{r.job.message}</span>}
         {r.job?.status === "failed" && <ErrorNote error={r.job.error} />}
         {r.job?.status === "blocked" && <ErrorNote error={`Blocked: ${r.job.error}`} />}
+        {r.job?.cancelling && <span className="text-xs text-warn">Cancelling. The run stops before its next cut or stage.</span>}
+        {r.job?.status === "cancelled" && (
+          <span className="text-xs text-muted">This run was cancelled. The outputs of the files it finished are saved, so the next run skips them.</span>
+        )}
+        <ErrorNote error={cancelError} />
       </Panel>
       {!s && !running && <Empty>No pseudo-labels yet. Set up an ensemble and start.</Empty>}
       {s && (

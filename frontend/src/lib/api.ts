@@ -80,7 +80,11 @@ export interface JobWaiting {
 export interface Job {
   id: number;
   type: string;
-  status: "queued" | "running" | "waiting" | "done" | "failed" | "blocked";
+  status: "queued" | "running" | "waiting" | "done" | "failed" | "blocked" | "cancelled";
+  /** Cancelled while running or waiting; the worker stops it before its next cut or stage. */
+  cancelling: boolean;
+  /** A pseudo-label job, which a person can cancel. */
+  cancellable: boolean;
   progress: number;
   message: string | null;
   error: string | null;

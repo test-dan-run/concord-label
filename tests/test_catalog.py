@@ -11,7 +11,8 @@ import httpx
 import pytest
 from aicore.catalog import Catalog, FakeCatalog, LeaseFailed, index_key
 
-from concord_label.core.models import Job, ModelOutput, Run
+from concord_label.core import paths
+from concord_label.core.models import Job, ModelOutput, Run, Segment
 from concord_label.platform import catalog
 from concord_label.runs import cache, jobs
 from label_helpers import ASR_MODELS, _ok, label
@@ -171,6 +172,75 @@ def test_failed_lease_blocks_the_job(label_flow, client, replay_catalog, monkeyp
     _ok(client.post(f"/api/jobs/{job['id']}/retry"))
     jobs.run_pending()
     assert _ok(client.get(f"/api/jobs/{job['id']}"))["status"] == "done"
+
+
+def _start(client, flow):
+    ids = flow["ids"]
+    return _ok(client.post(f"/api/label/datasets/{flow['unlabelled']}/runs",
+                           json={"seg_model_id": ids[SEG], "asr_model_ids": [ids[ASR_MODELS[0]]]}), 202)
+
+
+def test_cancel_a_queued_label_job(label_flow, client, session):
+    started = _start(client, label_flow)
+    job = _ok(client.post(f"/api/jobs/{started['job']['id']}/cancel"))
+    assert job["status"] == "cancelled" and not job["cancelling"]
+    assert jobs.run_pending() == 0
+    assert session.get(Run, started["run"]["id"]).status == "cancelled"
+    assert client.post(f"/api/jobs/{job['id']}/cancel").status_code == 409
+    # a new run may start, and the cancelled one can be retried
+    _ok(client.post(f"/api/jobs/{job['id']}/retry"))
+    jobs.run_pending()
+    assert _ok(client.get(f"/api/jobs/{job['id']}"))["status"] == "done"
+
+
+def test_cancel_a_running_label_job_before_its_next_cut(label_flow, client, replay_catalog, monkeypatch, session):
+    seen = []
+    granted = replay_catalog.lease
+
+    def cancel_once_granted(holder, models, **kw):
+        lease = granted(holder, models)
+        if not seen:
+            job_id = int(holder.rsplit("-", 1)[1])
+            seen.append(_ok(client.post(f"/api/jobs/{job_id}/cancel")))
+        return lease
+
+    monkeypatch.setattr(replay_catalog, "lease", cancel_once_granted)
+    started = _start(client, label_flow)
+    jobs.run_pending()
+    assert seen[0]["status"] == "running" and seen[0]["cancelling"]
+    job = _ok(client.get(f"/api/jobs/{started['job']['id']}"))
+    assert job["status"] == "cancelled" and not job["cancelling"] and job["error"] is None
+    assert any("cancelled" in line for line in job["log"])
+    run = session.get(Run, started["run"]["id"])
+    assert run.status == "cancelled" and not session.query(Segment).filter_by(source_run_id=run.id).count()
+    assert [n for n, _ in leases(replay_catalog)] == ["lease", "release"]  # the segmenter's lease, given back
+    monkeypatch.undo()
+    _ok(client.post(f"/api/jobs/{job['id']}/retry"))
+    jobs.run_pending()
+    assert _ok(client.get(f"/api/jobs/{job['id']}"))["status"] == "done"
+
+
+def test_cancel_a_waiting_label_job_releases_its_queued_lease(label_flow, client, replay_catalog, monkeypatch):
+    def queued(holder, models, on_wait=None, **kw):
+        lease = replay_catalog.request_lease(holder, models)
+        lease.update(state="queued", position=3, waiting_for="no GPU free")
+        on_wait(lease)
+        _ok(client.post(f"/api/jobs/{int(holder.rsplit('-', 1)[1])}/cancel"))
+        assert replay_catalog.get_lease(lease["id"])["state"] == "released"  # Lease.wait would see this
+        raise LeaseFailed(0, f"lease {lease['id']} for {', '.join(models)} released: no GPU free")
+
+    monkeypatch.setattr(replay_catalog, "lease", queued)
+    started = _start(client, label_flow)
+    jobs.run_pending()
+    job = _ok(client.get(f"/api/jobs/{started['job']['id']}"))
+    assert job["status"] == "cancelled" and job["error"] is None
+
+
+def test_only_label_jobs_can_be_cancelled(client, session):
+    j = jobs.enqueue(session, "ingest", {}, [])
+    session.commit()
+    r = client.post(f"/api/jobs/{j.id}/cancel")
+    assert r.status_code == 409 and "pseudo-label" in r.json()["detail"]
 
 
 def test_catalog_down_blocks_new_work_but_refusing_needs_none(labelled, client, session):
@@ -374,3 +444,15 @@ def test_catalog_url_setting(env, monkeypatch, data_dir):
 def test_job_table_has_no_check_jobs(client):
     assert client.post("/api/registry/silero-vad/check").status_code in (404, 405)
     assert "check" not in jobs.HANDLERS and Job.__table__.c.status is not None
+
+
+def test_recover_cancels_jobs_cancelled_while_the_worker_was_down(session):
+    j = jobs.enqueue(session, "label", {"run_id": -1}, [])
+    j.status = "running"
+    session.commit()
+    paths.job_cancel(j.id).parent.mkdir(parents=True, exist_ok=True)
+    paths.job_cancel(j.id).touch()
+    assert jobs.recover(session) == 1
+    session.commit()
+    session.refresh(j)
+    assert j.status == "cancelled"

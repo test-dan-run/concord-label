@@ -16,7 +16,8 @@ one model is leased at a time:
 Before a stage takes its lease, its outputs are looked up in batches (runs/cache.py): Label's own rows,
 then the catalog's output index, where outputs Concord Bench already made are read from Bench and copied
 here. A stage with nothing missing takes no lease ("Re-fuse 4 saved outputs"). Outputs are committed per
-file, so a failed or interrupted run that is retried skips what it already did.
+file, so a failed or interrupted run that is retried skips what it already did. A cancelled run stops
+before its next stage or cut (`check_cancel`, runs/jobs.py), and fusion runs only when every stage finished.
 
 Writing segments follows one rule: reviewed work (confirmed, or touched by a person) is never replaced.
 Earlier machine segments nobody touched are replaced; a new segment that mostly overlaps reviewed
@@ -53,6 +54,7 @@ from . import fusion
 
 Log = Callable[[str], None]
 Progress = Callable[[float, str], None]
+Check = Callable[[], None]  # raises when the run should stop
 
 OVERLAP_DROP = 0.5  # a new segment overlapping reviewed work by more than this share of itself is dropped
 MIN_ASR_SPAN = 0.05
@@ -226,7 +228,7 @@ def required_models(pv: dict[str, Any]) -> list[str]:
 
 def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple[AudioFile, list[Key]]],
               leases: Leases, log: Log, progress: Callable[[float, str | None], None],
-              what: str) -> tuple[dict[Key, ModelOutput], int]:
+              what: str, check_cancel: Check = lambda: None) -> tuple[dict[Key, ModelOutput], int]:
     """One model over its work: (rows by key, outputs computed). Saved and copied outputs first, in one
     batch; the rest under one lease on this model alone, committed (and indexed) file by file."""
     b = catalog.current_build(model)
@@ -241,6 +243,7 @@ def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple
         progress(1.0, None)
         return found, 0
     ran = 0
+    check_cancel()
     with leases([model.catalog_id], log) as lease:
         fresh = catalog.current_build(model, force=True)
         if fresh["build_key"] != oc.build_key:  # e.g. the build was not known until the model started
@@ -260,6 +263,7 @@ def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple
                 log(f"the lease on {model.catalog_id} was lost ({lease.lost}); calls still go through the gateway")
             audio = load_derived(paths.derived(f.sha256))
             for k in ks:
+                check_cancel()
                 samples = audio if k[2] == cache.WHOLE else cut(audio, k[1], k[2])
                 found[k] = oc.run(samples, *k)
                 ran += 1
@@ -269,7 +273,8 @@ def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple
     return found, ran
 
 
-def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Leases | None = None) -> None:
+def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Leases | None = None,
+            check_cancel: Check = lambda: None) -> None:
     leases = leases or Leases(f"{catalog.APP}:run-{run.id}")
     ds: Dataset = run.dataset
     p = run.params
@@ -293,7 +298,7 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
 
     seg_progress(0.0, f"stage 1: {seg_model.display_name} on {len(files)} files")
     seg_rows, seg_ran = run_stage(session, seg_model, seg, [(f, [cache.key(f.sha256)]) for f in files], leases,
-                                  log, seg_progress, f"stage 1, {seg_model.catalog_id}")
+                                  log, seg_progress, f"stage 1, {seg_model.catalog_id}", check_cancel)
 
     # the cuts of every file
     cuts: dict[int, list[tuple[Any, tuple[float, float] | None]]] = {}
@@ -322,11 +327,12 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
 
         asr_progress(0.0, f"stage 2: {by_id[name].display_name} on {n_keys} cuts")
         member_rows[name], ran = run_stage(session, by_id[name], members[name], work, leases, log, asr_progress,
-                                           f"stage 2, {name}")
+                                           f"stage 2, {name}", check_cancel)
         calls += n_keys
         ran_asr += ran
 
     # fusion: no model
+    check_cancel()
     out_files: dict[str, Any] = {}
     seg_s = asr_s = audio_s = 0.0
     for f in files:
