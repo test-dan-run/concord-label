@@ -13,7 +13,8 @@ import pytest
 from aicore.catalog import Catalog, FakeCatalog, LeaseFailed, index_key
 
 from concord_label.core import paths
-from concord_label.core.models import Job, ModelOutput, Run, Segment
+from concord_label.core.models import Job, Model, ModelOutput, Run, Segment
+from concord_label.label import pseudo
 from concord_label.platform import catalog
 from concord_label.runs import cache, jobs
 from label_helpers import ASR_MODELS, _ok, label
@@ -164,14 +165,56 @@ def _in_flight(monkeypatch, fail_at: int | None = None, fail_all: bool = False) 
 
 def test_calls_run_as_many_at_a_time_as_the_catalog_recommends(label_flow, client, replay_catalog, monkeypatch):
     replay_catalog.update(ASR_MODELS[0], batch={"recommendation": {"batch": 3}})
-    replay_catalog.update(ASR_MODELS[1], batch={"recommendation": {"batch": 500}})
+    replay_catalog.update(ASR_MODELS[1], batch={"recommendation": {"batch": 500}, "limits": {"max_batch": 400}})
     seen = _in_flight(monkeypatch)
     started, _ = label(client, label_flow)
     log = _ok(client.get(f"/api/jobs/{started['job']['id']}"))["log"]
     assert len(seen[ASR_MODELS[0]]) > 3 and max(seen[ASR_MODELS[0]]) == 3
-    assert any(f"{ASR_MODELS[1]}: 32 call(s) at a time" in line for line in log)  # at most MAX_IN_FLIGHT
+    assert any(f"{ASR_MODELS[1]}: 256 call(s) at a time (Label's cap" in line for line in log)  # aicore's MAX
     assert any(f"{SEG}: 8 call(s) at a time" in line for line in log)  # no profile: aicore's default
     assert max(seen[SEG]) > 1
+
+
+def _model(session, name: str) -> Model:
+    return catalog.ensure_model(session, name)
+
+
+def test_in_flight_matches_the_servers_batch_limit(label_flow, session, replay_catalog):
+    m = _model(session, ASR_MODELS[0])
+    # an override of 16 and no profile yet (a new build): the limit, not aicore's default of 8
+    replay_catalog.update(m.catalog_id, batch={"recommendation": None, "limits": {
+        "max_batch": 16, "source": {"max_batch": "override"}}})
+    assert pseudo.in_flight(m, 4.6) == (16, "the server's batch limit, override")
+    # memory allows more than the server takes (meralion: 256 fit, the server batches 34)
+    replay_catalog.update(m.catalog_id, batch={"recommendation": {"batch": 256}, "limits": {
+        "max_batch": 34, "source": {"max_batch": "measured"}}})
+    assert pseudo.in_flight(m, 4.6) == (34, "the server's batch limit, measured")
+    replay_catalog.update(m.catalog_id, batch={"recommendation": {"batch": 12}, "limits": {"max_batch": 34}})
+    assert pseudo.in_flight(m, 4.6) == (12, "the batch that fits in GPU memory")
+    replay_catalog.update(m.catalog_id, batch={})
+    assert pseudo.in_flight(m, 4.6) == (8, "no batch profile or limit: aicore's default")
+
+
+def test_in_flight_asks_vllm_models_in_tokens(label_flow, session, replay_catalog, monkeypatch):
+    m = _model(session, ASR_MODELS[0])
+    asked = []
+
+    def batch(model_id, *, item_s=None, item_tokens=None, **kw):
+        asked.append((item_s, item_tokens))
+        if item_tokens is None:  # what the catalog says about a kv profile asked in seconds
+            return {"profile": {"kind": "kv", "max_model_len": 4096}, "note": "give item_tokens"}
+        return {"profile": {"kind": "kv", "max_model_len": 4096}, "recommendation": {"batch": 55}}
+
+    monkeypatch.setattr(replay_catalog, "batch", batch)
+    assert pseudo.in_flight(m, 4.6) == (55, "the batch that fits in GPU memory")
+    assert asked == [(4.6, None), (None, 4096)]
+
+
+def test_in_flight_keeps_a_hosted_model_within_its_concurrency(label_flow, session, replay_catalog):
+    m = _model(session, ASR_MODELS[0])
+    replay_catalog.update(m.catalog_id, hosted={"max_concurrency": 4}, batch={"recommendation": {"batch": 64}})
+    catalog.clear_cache()
+    assert pseudo.in_flight(m, 4.6) == (4, "the hosted model's concurrency limit")
 
 
 def test_a_failed_call_keeps_the_calls_that_finished(label_flow, client, replay_catalog, monkeypatch, session):
