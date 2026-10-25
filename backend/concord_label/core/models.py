@@ -81,6 +81,7 @@ class JobStatus(enum.StrEnum):
     failed = "failed"
     waiting = "waiting"  # its lease is queued in the catalog, waiting for compute
     blocked = "blocked"  # the catalog could not grant a lease (a model failed to start, or no catalog)
+    cancelled = "cancelled"  # a person stopped it (pseudo-label jobs only, runs/jobs.py `cancel`)
 
 
 class Dataset(Base):
@@ -224,7 +225,7 @@ class Run(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     task: Mapped[str] = mapped_column(String(16), default=RunTask.label)
     dataset_id: Mapped[int] = mapped_column(ForeignKey("dataset.id", ondelete="CASCADE"))
-    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | running | done | failed | blocked
+    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | running | done | failed | blocked | cancelled
     error: Mapped[str | None] = mapped_column(Text)
     image_tags: Mapped[dict[str, Any]] = mapped_column(default=dict)  # model -> {image, build_key}
     params: Mapped[dict[str, Any]] = mapped_column(default=dict)

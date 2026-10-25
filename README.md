@@ -148,6 +148,16 @@ Ingests, pseudo-label runs, publishes and datasets made from the Dataset Catalog
 one at a time, and the Jobs page shows their progress and logs. A pseudo-label run waits while the Model
 Catalog queues it for compute.
 
+While a pseudo-label run works, the Pseudo-label page and the Jobs page show its stage, how many files or
+segments the stage has done, and about how long the run has left. The estimate comes from how fast each
+model runs. It uses the speed a stage measures while it runs, and before that it uses the model's earlier
+outputs. It adds the time to start a model that isn't running. It doesn't count time spent waiting for
+compute, and it shows "estimating time left" until it knows the speed of every model with work to do.
+
+You can cancel a pseudo-label run on the Pseudo-label page or on the Jobs page. The run stops before its
+next segment and writes no new segments. It keeps the model outputs of the files it finished, so a retry
+skips them. A cancelled run that waits for compute gives up its place in the Model Catalog's queue.
+
 ### Docs
 
 The Docs page under Help explains the workflow, the segment statuses and the keyboard shortcuts.

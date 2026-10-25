@@ -96,6 +96,10 @@ Bench's copies don't have these recent Label changes yet:
   listeners attach even when the element renders after the page loads its data.
 - `Timeline`: the optional `selection` and `onSelection` props, and the exported `LABEL_W`.
 - Models page: the groups by capability.
+- `JobPill` and `StatusDot`: the `cancelling` and `cancelled` states, and `jobStatusText` says "cancelling".
+  `paths.job_cancel` and the cancel in `runs/jobs.py` are Label's, because Bench has no pseudo-label jobs.
+- `lib/format.ts`: `duration`, `etaText` and `stageText`, and `lib/api.ts`: `JobEta`. The estimate itself
+  (`label/eta.py`) is Label's.
 - `core/settings.py`: a blank `AICORE_ENDPOINTS`, `REPLAY_DIR` or `RECORD_DIR` in `.env` means unset. Bench
   does this for `DATASET_STORE` only, so a blank `RECORD_DIR=` there still records into the current folder.
 

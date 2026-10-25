@@ -17,6 +17,7 @@ from ..core.db import get_session
 from ..core.models import AudioFile, Dataset, Job, Run, Segment
 from ..core.settings import REPO_ROOT
 from ..datasets.ingest import inspect_source
+from ..label.eta import counted_down
 from ..platform import datasets as dataset_catalog
 from ..runs import jobs
 
@@ -151,12 +152,16 @@ def dataset_json(session: Session, ds: Dataset, detail: bool = False) -> dict[st
 
 def job_brief(job: Job) -> dict[str, Any]:
     """A job for the pages. While its lease waits in the catalog's queue the job is `waiting`, and `waiting`
-    says for which models, its position and what it waits for (from the worker's progress file)."""
+    says for which models, its position and what it waits for (from the worker's progress file). `cancelling`:
+    cancelled, and the worker has not stopped it yet. `eta`: how long a label run has left (label/eta.py)."""
     live = jobs.live_progress(job.id) if job.status in ("running", "waiting") else None
     return {"id": job.id, "type": job.type, "status": job.status,
+            "cancelling": job.status in ("running", "waiting") and jobs.cancel_requested(job.id),
+            "cancellable": job.type in jobs.CANCEL_JOBS,
             "progress": live["progress"] if live else job.progress,
             "message": live["message"] if live else job.message,
             "waiting": (live or {}).get("waiting") if job.status == "waiting" else None,
+            "eta": counted_down((live or {}).get("eta"), job.status),
             "error": job.error, "required_services": job.required_services, "payload": job.payload,
             "result": job.result, "created_at": job.created_at.isoformat(),
             "started_at": job.started_at.isoformat() if job.started_at else None,

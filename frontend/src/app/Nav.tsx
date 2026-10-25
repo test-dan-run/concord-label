@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { api, type Job } from "../lib/api";
-import { jobStatusText } from "../lib/format";
+import { etaText, jobStatusText } from "../lib/format";
 import * as I from "../components/icons";
 import { cx } from "../components/ui";
 
@@ -58,6 +58,7 @@ function Jobs() {
       {running.slice(0, 3).map((j) => (
         <span key={j.id} className={cx("text-[11px] num truncate", j.status === "waiting" ? "text-warn" : "text-muted")} title={j.waiting?.waiting_for ?? j.message ?? undefined}>
           {j.label} · {jobStatusText(j)}
+          {etaText(j) && ` · ${etaText(j)}`}
         </span>
       ))}
     </NavLink>

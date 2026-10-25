@@ -77,16 +77,37 @@ export interface JobWaiting {
   lease_state: string | null;
 }
 
+/** How long a pseudo-label run has left, stage by stage (label/eta.py). */
+export interface JobEta {
+  /** Seconds left; null until a model with work has a rate. Queue time isn't counted. */
+  remaining_s: number | null;
+  /** A stage is running inference, so the estimate counts down. */
+  active: boolean;
+  stage: number;
+  stages: number;
+  model: string | null;
+  unit: "files" | "cuts" | null;
+  done: number | null;
+  /** Calls the stage makes; null until its lease is active. */
+  total: number | null;
+  fusing: boolean;
+}
+
 export interface Job {
   id: number;
   type: string;
-  status: "queued" | "running" | "waiting" | "done" | "failed" | "blocked";
+  status: "queued" | "running" | "waiting" | "done" | "failed" | "blocked" | "cancelled";
+  /** Cancelled while running or waiting; the worker stops it before its next cut or stage. */
+  cancelling: boolean;
+  /** A pseudo-label job, which a person can cancel. */
+  cancellable: boolean;
   progress: number;
   message: string | null;
   error: string | null;
   /** Catalog models the job has work for (it leases them one stage at a time). */
   required_services: string[];
   waiting: JobWaiting | null;
+  eta: JobEta | null;
   payload: Record<string, unknown>;
   result: Record<string, unknown>;
   created_at: string;

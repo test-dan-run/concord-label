@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, qs, type CacheState, type LabelPreview, type LabelResults, type LabelSummary, type Model, type ModelList, type Run, type Job } from "../../lib/api";
-import { capLabel, clock, coldStart, jobStatusText, num, pct, timingLabel } from "../../lib/format";
+import { ago, capLabel, clock, coldStart, etaText, jobStatusText, num, pct, stageText, timingLabel } from "../../lib/format";
 import { confidenceColor, labelButton, STATUS_LABELS } from "../../lib/label";
 import { C } from "../../lib/colors";
 import * as I from "../../components/icons";
@@ -101,6 +101,14 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
         high,
         low,
       }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["label-results", datasetId] });
+      void qc.invalidateQueries({ queryKey: ["label-console"] });
+      void qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+  const cancel = useMutation({
+    mutationFn: (jobId: number) => api.post(`/jobs/${jobId}/cancel`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["label-results", datasetId] });
       void qc.invalidateQueries({ queryKey: ["label-console"] });
@@ -256,7 +264,7 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
             </div>
           )}
         </Panel>
-        <Results r={r} running={running} loading={results.isLoading} />
+        <Results r={r} running={running} loading={results.isLoading} onCancel={(id) => cancel.mutate(id)} cancelError={cancel.error} />
       </div>
     </>
   );
@@ -287,21 +295,48 @@ function TriageBar({ s }: { s: LabelSummary }) {
   );
 }
 
-function Results({ r, running, loading }: { r?: LabelResults; running: boolean; loading: boolean }) {
+function Results({ r, running, loading, onCancel, cancelError }: { r?: LabelResults; running: boolean; loading: boolean; onCancel: (jobId: number) => void; cancelError: unknown }) {
   if (loading || !r) return <Panel title="Results"><Spinner /></Panel>;
   const s = r.summary;
   const name = (svc: string) => (svc === "rover" ? "ROVER fusion" : r.model_names[svc] ?? svc);
   return (
     <div className="flex flex-col gap-5 min-w-0">
-      <Panel title="Dataset progress" actions={r.job && <JobPill status={r.job.status} progress={r.job.progress} />}>
+      <Panel
+        title="Dataset progress"
+        actions={
+          r.job && (
+            <span className="flex items-center gap-2">
+              {running && !r.job.cancelling && <Button size="sm" variant="danger" onClick={() => onCancel(r.job!.id)}>Cancel run</Button>}
+              <JobPill status={r.job.status} progress={r.job.progress} cancelling={r.job.cancelling} />
+            </span>
+          )
+        }
+      >
         <StatusBar p={r.progress} className="h-3" />
         <BarLegend p={r.progress} />
-        {running && r.job?.status === "waiting" && (
+        {running && r.job?.eta && (
+          <div className="flex flex-col gap-1.5 pt-1">
+            <span className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-[13px]">
+              <span>{stageText(r.job.eta)}</span>
+              <span className="num text-muted">
+                {etaText(r.job)}
+                {r.job.started_at && <span className="text-subtle"> · started {ago(r.job.started_at)}</span>}
+              </span>
+            </span>
+            <Bar value={r.job.progress} />
+          </div>
+        )}
+        {running && r.job?.status === "waiting" && !r.job.cancelling && (
           <span className="text-xs text-warn">{jobStatusText(r.job)}{r.job.waiting?.waiting_for ? `: ${r.job.waiting.waiting_for}` : ""}</span>
         )}
         {running && r.job?.status !== "waiting" && r.job?.message && <span className="text-xs text-muted num">{r.job.message}</span>}
         {r.job?.status === "failed" && <ErrorNote error={r.job.error} />}
         {r.job?.status === "blocked" && <ErrorNote error={`Blocked: ${r.job.error}`} />}
+        {r.job?.cancelling && <span className="text-xs text-warn">Cancelling. The run stops before its next cut or stage.</span>}
+        {r.job?.status === "cancelled" && (
+          <span className="text-xs text-muted">This run was cancelled. The outputs of the files it finished are saved, so the next run skips them.</span>
+        )}
+        <ErrorNote error={cancelError} />
       </Panel>
       {!s && !running && <Empty>No pseudo-labels yet. Set up an ensemble and start.</Empty>}
       {s && (
