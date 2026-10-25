@@ -19,7 +19,10 @@ here. A stage with nothing missing takes no lease ("Re-fuse 4 saved outputs"). T
 calls at a time (`in_flight`: the catalog's batch recommendation for the model), so the model's server or
 vLLM batches them; worker threads only make the calls, and the outputs are stored on the session's thread.
 Outputs are committed per file, and the finished calls of a failed stage too, so a failed or interrupted
-run that is retried skips what it already did. A cancelled run stops before its next stage or cut
+run that is retried skips what it already did. With `skip_failed`, a cut an ASR member's server answers
+with an error is skipped: fusion goes on without that member's text for the cut, `summary.skipped` lists
+it, and a retry tries it again. A member that fails on more than SKIP_MIN cuts and SKIP_SHARE of its
+calls still fails the run. A cancelled run stops before its next stage or cut
 (`check_cancel`, runs/jobs.py), and fusion runs only when every stage finished.
 How long a run has left is estimated stage by stage (label/eta.py) and reported through `on_eta`.
 
@@ -27,7 +30,8 @@ Writing segments follows one rule: reviewed work (confirmed, or touched by a per
 Earlier machine segments nobody touched are replaced; a new segment that mostly overlaps reviewed
 work is dropped.
 
-`run.params`: tasks (asr, diar), seg_model_id, asr_model_ids, strategy, single_model_id, high, low.
+`run.params`: tasks (asr, diar), seg_model_id, asr_model_ids, strategy, single_model_id, high, low,
+skip_failed.
 `run.outputs`: {"files": {file_id: {seg_cache_id, cuts: [{start, end, speaker, src, members}]}},
 "summary": {...}}. `run.image_tags`: per model, the build it ran with ({build_key, image}).
 """
@@ -69,6 +73,7 @@ OVERLAP_DROP = 0.5  # a new segment overlapping reviewed work by more than this 
 MIN_ASR_SPAN = 0.05
 SEG_SHARE = 0.3  # progress: stage 1 is the first 30 %, stage 2 runs to 90 %, fusion the rest
 MAX_IN_FLIGHT = 32  # calls a stage keeps open at most; the servers would only queue more
+SKIP_MIN, SKIP_SHARE = 10, 0.05  # a member skipping more cuts than both fails the run (`skip_failed`)
 
 
 class LabelError(Exception):
@@ -238,10 +243,11 @@ def required_models(pv: dict[str, Any]) -> list[str]:
 
 def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple[AudioFile, list[Key]]],
               leases: Leases, log: Log, progress: Callable[[float, str | None], None],
-              what: str, check_cancel: Check = lambda: None,
-              eta: Eta | None = None) -> tuple[dict[Key, ModelOutput], int]:
+              what: str, check_cancel: Check = lambda: None, eta: Eta | None = None,
+              skipped: list[dict[str, Any]] | None = None) -> tuple[dict[Key, ModelOutput], int]:
     """One model over its work: (rows by key, outputs computed). Saved and copied outputs first, in one
-    batch; the rest under one lease on this model alone, committed (and indexed) file by file."""
+    batch; the rest under one lease on this model alone, committed (and indexed) file by file. With
+    `skipped`, a call the server answers with an error is added there instead of failing the stage."""
     b = catalog.current_build(model)
     oc = cache.OutputCache(session, adapter, b["build_key"], b["image"], log)
     keys = list(dict.fromkeys(k for _, ks in work for k in ks))
@@ -303,10 +309,19 @@ def run_stage(session: Session, model: Model, adapter: Adapter, work: list[tuple
                     f, k = running.pop(fut)
                     try:
                         found[k] = oc.store(*k, *fut.result())
+                        ran += 1
                     except Exception as exc:  # noqa: BLE001 - as above
-                        failure = failure or exc
-                        continue
-                    ran += 1
+                        if skipped is None or not answered_with_error(exc):
+                            failure = failure or exc
+                            continue
+                        end = (f.duration or 0.0) if k[2] == cache.WHOLE else k[2]
+                        skipped.append({"model": model.catalog_id, "file": f.rel_path, "start": k[1], "end": end,
+                                        "error": error_text(exc)})
+                        log(f"{what}: skipped {f.rel_path} {k[1]:.2f} to {end:.2f} s: {error_text(exc)}")
+                        mine = sum(1 for s in skipped if s["model"] == model.catalog_id)
+                        if mine > max(SKIP_MIN, SKIP_SHARE * total):
+                            failure = failure or LabelError(f"{model.display_name} failed on {mine} of {total} "
+                                                            "cuts, too many to skip")
                     if eta:
                         eta.advance(model.catalog_id, key_audio_s(f, k))
                     left[f.id] -= 1
@@ -332,6 +347,20 @@ def in_flight(model: Model, item_s: float) -> int:
     except Exception:  # noqa: BLE001 - a batch size is never worth failing a run over
         n = DEFAULT_BATCH
     return max(1, min(MAX_IN_FLIGHT, n))
+
+
+def answered_with_error(exc: Exception) -> bool:
+    """The model's server answered the call with an error, so it cannot do this audio. A server that did not
+    answer, or was busy (429, 503 after the adapter's retries), fails the run instead."""
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    return isinstance(status, int) and status >= 400 and status not in (429, 503)
+
+
+def error_text(exc: Exception) -> str:
+    """The server's own message when it gave one (the OpenAI error body), else the exception."""
+    body = getattr(exc, "body", None)
+    msg = body.get("message") if isinstance(body, dict) else None
+    return str(msg or exc)[:300]
 
 
 def key_audio_s(f: AudioFile, k: Key) -> float:
@@ -403,6 +432,7 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
         eta.order(order)
     by_id = {m.catalog_id: m for m in asr_models}
     member_rows: dict[str, dict[Key, ModelOutput]] = {}
+    skipped: list[dict[str, Any]] = []
     calls = ran_asr = 0
     for i, name in enumerate(order):
         lo = SEG_SHARE + (0.9 - SEG_SHARE) * i / len(order)
@@ -413,7 +443,8 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
 
         asr_progress(0.0, f"stage 2: {by_id[name].display_name} on {n_keys} cuts")
         member_rows[name], ran = run_stage(session, by_id[name], members[name], work, leases, log, asr_progress,
-                                           f"stage 2, {name}", check_cancel, eta)
+                                           f"stage 2, {name}", check_cancel, eta,
+                                           skipped if p.get("skip_failed") else None)
         calls += n_keys
         ran_asr += ran
 
@@ -430,7 +461,9 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
             if sp is not None:
                 k = cache.key(f.sha256, *sp)
                 for name in members:
-                    mo = member_rows[name][k]
+                    mo = member_rows[name].get(k)  # None: skipped
+                    if mo is None:
+                        continue
                     cd["members"][name] = mo.id
                     asr_s += mo.latency_s
             entry["cuts"].append(cd)
@@ -440,10 +473,10 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
     run.rtf_by_stage = {"seg": seg_s / audio_s if audio_s else None, "asr": asr_s / audio_s if audio_s else None,
                         "total": (seg_s + asr_s) / audio_s if audio_s else None, "audio_s": audio_s,
                         "processing_s": seg_s + asr_s}
-    log(f"label: {len(files)} files, segmenter ran on {seg_ran}; {calls} ASR cuts, {ran_asr} run "
-        f"({calls - ran_asr} saved)")
+    log(f"label: {len(files)} files, segmenter ran on {seg_ran}; {calls} ASR cuts, {ran_asr} run, "
+        f"{len(skipped)} skipped ({calls - ran_asr - len(skipped)} saved)")
     progress(0.9, "fusing")
-    summary = write_segments(session, run, files)
+    summary = {**write_segments(session, run, files), "skipped": skipped}
     run.outputs = {"files": out_files, "summary": summary}
     run.finished_at = utcnow()
     session.flush()

@@ -158,6 +158,12 @@ You can cancel a pseudo-label run on the Pseudo-label page or on the Jobs page. 
 next segment and writes no new segments. It keeps the model outputs of the files it finished, so a retry
 skips them. A cancelled run that waits for compute gives up its place in the Model Catalog's queue.
 
+An ASR model sometimes fails on one segment. The option "Skip a segment when an ASR model fails on it" is
+on by default. With it, the run goes on, and the other models still transcribe that segment. The results
+list each skipped segment with the model's error, and a retry tries those segments again. A model that
+fails on more than 10 segments and more than 5% of its segments still stops the run. With the option off,
+the run stops at the first error.
+
 ### Docs
 
 The Docs page under Help explains the workflow, the segment statuses and the keyboard shortcuts.

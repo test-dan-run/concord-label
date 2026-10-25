@@ -99,6 +99,12 @@ const SECTIONS: Section[] = [
           To stop a run, use Cancel run on the Pseudo-label page, or Cancel on the job in Jobs. The run stops before its next segment, and
           it writes no new segments. The model outputs from the files it finished are saved, so a retry or a new run doesn't repeat them.
         </p>
+        <p className="m-0">
+          Sometimes an ASR model fails on one segment. With Skip a segment when an ASR model fails on it, the run goes on, and the other
+          models still transcribe that segment. The results list each skipped segment with the error, and a retry tries those segments
+          again. If a model fails on more than 10 segments and more than 5% of its segments, the run stops. Without the option, the run
+          stops at the first error.
+        </p>
         <p className="m-0 flex items-start gap-2 p-3 rounded-md bg-track/60 text-[13px]">
           <span className="text-focus mt-0.5"><I.Info size={14} /></span>
           Auto-accepted segments aren't confirmed, so a new pseudo-label run may replace them until someone confirms them.

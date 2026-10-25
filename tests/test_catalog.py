@@ -130,9 +130,16 @@ def test_outputs_carry_the_build_key_and_are_indexed(labelled, session, replay_c
     assert sorted(h["output_id"] for h in hits) == sorted(r.id for r in rows)
 
 
-def _in_flight(monkeypatch, fail_at: int | None = None) -> dict[str, list[int]]:
-    """Wrap OutputCache.infer: per service, how many calls were open as each one started. With `fail_at`, that
-    call of the first ASR member fails like the 30 s + 16 samples crash."""
+class ServerError(Exception):
+    """What the OpenAI client raises when ark-asr answers a cut of 30 s and 16 samples with a 500."""
+
+    status_code = 500
+    body = {"message": "RuntimeError: Argument #4: Padding size should be less than the corresponding input dimension"}
+
+
+def _in_flight(monkeypatch, fail_at: int | None = None, fail_all: bool = False) -> dict[str, list[int]]:
+    """Wrap OutputCache.infer: per service, how many calls were open as each one started. The first ASR
+    member's call number `fail_at` (or every call, with `fail_all`) fails like the 30 s + 16 samples crash."""
     infer, lock = cache.OutputCache.infer, threading.Lock()
     open_: dict[str, int] = {}
     seen: dict[str, list[int]] = {}
@@ -144,8 +151,8 @@ def _in_flight(monkeypatch, fail_at: int | None = None) -> dict[str, list[int]]:
             n = len(seen[self.service])
         try:
             time.sleep(0.02)
-            if self.service == ASR_MODELS[0] and n == fail_at:
-                raise RuntimeError("Padding size should be less than the corresponding input dimension")
+            if self.service == ASR_MODELS[0] and (fail_all or n == fail_at):
+                raise ServerError("Error code: 500")
             return infer(self, *a, **kw)
         finally:
             with lock:
@@ -170,10 +177,10 @@ def test_calls_run_as_many_at_a_time_as_the_catalog_recommends(label_flow, clien
 def test_a_failed_call_keeps_the_calls_that_finished(label_flow, client, replay_catalog, monkeypatch, session):
     replay_catalog.update(ASR_MODELS[0], batch={"recommendation": {"batch": 2}})
     _in_flight(monkeypatch, fail_at=3)
-    started = _start(client, label_flow)
+    started = _start(client, label_flow, skip_failed=False)
     jobs.run_pending()
     job = _ok(client.get(f"/api/jobs/{started['job']['id']}"))
-    assert job["status"] == "failed" and "Padding size" in job["error"]
+    assert job["status"] == "failed" and "Error code: 500" in job["error"]
     kept = session.query(ModelOutput).filter_by(model_name=ASR_MODELS[0]).count()
     assert kept >= 2  # the two before it, and any other call in flight, are committed
     monkeypatch.undo()
@@ -182,6 +189,36 @@ def test_a_failed_call_keeps_the_calls_that_finished(label_flow, client, replay_
     job = _ok(client.get(f"/api/jobs/{job['id']}"))
     assert job["status"] == "done"
     assert any(f"{ASR_MODELS[0]}: {kept} of " in line and "outputs saved" in line for line in job["log"])
+
+
+def test_a_cut_a_member_fails_on_is_skipped(label_flow, client, replay_catalog, monkeypatch, session):
+    _in_flight(monkeypatch, fail_at=3)
+    started, res = label(client, label_flow)  # skip_failed is on by default
+    skipped = res["summary"]["skipped"]
+    assert len(skipped) == 1 and skipped[0]["model"] == ASR_MODELS[0]
+    assert skipped[0]["error"].startswith("RuntimeError: Argument #4") and skipped[0]["end"] > skipped[0]["start"]
+    log = _ok(client.get(f"/api/jobs/{started['job']['id']}"))["log"]
+    assert any("skipped" in line and skipped[0]["file"] in line for line in log)
+    # the cut still has the other member's text
+    run = session.get(Run, started["run"]["id"])
+    cut = next(c for e in run.outputs["files"].values() for c in e["cuts"]
+               if c["start"] == skipped[0]["start"] and ASR_MODELS[1] in c["members"])
+    assert ASR_MODELS[0] not in cut["members"]
+    assert session.query(Segment).filter_by(source_run_id=run.id).filter(Segment.text.isnot(None)).count()
+    # nothing was saved for it, so the next run tries it again
+    monkeypatch.undo()
+    started, res = label(client, label_flow)
+    assert res["summary"]["skipped"] == []
+    log = _ok(client.get(f"/api/jobs/{started['job']['id']}"))["log"]
+    assert any(f"stage 2, {ASR_MODELS[0]}: " in line and ", 1 to run" in line for line in log)
+
+
+def test_a_member_that_fails_on_too_many_cuts_fails_the_run(label_flow, client, replay_catalog, monkeypatch):
+    _in_flight(monkeypatch, fail_all=True)
+    started = _start(client, label_flow)
+    jobs.run_pending()
+    job = _ok(client.get(f"/api/jobs/{started['job']['id']}"))
+    assert job["status"] == "failed" and "too many to skip" in job["error"]
 
 
 def test_waiting_job_shows_its_queue_position(label_flow, client, replay_catalog, monkeypatch):
@@ -229,10 +266,10 @@ def test_failed_lease_blocks_the_job(label_flow, client, replay_catalog, monkeyp
     assert _ok(client.get(f"/api/jobs/{job['id']}"))["status"] == "done"
 
 
-def _start(client, flow):
+def _start(client, flow, **kw):
     ids = flow["ids"]
     return _ok(client.post(f"/api/label/datasets/{flow['unlabelled']}/runs",
-                           json={"seg_model_id": ids[SEG], "asr_model_ids": [ids[ASR_MODELS[0]]]}), 202)
+                           json={"seg_model_id": ids[SEG], "asr_model_ids": [ids[ASR_MODELS[0]]], **kw}), 202)
 
 
 def test_cancel_a_queued_label_job(label_flow, client, session):
