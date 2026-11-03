@@ -87,6 +87,7 @@ export function DatasetDetail() {
                 <Fact k="Files" v={`${num(rep.usable_files)} usable of ${num(rep.files)}`} />
                 <Fact k="Audio" v={`${hours(rep.usable_hours)} usable of ${hours(rep.hours)}`} />
                 <Fact k="Labels" v={d.label_types.length ? d.label_types.map((l) => (l === "asr" ? "ASR" : "Diarisation")).join(" + ") : "audio only"} />
+                <Fact k="Labelling" v={d.labelling === "clips" ? "One transcript per clip" : "Speaker turns"} />
                 <Fact k="Speaker-attributed text" v={rep.has_speaker_text ? "yes" : "no"} />
                 <Fact k="Language" v={d.language ?? "—"} />
                 {d.catalog_dataset_id && (
@@ -131,7 +132,7 @@ export function DatasetDetail() {
                 {rep.audio_without_labels_count > 0 && d.label_types.length > 0 && <span className="text-xs text-muted">{rep.audio_without_labels_count} audio files without labels.</span>}
               </Panel>
             </div>
-            <Panel title="Files" subtitle={`${files.data?.length ?? 0} files · labels are the reference segments matched at ingest`}>
+            <Panel title="Files" subtitle={`${files.data?.length ?? 0} files · labels are the segments matched at ingest`}>
               <div className="overflow-auto scroll-thin max-h-[420px]">
                 <table className="w-full border-collapse text-[13px]">
                   <thead className="sticky top-0 bg-panel">

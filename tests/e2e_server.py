@@ -1,6 +1,6 @@
 """Server for the Playwright tests: a fresh data dir seeded through Label's own API on recorded responses
-(models from the replay catalog, an annotated dataset, and an audio-only copy of the same audio
-pseudo-labelled by pyannote -> both Whispers), then the API + built frontend on --port. No GPU, platform or
+(models from the replay catalog, an annotated dataset, an audio-only copy of the same audio pseudo-labelled by
+pyannote -> both Whispers, and "Short clips", with one transcript per clip, pseudo-labelled by both Whispers), then the API + built frontend on --port. No GPU, platform or
 Model Catalog needed: in replay mode the catalog is a stand-in built from fixtures/recorded.
 
 The Dataset Catalog is set up with aicore's FakeDatasetCatalog and a store in the data dir, unless
@@ -31,7 +31,7 @@ def main() -> int:
     args = ap.parse_args()
     work = Path(tempfile.mkdtemp(prefix="concord-label-e2e-"))
     rec = ROOT / "fixtures" / "recorded"
-    os.environ.update({"CONCORD_DATA": str(work / "data"), "REPLAY_DIR": str(rec),
+    os.environ.update({"CONCORD_DATA": str(work / "data"), "REPLAY_DIR": str(work / "recorded"),
                        "AICORE_ENDPOINTS": str(rec / "endpoints.generated.yaml")})
     sys.path[:0] = [str(ROOT / "backend"), str(ROOT / "tests")]
     import uvicorn
@@ -40,7 +40,9 @@ def main() -> int:
     dc = dataset_catalog(work / "store")
 
     from concord_label.api.app import create_app
-    from label_helpers import label, seed
+    from label_helpers import label, seed, seed_clips, seed_labelled_clips, whole_clip_replay
+
+    whole_clip_replay(rec, work / "recorded")
 
     def log(m: str) -> None:
         print(m, flush=True)
@@ -51,6 +53,10 @@ def main() -> int:
         _, res = label(client, flow)
         log(f"label dataset {flow['unlabelled']}: {res['summary']['segments']} segments, "
             f"triage {res['summary']['triage']}")
+        clips = seed_clips(client, flow, work / "staging")
+        log(f"clip dataset {clips}: one transcript per clip")
+        labelled = seed_labelled_clips(client, flow, work / "staging", clips)
+        log(f"clip dataset {labelled}: uploaded labels beside pseudo-labels")
         if dc is not None:
             seed_catalog(client, dc, log)
     # Jobs started from the browser (e.g. re-fusing pseudo-labels) need a worker, as under `just dev`.

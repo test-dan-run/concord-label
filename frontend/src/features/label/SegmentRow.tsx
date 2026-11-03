@@ -165,16 +165,7 @@ export function SegmentRow({
                 setCaret(c ?? null);
                 onEdit(true);
               }} onHint={(k) => onMenu(menu === k ? null : k)} />
-            {hint && (
-              <div role="group" aria-label="Spelling hint" className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded-md border border-line bg-canvas text-xs text-muted" onClick={(e) => e.stopPropagation()}>
-                House spelling <span className="num text-fg">{hint.word}</span>
-                <span className="text-subtle">· {hint.lexicon}</span>
-                <span className="ml-auto flex gap-1.5">
-                  <Button size="sm" variant="primary" onClick={() => onUseHint(hint)}>Use</Button>
-                  <Button size="sm" onClick={() => onKeepHint(hint)}>Keep</Button>
-                </span>
-              </div>
-            )}
+            {hint && <HintBar hint={hint} onUse={() => onUseHint(hint)} onKeep={() => onKeepHint(hint)} />}
           </div>
         )}
       </td>
@@ -201,8 +192,23 @@ export function SegmentRow({
   );
 }
 
-/** The text as text: words that move the playhead (with word timings), spelling hints underlined, and the pen. */
-function Transcript({
+/** A spelling hint opened from the text: the house spelling, with a choice to use it or keep the text. */
+export function HintBar({ hint, onUse, onKeep }: { hint: Hint; onUse: () => void; onKeep: () => void }) {
+  return (
+    <div role="group" aria-label="Spelling hint" className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded-md border border-line bg-canvas text-xs text-muted" onClick={(e) => e.stopPropagation()}>
+      House spelling <span className="num text-fg">{hint.word}</span>
+      <span className="text-subtle">· {hint.lexicon}</span>
+      <span className="ml-auto flex gap-1.5">
+        <Button size="sm" variant="primary" onClick={onUse}>Use</Button>
+        <Button size="sm" onClick={onKeep}>Keep</Button>
+      </span>
+    </div>
+  );
+}
+
+/** The text as text: words that move the playhead (with word timings), spelling hints underlined, and the pen.
+ * `large` is the size of the clip view, where the transcript is the page's main content. */
+export function Transcript({
   s,
   hints,
   open,
@@ -211,8 +217,10 @@ function Transcript({
   onFocus,
   onEdit,
   onHint,
+  large = false,
 }: {
   s: Segment;
+  large?: boolean;
   hints: Hint[];
   open: number | null;
   playing: boolean;
@@ -252,7 +260,7 @@ function Transcript({
         if (word && words && !ctl.playing) ctl.seek(words[Number(word.dataset.word)].t0);
         onEdit(caretAt(e.clientX, e.clientY) ?? undefined);
       }}
-      className="group/t px-1.5 py-1 rounded border border-transparent hover:border-line text-fg text-[13px] leading-relaxed whitespace-pre-wrap break-words cursor-text"
+      className={cx("group/t px-1.5 py-1 rounded border border-transparent hover:border-line text-fg leading-relaxed whitespace-pre-wrap break-words cursor-text", large ? "text-base" : "text-[13px]")}
     >
       {s.text === null ? (
         <span className="text-subtle">(no transcript)</span>
@@ -275,7 +283,7 @@ function Transcript({
                 onFocus();
                 onHint(p);
               }}
-              className="p-0 border-0 bg-transparent text-fg text-[13px] leading-[inherit] cursor-pointer underline decoration-wavy decoration-warn underline-offset-[3px]"
+              className={cx("p-0 border-0 bg-transparent text-fg leading-[inherit] cursor-pointer underline decoration-wavy decoration-warn underline-offset-[3px]", large ? "text-base" : "text-[13px]")}
             >
               {hints[p].found}
             </button>
@@ -316,7 +324,7 @@ function caretAt(x: number, y: number): number | null {
 
 /** The text editor: a text area that grows with the text. Enter saves, Esc cancels, Tab saves and goes on to
  * the next segment to review, and Ctrl+Enter saves and confirms. Leaving it saves. */
-function Editor({ s, caret, onText, onEdit, onNext, onConfirmNext }: { s: Segment; caret: number | null; onText: (t: string) => void; onEdit: (on: boolean) => void; onNext: (direction: 1 | -1) => void; onConfirmNext: () => void }) {
+export function Editor({ s, caret, onText, onEdit, onNext, onConfirmNext, large = false, placeholder }: { s: Pick<Segment, "text" | "start">; caret: number | null; onText: (t: string) => void; onEdit: (on: boolean) => void; onNext: (direction: 1 | -1) => void; onConfirmNext: () => void; large?: boolean; placeholder?: string }) {
   const [draft, setDraft] = useState(s.text ?? "");
   const box = useRef<HTMLTextAreaElement>(null);
   const grow = () => {
@@ -368,7 +376,7 @@ function Editor({ s, caret, onText, onEdit, onNext, onConfirmNext }: { s: Segmen
       rows={1}
       aria-label={`Transcript at ${clock(s.start)}`}
       value={draft}
-      placeholder={s.text === null ? "(no transcript)" : ""}
+      placeholder={placeholder ?? (s.text === null ? "(no transcript)" : "")}
       onClick={(e) => e.stopPropagation()}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
@@ -377,7 +385,7 @@ function Editor({ s, caret, onText, onEdit, onNext, onConfirmNext }: { s: Segmen
         onEdit(false);
       }}
       onKeyDown={onKey}
-      className="block w-full resize-none overflow-hidden bg-canvas border border-focus rounded px-1.5 py-1 text-fg text-[13px] leading-relaxed outline-none"
+      className={cx("block w-full resize-none overflow-hidden bg-canvas border border-focus rounded px-1.5 py-1 text-fg leading-relaxed outline-none", large ? "text-base" : "text-[13px]")}
     />
   );
 }

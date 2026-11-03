@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..core import paths
 from ..core.db import get_session
-from ..core.models import AudioFile, Dataset, Job, Run, Segment
+from ..core.models import AudioFile, Dataset, Job, Labelling, Run, Segment
 from ..core.settings import REPO_ROOT
 from ..datasets.ingest import inspect_source
 from ..label.eta import counted_down
@@ -119,6 +119,7 @@ class DatasetIn(BaseModel):
     tags: list[str] = Field(default_factory=list)
     upload_id: str | None = None
     local_path: str | None = None
+    labelling: Literal["clips", "turns"] | None = None  # None: ingest picks one from the references
 
 
 def _clean_tags(tags: list[str]) -> list[str]:
@@ -134,7 +135,8 @@ def dataset_json(session: Session, ds: Dataset, detail: bool = False) -> dict[st
     rep = ds.report or {}
     d: dict[str, Any] = {
         "id": ds.id, "uid": ds.uid, "name": ds.name, "language": ds.language, "description": ds.description, "tags": ds.tags,
-        "label_types": ds.label_types, "mode": ds.mode, "status": ds.status, "created_at": ds.created_at.isoformat(),
+        "label_types": ds.label_types, "mode": ds.mode, "labelling": ds.labelling or Labelling.turns.value,
+        "status": ds.status, "created_at": ds.created_at.isoformat(),
         "files": rep.get("files"), "usable_files": rep.get("usable_files"), "hours": rep.get("hours"),
         "usable_hours": rep.get("usable_hours"), "has_speaker_text": bool(rep.get("has_speaker_text")),
         "flagged": {k: len(v) for k, v in (rep.get("flagged") or {}).items()},
@@ -174,7 +176,7 @@ def create_dataset(body: DatasetIn, session: Session = Depends(get_session)) -> 
         raise HTTPException(400, "give exactly one of upload_id or local_path")
     source = _upload_dir(body.upload_id) if body.upload_id else _local_dir(body.local_path or "")
     ds = Dataset(name=body.name.strip(), language=(body.language or "").strip() or None,
-                 description=body.description, tags=_clean_tags(body.tags), status="ingesting")
+                 description=body.description, tags=_clean_tags(body.tags), labelling=body.labelling, status="ingesting")
     session.add(ds)
     session.flush()
     job = jobs.enqueue(session, "ingest", {"dataset_id": ds.id, "source": str(source),
@@ -205,6 +207,7 @@ class DatasetPatch(BaseModel):
     language: str | None = None
     description: str | None = None
     tags: list[str] | None = None
+    labelling: Literal["clips", "turns"] | None = None
 
 
 @router.patch("/datasets/{dataset_id}")

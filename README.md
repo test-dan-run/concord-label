@@ -37,8 +37,9 @@ REPLAY_DIR=fixtures/recorded AICORE_ENDPOINTS=fixtures/recorded/endpoints.genera
 ### Datasets
 
 You upload a dataset as a folder or a zip, or point the app at a local folder. A dataset holds audio
-alone, or audio with complete or partial annotations, and the annotations count as confirmed labels
-straight away. The app reads these annotation formats:
+alone, or audio with complete or partial annotations. The annotations wait in review until a person
+confirms them, or until Keep all uploaded labels confirms them all. The app reads these annotation
+formats:
 
 - ASR transcripts: JSONL, a NeMo manifest, CSV, or `.txt`.
 - Diarisation: RTTM, JSON segments, or a NeMo diarisation manifest.
@@ -100,6 +101,9 @@ A segment with a score of 0.85 or more is auto-accepted, a segment from 0.50 to 
 segment below 0.50 is rejected. The app saves every model output and reuses it, so combining the
 transcripts again needs no model.
 
+A dataset with one transcript per clip skips step 1. Each ASR model transcribes each clip whole, so each
+clip gets one transcript and no speaker.
+
 ### Console
 
 The console shows labelling progress for each dataset in audio time, and the next action for each
@@ -131,6 +135,23 @@ You can review a file from the keyboard. Tab goes to the next segment to review 
 edits its text, and Ctrl+Enter confirms it. A click on the text opens the editor with the cursor where you
 clicked. The speaker chip in each row opens a menu of the speakers. Space plays or pauses from the playhead, S splits the segment under the
 playhead, and Ctrl+Z undoes the last change. The Docs page in the app lists every key.
+
+### Labelling clips
+
+A dataset is labelled in one of two ways. With speaker turns, each file has several turns, as Annotate
+above describes. With one transcript per clip, each file is one utterance for ASR alone. You choose when you
+upload a dataset, and a dataset with one plain transcript for each file starts this way on its own. A
+switch on Annotate and on the Pseudo-label page changes it later, and it doesn't change any segments.
+
+With one transcript per clip, Annotate shows the waveform, the clip's transcript, what each model heard, and
+a list of every clip in the dataset. It has no speaker lanes, and you can't split a clip. You work through the
+dataset from the keyboard. Enter edits the text, Ctrl+Enter confirms the clip and plays the next one that
+isn't checked, R rejects it, and Ctrl+Space plays and pauses while you type. Undo works on the clip on the
+screen. Live evaluation leaves out DER and cpWER, because the clips have no speakers.
+
+A clip with several segments doesn't have one transcript yet, and that can happen when you change how a dataset
+is labelled. The app never joins the segments on its own. It shows them, and you can merge them into one or
+open the clip with its speakers.
 
 ### Lexicons
 

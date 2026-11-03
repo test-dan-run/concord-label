@@ -266,6 +266,7 @@ def test_round_trip_label_to_bench_and_back_through_the_dataset_catalog(apps):
     # 2. Label: the same fixture set as an annotated dataset; a label run whose new segments are rejected
     lds = label.dataset(upload)
     assert lds["mode"] == "annotated"
+    label.post(f"/label/datasets/{lds['id']}/confirm-uploaded")  # uploaded labels wait for a person until then
     assert catalog.get("/store/stats")["audio"]["files"] == stats["audio"]["files"]  # the same audio, stored once
     pv = label.get(f"/datasets/{lds['id']}/reference-preview")
     refs = pv["segments"]

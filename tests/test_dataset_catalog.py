@@ -16,7 +16,7 @@ from sqlalchemy import select
 from concord_label.core import paths
 from concord_label.core.models import AudioFile, Dataset, Segment
 from concord_label.runs import jobs
-from label_helpers import _ok, create_dataset, stage_fixture_dataset
+from label_helpers import _ok, create_dataset, keep_uploaded, stage_fixture_dataset
 
 
 def wav(seconds: float = 1.0, freq: float = 220.0, sr: int = 16000) -> bytes:
@@ -27,7 +27,7 @@ def wav(seconds: float = 1.0, freq: float = 220.0, sr: int = 16000) -> bytes:
 
 
 def annotated(client, tmp_path, name="Synth fixtures") -> dict:
-    return create_dataset(client, stage_fixture_dataset(tmp_path / name.replace(" ", "-")), name)
+    return keep_uploaded(client, create_dataset(client, stage_fixture_dataset(tmp_path / name.replace(" ", "-")), name))
 
 
 def files_of(session, dataset_id: int) -> list[AudioFile]:

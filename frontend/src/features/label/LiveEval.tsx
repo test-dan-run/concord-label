@@ -73,13 +73,13 @@ function Live({ datasetId }: { datasetId: number }) {
             <Standings d={d} colors={colors} />
           </div>
           <div className="grid gap-5 lg:grid-cols-3">
-            <Panel title="Diarisation (DER)" subtitle={`${num(d.der.files)} of ${num(d.der.of)} files fully reviewed · collar ${d.der.collar} s`}>
+            {!d.dataset.clips && <Panel title="Diarisation (DER)" subtitle={`${num(d.der.files)} of ${num(d.der.of)} files fully reviewed · collar ${d.der.collar} s`}>
               {d.der.files === 0 && <span className="text-[13px] text-muted">DER needs files where every segment is reviewed, so missing labels never count as misses.</span>}
               {d.der.files > 0 && d.der.models.length === 0 && <span className="text-[13px] text-muted">No diariser has saved outputs for these files.</span>}
               {d.der.models.map((m) => (
                 <Fact key={m.model_id} k={m.name} v={<>{pct(m.der)} <span className="text-subtle">· JER {pct(m.jer)}</span></>} />
               ))}
-            </Panel>
+            </Panel>}
             <Panel title="Keyword spotting">
               <span className="text-[13px] text-muted">Not built yet (Q6). Package files keep an empty keywords.jsonl so progress stays forward-compatible.</span>
             </Panel>
@@ -122,7 +122,7 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
                 <th scope="col" className="font-medium px-2 py-2 border-b border-line">Model</th>
                 <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right">WER</th>
                 <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right">95% CI</th>
-                <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right" title="Concatenated minimum-permutation WER: the transcript and the speakers together">cpWER</th>
+                {!d.dataset.clips && <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right" title="Concatenated minimum-permutation WER: the transcript and the speakers together">cpWER</th>}
                 {showLocked && <th scope="col" className="font-medium px-2 py-2 border-b border-line text-right" title="Benchmark score in Concord Bench (locked references)">Locked</th>}
               </tr>
             </thead>
@@ -139,6 +139,7 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
                   </td>
                   <td className="px-2 py-2 text-right num">{pct(m.wer)}</td>
                   <td className="px-2 py-2 text-right num text-muted">{m.ci ? `${pct(m.ci[0])}–${pct(m.ci[1])}` : "—"}</td>
+                  {!d.dataset.clips && (
                   <td className="px-2 py-2 text-right num">
                     {cp.get(m.service) ? (
                       <span title={`${num(cp.get(m.service)!.errors)} errors in ${num(cp.get(m.service)!.words)} words, on ${cp.get(m.service)!.files} files`}>{pct(cp.get(m.service)!.cpwer)}</span>
@@ -146,6 +147,7 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
                       <span className="text-subtle">—</span>
                     )}
                   </td>
+                  )}
                   {showLocked && (
                     <td className="px-2 py-2 text-right num">
                       {m.locked ? (
@@ -164,7 +166,7 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
           </table>
         </div>
       )}
-      <p className="m-0 text-xs text-muted">
+      {!d.dataset.clips && <p className="m-0 text-xs text-muted">
         {d.cpwer.reason ?? (
           <>
             cpWER scores the transcript and the speakers together, with the speakers {d.cpwer.diariser ?? "the diariser"} found. It scores each file up to
@@ -172,7 +174,7 @@ function Standings({ d, colors }: { d: LiveEval; colors: Map<string, string> }) 
             {num(d.cpwer.complete)} of them reviewed to the end. A word given to the wrong speaker counts twice.
           </>
         )}
-      </p>
+      </p>}
     </Panel>
   );
 }

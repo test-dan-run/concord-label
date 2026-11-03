@@ -9,19 +9,20 @@ match the segment. Each change is also recorded in its file's history, so Annota
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..core.models import AudioFile, Model, Run, Segment, SegmentStatus, utcnow
+from ..core.models import AudioFile, Dataset, FileStatus, Model, Run, Segment, SegmentStatus, utcnow
 from ..runs import cache
 from . import console, history
 
 EDITABLE = ("text", "speaker", "start", "end", "status", "flagged", "flag_note", "spelling_kept")
 MIN_LEN = 0.05
 TOUCH = 0.02  # two segments touch when one ends within this many seconds of where the other starts
+USABLE = (FileStatus.ok, FileStatus.clipped)
 
 
 class EditError(ValueError):
@@ -36,7 +37,8 @@ def segment_json(s: Segment) -> dict[str, Any]:
             "reviewed": s.reviewed, "edited_at": s.edited_at.isoformat() if s.edited_at else None,
             "updated_at": s.updated_at.isoformat() if s.updated_at else None,
             "chosen": m.get("chosen"), "agreement": m.get("agreement"), "words": m.get("words"),
-            "created": bool(m.get("created")), "spelling_kept": m.get("spelling_kept") or []}
+            "created": bool(m.get("created")), "spelling_kept": m.get("spelling_kept") or [],
+            "uploaded_text": (m.get("uploaded") or {}).get("text")}
 
 
 def _touch(s: Segment) -> None:
@@ -45,9 +47,16 @@ def _touch(s: Segment) -> None:
 
 def _record(session: Session, action: str, before: list[dict[str, Any]], after: list[dict[str, Any]]) -> None:
     """Record an edit in the history of each file it touched."""
-    for fid in sorted({r["audio_file_id"] for r in before + after}):
-        history.record(session, fid, action, [r for r in before if r["audio_file_id"] == fid],
-                       [r for r in after if r["audio_file_id"] == fid])
+    was, now = defaultdict(list), defaultdict(list)
+    for r in before:
+        was[r["audio_file_id"]].append(r)
+    for r in after:
+        now[r["audio_file_id"]].append(r)
+    files = sorted(was.keys() | now.keys())
+    if len(files) == 1:
+        history.record(session, files[0], action, was[files[0]], now[files[0]])
+    else:
+        history.record_many(session, action, {fid: (was[fid], now[fid]) for fid in files})
 
 
 def _update_action(fields: dict[str, Any], before: dict[str, Any], s: Segment) -> str:
@@ -266,6 +275,51 @@ def confirm_auto(session: Session, f: AudioFile) -> int:
     return bulk(session, segs, "confirm", history_name="confirm all high-confidence") if segs else 0
 
 
+def confirm_auto_dataset(session: Session, ds: Dataset) -> int:
+    """'Confirm all high-confidence' for every clip of a dataset that `clip_list` shows as auto-accepted: a usable
+    clip with one transcript, so a clip with several segments waits for a merge. Each file's history records its own
+    edit."""
+    several = (select(Segment.audio_file_id).where(Segment.status != SegmentStatus.rejected)
+               .group_by(Segment.audio_file_id).having(func.count(Segment.id) > 1))
+    segs = list(session.scalars(select(Segment).join(AudioFile).where(
+        AudioFile.dataset_id == ds.id, AudioFile.status.in_(USABLE), Segment.status == SegmentStatus.auto,
+        Segment.audio_file_id.not_in(several))))
+    return bulk(session, segs, "confirm", history_name="confirm all high-confidence") if segs else 0
+
+
+def _waiting_uploaded(session: Session, ds: Dataset) -> list[Segment]:
+    """The dataset's uploaded labels that nobody has checked, in its usable files."""
+    segs = session.scalars(select(Segment).join(AudioFile).where(
+        AudioFile.dataset_id == ds.id, AudioFile.status.in_(USABLE), func.json_type(Segment.meta, "$.uploaded").is_not(None),
+        Segment.status != SegmentStatus.confirmed, Segment.edited_at.is_(None)))
+    return list(segs)
+
+
+def uploaded_counts(session: Session, ds: Dataset) -> dict[str, int]:
+    """How many segments of the dataset hold an uploaded label, and how many of those wait for a person."""
+    labels = (select(func.count(Segment.id)).join(AudioFile)
+              .where(AudioFile.dataset_id == ds.id, AudioFile.status.in_(USABLE),
+                     func.json_type(Segment.meta, "$.uploaded").is_not(None)))
+    return {"labels": session.scalar(labels) or 0,
+            "waiting": session.scalar(labels.where(Segment.status != SegmentStatus.confirmed,
+                                                   Segment.edited_at.is_(None))) or 0}
+
+
+def confirm_uploaded(session: Session, ds: Dataset) -> int:
+    """'Keep all uploaded labels': each waiting segment takes its uploaded label back and becomes confirmed, in place
+    of any pseudo-label it holds. Each file's history records its own edit."""
+    segs = _waiting_uploaded(session, ds)
+    if not segs:
+        return 0
+    before = history.snapshot(segs)
+    for s in segs:
+        s.text, s.status = s.uploaded.get("text"), SegmentStatus.confirmed
+        _touch(s)
+    session.flush()
+    _record(session, "keep uploaded label", before, history.snapshot(segs))
+    return len(segs)
+
+
 # ---------------------------------------------------------------- views
 
 def file_counts(session: Session, dataset_id: int) -> list[dict[str, Any]]:
@@ -280,6 +334,46 @@ def file_counts(session: Session, dataset_id: int) -> list[dict[str, Any]]:
     return [{"id": f.id, "path": f.rel_path, "stem": f.stem, "duration": f.duration, "status": f.status,
              "usable": f.usable, "counts": counts.get(f.id, {"confirmed": 0, "auto": 0, "review": 0, "rejected": 0,
                                                              "flagged": 0})} for f in files]
+
+
+def _thresholds(session: Session, dataset_id: int) -> dict[str, float]:
+    run = console.latest_label_run(session, dataset_id, done=True)
+    th = (run.outputs.get("summary") or {}).get("thresholds") if run else None
+    return th or {"high": 0.85, "low": 0.5}
+
+
+def clip_list(session: Session, ds: Dataset) -> dict[str, Any]:
+    """The usable clips of a dataset with their transcripts, in one go, so the page can list thousands of clips and
+    walk them without asking again. `segments` counts a clip's segments that aren't rejected, which is 1 in a clip
+    that fits this way of labelling. `segment` is the clip's transcript: that one segment, a rejected one when no
+    other is left, or the first of several with all their text. Only the JSON fields the list needs are read."""
+    files = session.execute(select(AudioFile.id, AudioFile.rel_path, AudioFile.duration, AudioFile.status)
+                            .where(AudioFile.dataset_id == ds.id).order_by(AudioFile.rel_path)).all()
+    by_file: dict[int, list[Any]] = defaultdict(list)
+    for row in session.execute(select(Segment.audio_file_id, Segment.id, Segment.text, Segment.status,
+                                      Segment.confidence, Segment.flagged, Segment.edited_at,
+                                      Segment.meta["created"], Segment.meta["spelling_kept"])
+                               .join(AudioFile).where(AudioFile.dataset_id == ds.id)
+                               .order_by(Segment.start, Segment.end)):
+        by_file[row[0]].append(row)
+    clips = []
+    for fid, path, duration, status in files:
+        if status not in USABLE:
+            continue
+        rows = by_file.get(fid, [])
+        live = [r for r in rows if r[3] != SegmentStatus.rejected]
+        seg = None
+        if rows:
+            _, sid, text, st, conf, flagged, edited, created, kept = (live or rows)[0]
+            if len(live) > 1:
+                text = " ".join(r[2].strip() for r in live if r[2] and r[2].strip())
+            seg = {"id": sid, "text": text, "status": st, "confidence": conf, "flagged": flagged,
+                   "reviewed": st == SegmentStatus.confirmed or edited is not None, "created": bool(created),
+                   "spelling_kept": kept or []}
+        name = path.rsplit("/", 1)[-1]
+        clips.append({"id": fid, "path": path, "stem": name.rsplit(".", 1)[0] if "." in name else name,
+                      "duration": duration, "segments": len(live), "segment": seg})
+    return {"clips": clips, "thresholds": _thresholds(session, ds.id)}
 
 
 def _diariser(session: Session, segs: list[Segment]) -> str | None:
@@ -308,14 +402,12 @@ def file_view(session: Session, f: AudioFile) -> dict[str, Any]:
     siblings = [r[0] for r in session.execute(select(AudioFile.id).where(AudioFile.dataset_id == f.dataset_id)
                                               .order_by(AudioFile.rel_path))]
     k = siblings.index(f.id)
-    run = console.latest_label_run(session, f.dataset_id, done=True)
-    th = (run.outputs.get("summary") or {}).get("thresholds") if run else None
     return {"file": {"id": f.id, "path": f.rel_path, "stem": f.stem, "duration": f.duration, "status": f.status,
                      "dataset_id": f.dataset_id, "meta": f.meta},
             "dataset": {"id": f.dataset.id, "name": f.dataset.name, "language": f.dataset.language},
             "segments": rows, "speakers": speakers, "diariser": _diariser(session, segs), "keywords": [],
             "history": history.state(session, f.id),
-            "thresholds": th or {"high": 0.85, "low": 0.5},
+            "thresholds": _thresholds(session, f.dataset_id),
             "prev_file_id": siblings[k - 1] if k > 0 else None,
             "next_file_id": siblings[k + 1] if k + 1 < len(siblings) else None,
             "position": {"index": k + 1, "of": len(siblings)}}

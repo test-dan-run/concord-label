@@ -1,5 +1,5 @@
 """Dataset ingest: scan a source (upload folder, zip, or local path), match annotations to audio by
-stem, then copy originals, derive 16 kHz mono FLAC + peaks, and store reference segments.
+stem, then copy originals, derive 16 kHz mono FLAC + peaks, and store the uploaded labels as segments to review.
 
 With the Dataset Catalog set up (DATASET_STORE), each original goes to the catalog's store instead of
 data/originals/, and Label holds it there (DATASET_CATALOG_PLAN.md §8.1). The derived files stay in data/.
@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core import paths
-from ..core.models import AudioFile, Dataset, FileStatus, LabelType, Segment, SegmentStatus
+from ..core.models import AudioFile, Dataset, FileStatus, Labelling, LabelType, Segment, SegmentStatus
 from ..platform import datasets as dataset_catalog
 from . import audio as audio_mod
 from .parsers import ANNOTATION_EXTS, ParseResult, RefRecord, parse_file
@@ -148,6 +148,15 @@ def label_types_for(records: list[RefRecord]) -> list[str]:
     return out
 
 
+def labelling_for(records: list[RefRecord]) -> str:
+    """One transcript per clip when the references are transcripts alone, at most one for each file. Everything
+    else, audio without references included, is labelled in speaker turns until a person says otherwise."""
+    per_file = Counter(r.stem.lower() for r in records)
+    if per_file and {r.kind for r in records} == {"asr"} and max(per_file.values()) == 1:
+        return Labelling.clips.value
+    return Labelling.turns.value
+
+
 def _process_audio(f: AudioFile, src: Path) -> dict[str, Any]:
     """Copy the original, decode, check clipping, derive 16 kHz mono and peaks. Returns facts for the report."""
     orig = paths.original(f.sha256, f.ext)
@@ -213,9 +222,10 @@ def ingest(session: Session, dataset_id: int, source: Path, progress: Progress |
         if f.orig_sr:
             sr_hist[f.orig_sr] += 1
         seconds += f.duration or 0.0
-        # Reference segments: replace whatever this file had from a previous ingest.
+        # Uploaded labels: replace whatever this file had from a previous ingest. A person checks them, so they
+        # aren't references until confirmed, and `meta` keeps them when a pseudo-label takes the segment's text.
         for seg in list(f.segments):
-            if seg.status == SegmentStatus.confirmed and seg.source_run_id is None:
+            if (seg.status == SegmentStatus.confirmed and seg.source_run_id is None) or (seg.uploaded and not seg.reviewed):
                 session.delete(seg)
         recs = m["matched"].get(rel, [])
         for rec in recs:
@@ -224,7 +234,7 @@ def ingest(session: Session, dataset_id: int, source: Path, progress: Progress |
             else:
                 start, end = rec.start, rec.end
             session.add(Segment(audio_file_id=f.id, start=start, end=end, speaker=rec.speaker, text=rec.text,
-                                status=SegmentStatus.confirmed))
+                                status=SegmentStatus.pseudo, meta={"uploaded": {"text": rec.text, "speaker": rec.speaker}}))
         # Only metadata with the same value on every record describes the file (and is sent to Bench as a
         # file label, CONTRACTS.md §2.7); a value that changes within the file belongs to its segments.
         meta = {k: v for k, v in recs[0].meta.items() if all(r.meta.get(k) == v for r in recs[1:])} if recs else {}
@@ -235,6 +245,7 @@ def ingest(session: Session, dataset_id: int, source: Path, progress: Progress |
     all_records = [r for recs in m["matched"].values() for r in recs]
     ds.label_types = label_types_for(all_records)
     ds.mode = "annotated" if ds.label_types else "audio_only"
+    ds.labelling = ds.labelling or labelling_for(all_records)
     usable = [f for f in session.scalars(select(AudioFile).where(AudioFile.dataset_id == ds.id)) if f.usable]
     ds.report = {
         "files": total, "usable_files": len(usable), "hours": seconds / 3600,

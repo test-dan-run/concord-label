@@ -26,12 +26,21 @@ calls still fails the run. A cancelled run stops before its next stage or cut
 (`check_cancel`, runs/jobs.py), and fusion runs only when every stage finished.
 How long a run has left is estimated stage by stage (label/eta.py) and reported through `on_eta`.
 
+A dataset labelled with one transcript per clip (`Labelling.clips`) has no stage 1: each clip is one cut, the whole
+file, so a clip never comes back in pieces (`whole_clip` in the run's params). A clip that already has reviewed work
+keeps it, however little of the clip it covers.
+
 Writing segments follows one rule: reviewed work (confirmed, or touched by a person) is never replaced.
 Earlier machine segments nobody touched are replaced; a new segment that mostly overlaps reviewed
 work is dropped.
 
-`run.params`: tasks (asr, diar), seg_model_id, asr_model_ids, strategy, single_model_id, high, low,
-skip_failed.
+A label uploaded with the dataset (`Segment.uploaded`) is checked against the pseudo-label. In a whole-clip run, a
+clip's one uploaded segment takes the pseudo-label as its text and keeps the label in `meta`. It is auto-accepted
+when the two match after the default normaliser, and it goes to review when they differ, whatever the confidence, so
+a low confidence never rejects it. Every other uploaded segment stays as it is and counts like reviewed work.
+
+`run.params`: tasks (asr, diar), whole_clip, seg_model_id (None with whole_clip), asr_model_ids, strategy,
+single_model_id, high, low, skip_failed.
 `run.outputs`: {"files": {file_id: {seg_cache_id, cuts: [{start, end, speaker, src, members}]}},
 "summary": {...}}. `run.image_tags`: per model, the build it ran with ({build_key, image}).
 """
@@ -56,9 +65,10 @@ from sqlalchemy.orm import Session
 from .. import adapters
 from ..adapters.base import Adapter
 from ..core import paths
-from ..core.models import AudioFile, Dataset, Model, ModelOutput, Run, Segment, utcnow
-from ..cuts import prepare_cuts, usable_files
+from ..core.models import AudioFile, Dataset, Model, ModelOutput, Run, Segment, SegmentStatus, utcnow
+from ..cuts import Cut, prepare_cuts, usable_files
 from ..datasets.audio import cut, load_derived
+from ..metrics import normalisers
 from ..platform import catalog
 from ..runs import cache
 from ..runs.cache import Key
@@ -94,7 +104,8 @@ class Leases:
             yield lease
 
 
-def _models(session: Session, params: dict[str, Any]) -> tuple[Model, list[Model]]:
+def _models(session: Session, params: dict[str, Any]) -> tuple[Model | None, list[Model]]:
+    """The run's segmenter (None for a whole-clip run) and ASR members."""
     def get(i: int | None) -> Model | None:
         try:
             return catalog.ensure_model(session, int(i)) if i is not None else None
@@ -102,15 +113,16 @@ def _models(session: Session, params: dict[str, Any]) -> tuple[Model, list[Model
             return None
 
     seg = get(params.get("seg_model_id"))
-    if seg is None or not seg.is_seg:
+    if not params.get("whole_clip") and (seg is None or not seg.is_seg):
         raise LabelError("pseudo-labelling needs a VAD / diarisation model for the segments")
     asr = [get(i) for i in params.get("asr_model_ids") or []]
     if any(m is None or not m.is_asr for m in asr):
         raise LabelError("every ensemble member must be a catalog ASR model")
     if "asr" in params.get("tasks", []) and not asr:
         raise LabelError("transcripts need at least one ASR model")
-    if "diar" in params.get("tasks", []) and not seg.has_speakers:
-        raise LabelError(f"{seg.display_name} returns no speakers; pick a diariser for the speakers task")
+    if "diar" in params.get("tasks", []) and (seg is None or not seg.has_speakers):
+        raise LabelError(f"{seg.display_name if seg else 'A whole-clip run'} returns no speakers; pick a diariser "
+                         "for the speakers task")
     return seg, asr  # type: ignore[return-value]
 
 
@@ -127,6 +139,12 @@ def file_spans(seg_output: dict[str, Any], duration: float) -> list[tuple[Any, t
     """(cut, ASR span or None) for each cut of a file, from its segmenter output."""
     cuts = prepare_cuts(seg_output["segments"], seg_output.get("speakers"), duration)
     return [(c, asr_span(c.start, c.end, duration)) for c in cuts]
+
+
+def clip_spans(f: AudioFile) -> list[tuple[Cut, tuple[float, float] | None]]:
+    """A file's one cut in a whole-clip run: `file_spans` without a segmenter."""
+    duration = f.duration or 0.0
+    return [(Cut(0.0, duration, None, [0.0, duration]), asr_span(0.0, duration, duration))]
 
 
 def _plan_keys(keys: list[Key], phash: str) -> list[dict[str, Any]]:
@@ -173,27 +191,37 @@ def _state(local: int, other: int, total: int, unknown: int = 0) -> str:
     return "partial" if local + other else "new"
 
 
-def preview(session: Session, ds: Dataset, seg_model: Model, asr_models: list[Model]) -> dict[str, Any]:
+def preview(session: Session, ds: Dataset, seg_model: Model | None, asr_models: list[Model]) -> dict[str, Any]:
     """What a label run would cost: per model, how many outputs are saved here, how many Concord Bench holds
     (the catalog's output index: "saved in Bench"), and what is left to run. One index lookup per model.
 
     Cuts are known where the segmenter's output is saved here or in Bench; elsewhere every member needs
-    inference."""
+    inference. Without a segmenter (a whole-clip run), each file is one cut and `seg` is None."""
     files = usable_files(session, ds.id)
-    seg = adapters.for_model(seg_model)
-    sb = catalog.current_build(seg_model)
-    seg_cache = cache.OutputCache(session, seg, sb["build_key"], sb["image"])
-    seg_keys = {f.id: cache.key(f.sha256) for f in files}
-    local = seg_cache.local(seg_keys.values())
-    remote = seg_cache.peek([k for k in seg_keys.values() if k not in local])
     plans: list[tuple[AudioFile, list[tuple[float, float]] | None]] = []
-    for f in files:
-        k = seg_keys[f.id]
-        out = local[k].output if k in local else (remote[k]["output"] if k in remote else None)
-        if out is None:
-            plans.append((f, None))
-            continue
-        plans.append((f, [sp for _, sp in file_spans(out, f.duration or 0.0) if sp]))
+    seg_info: dict[str, Any] | None = None
+    stages: list[dict[str, Any]] = []
+    if seg_model is None:
+        plans = [(f, [sp for _, sp in clip_spans(f) if sp]) for f in files]
+    else:
+        seg = adapters.for_model(seg_model)
+        sb = catalog.current_build(seg_model)
+        seg_cache = cache.OutputCache(session, seg, sb["build_key"], sb["image"])
+        seg_keys = {f.id: cache.key(f.sha256) for f in files}
+        local = seg_cache.local(seg_keys.values())
+        remote = seg_cache.peek([k for k in seg_keys.values() if k not in local])
+        for f in files:
+            k = seg_keys[f.id]
+            out = local[k].output if k in local else (remote[k]["output"] if k in remote else None)
+            if out is None:
+                plans.append((f, None))
+                continue
+            plans.append((f, [sp for _, sp in file_spans(out, f.duration or 0.0) if sp]))
+        seg_info = {"model_id": seg_model.id, "name": seg_model.display_name, "service": seg_model.catalog_id,
+                    "cached_files": len(local), "bench_files": len(remote),
+                    "state": _state(len(local), len(remote), len(files)), **_brief(_record(seg_model))}
+        stages.append({"name": "seg", "models": [seg_model.catalog_id],
+                       "keys": {seg_model.catalog_id: _plan_keys(list(seg_keys.values()), seg.params_hash)}})
     members, stages_asr = [], {}
     for m in asr_models:
         a = adapters.for_model(m, ds.language)
@@ -209,20 +237,12 @@ def preview(session: Session, ds: Dataset, seg_model: Model, asr_models: list[Mo
                         "timing_level": m.timing_level, "cached_cuts": len(have), "bench_cuts": len(hits),
                         "known_cuts": len(keys), "files_without_segments": unknown,
                         "state": _state(len(have), len(hits), len(keys), unknown), **_brief(_record(m))})
-    seg_cached = len(local)
-    seg_state = _state(seg_cached, len(remote), len(files))
-    stages: list[dict[str, Any]] = [{"name": "seg", "models": [seg_model.catalog_id],
-                                     "keys": {seg_model.catalog_id: _plan_keys(list(seg_keys.values()),
-                                                                                 seg.params_hash)}}]
     if asr_models:
-        stages.append({"name": "asr", "models": [m.catalog_id for m in asr_models], "after": "seg",
+        stages.append({"name": "asr", "models": [m.catalog_id for m in asr_models],
+                       **({"after": "seg"} if seg_model else {}),
                        **({"keys": stages_asr} if len(stages_asr) == len(asr_models) else {})})
-    pl = plan(stages)
-    return {"files": len(files),
-            "seg": {"model_id": seg_model.id, "name": seg_model.display_name, "service": seg_model.catalog_id,
-                    "cached_files": seg_cached, "bench_files": len(remote), "state": seg_state,
-                    **_brief(_record(seg_model))},
-            "members": members,
+    pl = plan(stages) if stages else None
+    return {"files": len(files), "seg": seg_info, "members": members,
             "saved_members": sum(1 for m in members if m["state"] in ("saved", "bench")),
             "bench_members": sum(1 for m in members if m["state"] == "bench"),
             "new_members": sum(1 for m in members if m["state"] not in ("saved", "bench")),
@@ -233,7 +253,7 @@ def preview(session: Session, ds: Dataset, seg_model: Model, asr_models: list[Mo
 def required_models(pv: dict[str, Any]) -> list[str]:
     """Catalog models a label run has work for (the rest is saved here or in Bench): what it will lease."""
     names = [m["service"] for m in pv["members"] if m["state"] not in ("saved", "bench")]
-    if pv["seg"]["state"] not in ("saved", "bench"):
+    if pv["seg"] and pv["seg"]["state"] not in ("saved", "bench"):
         names.append(pv["seg"]["service"])
     return sorted(set(names))
 
@@ -390,14 +410,14 @@ def key_audio_s(f: AudioFile, k: Key) -> float:
     return (f.duration or 0.0) if k[2] == cache.WHOLE else k[2] - k[1]
 
 
-def eta_stages(session: Session, run: Run, seg_model: Model, asr_models: list[Model],
+def eta_stages(session: Session, run: Run, seg_model: Model | None, asr_models: list[Model],
                files: list[AudioFile]) -> list[Stage]:
     """The run's stages for its estimate. A stage the preview found saved has no work; until the cuts are
     known, an ASR stage counts all the audio."""
     states = (run.params.get("preview") or {}).get("states") or {}
     audio = sum(f.duration or 0.0 for f in files)
     out = []
-    for m, kind in [(seg_model, "seg"), *((a, "asr") for a in asr_models)]:
+    for m, kind in [*([(seg_model, "seg")] if seg_model else []), *((a, "asr") for a in asr_models)]:
         rec = _record(m) or {}
         cold = 0.0 if rec.get("state") == "running" else float(rec.get("cold_start_s") or 0.0)
         work = 0.0 if states.get(m.catalog_id) in ("saved", "bench") else audio
@@ -417,27 +437,32 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
         raise LabelError("the dataset has no usable audio files")
     if "asr" not in tasks:
         asr_models = []
-    seg = adapters.for_model(seg_model)
+    seg = adapters.for_model(seg_model) if seg_model else None
     members = {m.catalog_id: adapters.for_model(m, ds.language) for m in asr_models}
     run.status, run.started_at = "running", utcnow()
-    run.image_tags = {m.catalog_id: catalog.current_build(m) for m in [seg_model, *asr_models]}
-    run.params = {**p, "seg_adapter": seg.params, "asr_adapters": {n: a.params for n, a in members.items()}}
+    run.image_tags = {m.catalog_id: catalog.current_build(m) for m in [*([seg_model] if seg_model else []), *asr_models]}
+    run.params = {**p, **({"seg_adapter": seg.params} if seg else {}),
+                  "asr_adapters": {n: a.params for n, a in members.items()}}
     session.commit()
     eta = Eta(eta_stages(session, run, seg_model, asr_models, files), on_eta)
     eta.report(force=True)
 
-    # stage 1: the segmenter over every file
-    def seg_progress(x: float, msg: str | None) -> None:
-        progress(SEG_SHARE * x, msg or f"segments from {seg_model.display_name}")
+    # stage 1: the segmenter over every file (a whole-clip run has none)
+    seg_rows: dict[Key, ModelOutput] = {}
+    seg_ran = 0
+    seg_share = SEG_SHARE if seg_model else 0.0
+    if seg_model and seg:
+        def seg_progress(x: float, msg: str | None) -> None:
+            progress(SEG_SHARE * x, msg or f"segments from {seg_model.display_name}")
 
-    seg_progress(0.0, f"stage 1: {seg_model.display_name} on {len(files)} files")
-    seg_rows, seg_ran = run_stage(session, seg_model, seg, [(f, [cache.key(f.sha256)]) for f in files], leases,
-                                  log, seg_progress, f"stage 1, {seg_model.catalog_id}", check_cancel, eta)
+        seg_progress(0.0, f"stage 1: {seg_model.display_name} on {len(files)} files")
+        seg_rows, seg_ran = run_stage(session, seg_model, seg, [(f, [cache.key(f.sha256)]) for f in files], leases,
+                                      log, seg_progress, f"stage 1, {seg_model.catalog_id}", check_cancel, eta)
 
     # the cuts of every file
     cuts: dict[int, list[tuple[Any, tuple[float, float] | None]]] = {}
     for f in files:
-        cuts[f.id] = file_spans(seg_rows[cache.key(f.sha256)].output, f.duration or 0.0)
+        cuts[f.id] = file_spans(seg_rows[cache.key(f.sha256)].output, f.duration or 0.0) if seg_model else clip_spans(f)
     work = [(f, [cache.key(f.sha256, *sp) for _, sp in cuts[f.id] if sp]) for f in files]
     cut_audio = {k: key_audio_s(f, k) for f, ks in work for k in ks}
     n_keys = len(cut_audio)
@@ -457,8 +482,8 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
     skipped: list[dict[str, Any]] = []
     calls = ran_asr = 0
     for i, name in enumerate(order):
-        lo = SEG_SHARE + (0.9 - SEG_SHARE) * i / len(order)
-        hi = SEG_SHARE + (0.9 - SEG_SHARE) * (i + 1) / len(order)
+        lo = seg_share + (0.9 - seg_share) * i / len(order)
+        hi = seg_share + (0.9 - seg_share) * (i + 1) / len(order)
 
         def asr_progress(x: float, msg: str | None, lo: float = lo, hi: float = hi, name: str = name) -> None:
             progress(lo + (hi - lo) * x, msg or name)
@@ -475,9 +500,9 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
     out_files: dict[str, Any] = {}
     seg_s = asr_s = audio_s = 0.0
     for f in files:
-        row = seg_rows[cache.key(f.sha256)]
-        seg_s += row.latency_s
-        entry: dict[str, Any] = {"seg_cache_id": row.id, "cuts": []}
+        row = seg_rows.get(cache.key(f.sha256))
+        seg_s += row.latency_s if row else 0.0
+        entry: dict[str, Any] = {"seg_cache_id": row.id if row else None, "cuts": []}
         for c, sp in cuts[f.id]:
             cd: dict[str, Any] = {"start": c.start, "end": c.end, "speaker": c.speaker, "src": c.src, "members": {}}
             if sp is not None:
@@ -495,7 +520,7 @@ def execute(session: Session, run: Run, log: Log, progress: Progress, leases: Le
     run.rtf_by_stage = {"seg": seg_s / audio_s if audio_s else None, "asr": asr_s / audio_s if audio_s else None,
                         "total": (seg_s + asr_s) / audio_s if audio_s else None, "audio_s": audio_s,
                         "processing_s": seg_s + asr_s}
-    log(f"label: {len(files)} files, segmenter ran on {seg_ran}; {calls} ASR cuts, {ran_asr} run, "
+    log(f"label: {len(files)} files, {f'segmenter ran on {seg_ran}' if seg_model else 'each clip whole'}; {calls} ASR cuts, {ran_asr} run, "
         f"{len(skipped)} skipped ({calls - ran_asr - len(skipped)} saved)")
     progress(0.9, "fusing")
     summary = {**write_segments(session, run, files), "skipped": skipped}
@@ -516,6 +541,12 @@ def _overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     return max(0.0, min(a1, b1) - max(a0, b0))
 
 
+def same_text(a: str, b: str) -> bool:
+    """Whether a pseudo-label says what an uploaded label says, after the default normaliser."""
+    norm = normalisers.get(normalisers.DEFAULT)
+    return norm(a) == norm(b)
+
+
 def write_segments(session: Session, run: Run, files: list[AudioFile]) -> dict[str, Any]:
     """Fuse the run's member outputs per cut and write the segments (see the module docstring)."""
     p = run.params
@@ -533,7 +564,7 @@ def write_segments(session: Session, run: Run, files: list[AudioFile]) -> dict[s
     chosen: Counter[str] = Counter()
     applied: Counter[str] = Counter()
     triage: Counter[str] = Counter()
-    kept_reviewed = replaced = written = 0
+    kept_reviewed = kept_uploaded = replaced = written = matches = differs = 0
     by_id = {f.id: f for f in files}
     for fid, entry in run.outputs["files"].items():
         f = by_id.get(int(fid))
@@ -541,17 +572,25 @@ def write_segments(session: Session, run: Run, files: list[AudioFile]) -> dict[s
             continue
         existing = list(session.scalars(select(Segment).where(Segment.audio_file_id == f.id)))
         reviewed = [s for s in existing if s.reviewed]
+        uploaded = [s for s in existing if s.uploaded and not s.reviewed]
         history.forget(session, [f.id])  # Annotate's undo history no longer matches the file
         for s in existing:
-            if not s.reviewed and is_machine(s):
+            if not s.reviewed and not s.uploaded and is_machine(s):
                 session.delete(s)
                 replaced += 1
+        # the segment that takes the clip's pseudo-label beside its uploaded label
+        fill = uploaded[0] if p.get("whole_clip") and "asr" in tasks and not reviewed and len(uploaded) == 1 else None
         for c in entry["cuts"]:
             s0, s1 = c["src"]
             if s1 - s0 <= 0:
                 continue
-            if any(_overlap(s0, s1, r.start, r.end) > OVERLAP_DROP * (s1 - s0) for r in reviewed):
+            if (p.get("whole_clip") and reviewed) or any(_overlap(s0, s1, r.start, r.end) > OVERLAP_DROP * (s1 - s0)
+                                                          for r in reviewed):
                 kept_reviewed += 1
+                continue
+            if fill is None and ((p.get("whole_clip") and uploaded)
+                                 or any(_overlap(s0, s1, u.start, u.end) > OVERLAP_DROP * (s1 - s0) for u in uploaded)):
+                kept_uploaded += 1
                 continue
             meta: dict[str, Any] = {"span": [c["start"], c["end"]], "members": c["members"]}
             text = conf = None
@@ -576,6 +615,18 @@ def write_segments(session: Session, run: Run, files: list[AudioFile]) -> dict[s
                 meta.update({"chosen": fz.chosen, "strategy": fz.strategy, "agreement": fz.agreement,
                              "words": fz.words})
             status = fusion.triage(conf, high, low)
+            if fill is not None:
+                label = fill.uploaded.get("text")
+                if label is not None and text is not None:
+                    same = same_text(text, label)
+                    status = SegmentStatus.auto if same else SegmentStatus.pseudo
+                    matches, differs = matches + same, differs + (not same)
+                fill.start, fill.end, fill.text, fill.status = round(s0, 3), round(s1, 3), text, status
+                fill.confidence = None if conf is None else round(conf, 4)
+                fill.source_run_id, fill.meta = run.id, {**meta, "uploaded": fill.uploaded}
+                triage[status] += 1
+                written += 1
+                continue
             triage[status] += 1
             session.add(Segment(audio_file_id=f.id, start=round(s0, 3), end=round(s1, 3),
                                 speaker=c["speaker"] if "diar" in tasks else None, text=text, status=status,
@@ -585,6 +636,7 @@ def write_segments(session: Session, run: Run, files: list[AudioFile]) -> dict[s
         session.flush()
     total = sum(chosen.values())
     return {"segments": written, "files": len(run.outputs["files"]), "triage": dict(triage),
-            "kept_reviewed": kept_reviewed, "replaced": replaced, "agreement": matrix.to_json(),
+            "kept_reviewed": kept_reviewed, "kept_uploaded": kept_uploaded, "replaced": replaced,
+            "uploaded": {"matches": matches, "differs": differs}, "agreement": matrix.to_json(),
             "chosen": [{"member": k, "n": v, "share": v / total if total else None} for k, v in chosen.most_common()],
             "strategy_applied": dict(applied), "thresholds": {"high": high, "low": low}}

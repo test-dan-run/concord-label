@@ -260,6 +260,6 @@ def feed(files: list[AudioFile], limit: int = 20) -> list[dict[str, Any]]:
 def live(session: Session, ds: Dataset, normaliser: str | None = None, collar: float | None = None) -> dict[str, Any]:
     files = usable_files(session, ds.id)
     collar = der.DEFAULT_COLLAR if collar is None else collar
-    return {"dataset": {"id": ds.id, "name": ds.name}, "asr": asr_standings(session, ds, files, normaliser),
+    return {"dataset": {"id": ds.id, "name": ds.name, "clips": ds.clips}, "asr": asr_standings(session, ds, files, normaliser),
             "cpwer": cp_card(session, ds, files, normaliser), "der": der_card(session, files, collar),
             "kws": {"available": False}, "feed": feed(files)}

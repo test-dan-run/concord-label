@@ -5,7 +5,10 @@ them; datasets are uploaded by local path, and pseudo-labelling fills the output
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
+from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,22 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "fixtures" / "generated"
 ASR_MODELS = ["whisper-large-v3", "faster-whisper-large-v3"]
 SEG_MODELS = ["silero-vad", "pyannote-diarization", "nemotron-3-diarization"]
+
+
+def whole_clip_replay(recorded: Path, dest: Path) -> Path:
+    """A replay folder with the recordings in `recorded` plus each ASR model's answer for each whole file, which the
+    recordings don't have: Bench's benchmarks only send the models cuts. The answer is the model's cuts joined."""
+    shutil.copytree(recorded, dest, copy_function=os.symlink)
+    for model in ASR_MODELS:
+        cuts: dict[tuple[str, str], list[tuple[float, str]]] = defaultdict(list)
+        for p in (recorded / model).glob("*.json"):
+            sha, span, phash = p.stem.split("_")
+            if span != "full":
+                cuts[sha, phash].append((float(span.split("-")[0]), json.loads(p.read_text())["raw"]["text"]))
+        for (sha, phash), parts in cuts.items():
+            text = " ".join(t.strip() for _, t in sorted(parts))
+            (dest / model / f"{sha}_full_{phash}.json").write_text(json.dumps({"latency_s": 0.5, "raw": {"text": text}}))
+    return dest
 
 
 def _ok(r, *codes):
@@ -48,13 +67,20 @@ def register_models(client, names: list[str] | None = None) -> dict[str, dict[st
     return {n: listed[n] for n in names}
 
 
-def create_dataset(client, src: Path, name: str, tags: list[str] | None = None) -> dict[str, Any]:
+def create_dataset(client, src: Path, name: str, tags: list[str] | None = None,
+                   labelling: str | None = None) -> dict[str, Any]:
     ds = _ok(client.post("/api/datasets", json={"name": name, "language": "en", "tags": tags or ["call-centre"],
-                                                "local_path": str(src)}), 201)["dataset"]
+                                                "local_path": str(src), "labelling": labelling}), 201)["dataset"]
     jobs.run_pending()
     d = _ok(client.get(f"/api/datasets/{ds['id']}"))
     assert d["status"] == "ready", d
     return d
+
+
+def keep_uploaded(client, ds: dict[str, Any]) -> dict[str, Any]:
+    """Confirm a dataset's uploaded labels as they were uploaded, for tests that need references."""
+    _ok(client.post(f"/api/label/datasets/{ds['id']}/confirm-uploaded"))
+    return ds
 
 
 def audio_only_dataset(client, tmp_path, name="Unlabelled calls") -> int:
@@ -65,16 +91,50 @@ def audio_only_dataset(client, tmp_path, name="Unlabelled calls") -> int:
 
 
 def seed(client, staging: Path, log: Callable[[str], None] = lambda m: None) -> dict[str, Any]:
-    """Models, an annotated dataset ("Synth fixtures": audio + speaker-attributed STM) and an audio-only
-    copy of the same audio ("Unlabelled calls")."""
+    """Models, an annotated dataset ("Synth fixtures": audio + speaker-attributed STM, its labels kept as they were
+    uploaded) and an audio-only copy of the same audio ("Unlabelled calls")."""
     out: dict[str, Any] = {"models": register_models(client)}
     out["ids"] = {n: m["catalog_id"] for n, m in out["models"].items()}  # pickers send catalog ids
     log(f"registered {', '.join(out['models'])}")
-    out["dataset"] = create_dataset(client, stage_fixture_dataset(staging / "annotated"), "Synth fixtures",
-                                    ["synthetic", "en", "call-centre"])
+    out["dataset"] = keep_uploaded(client, create_dataset(client, stage_fixture_dataset(staging / "annotated"),
+                                                          "Synth fixtures", ["synthetic", "en", "call-centre"]))
     out["unlabelled"] = audio_only_dataset(client, staging)
     log(f"datasets: annotated {out['dataset']['id']}, audio-only {out['unlabelled']}")
     return out
+
+
+def seed_clips(client, flow, staging: Path, name: str = "Short clips") -> int:
+    """An audio-only dataset with one transcript per clip, pseudo-labelled by both Whispers, run to the end."""
+    src = stage_fixture_dataset(staging / name.replace(" ", "-"), refs=None)
+    ds = create_dataset(client, src, name, ["clips"], labelling="clips")["id"]
+    run_clips(client, flow, ds)
+    return ds
+
+
+def seed_labelled_clips(client, flow, staging: Path, clips: int, name: str = "Labelled clips") -> int:
+    """A dataset uploaded with one transcript per clip, pseudo-labelled by both Whispers, run to the end. The first
+    clip's label is what the run on the dataset `clips` heard, so that clip matches and the others differ."""
+    src = stage_fixture_dataset(staging / name.replace(" ", "-"), refs="asr-jsonl")
+    first = _ok(client.get(f"/api/label/datasets/{clips}/clips"))["clips"][0]
+    labels = next((src / "refs").rglob("*.jsonl"))
+    rows = [json.loads(line) for line in labels.read_text().splitlines()]
+    for r in rows:
+        if first["stem"] in str(r.get("file") or r.get("audio_filepath")):
+            r["text"] = first["segment"]["text"].upper()
+    labels.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    ds = create_dataset(client, src, name, ["clips"])["id"]
+    run_clips(client, flow, ds)
+    return ds
+
+
+def run_clips(client, flow, ds: int) -> dict[str, Any]:
+    """One whole-clip pseudo-label run by both Whispers, run to the end."""
+    started = _ok(client.post(f"/api/label/datasets/{ds}/runs", json={
+        "tasks": ["asr"], "asr_model_ids": [flow["ids"][n] for n in ASR_MODELS]}), 202)
+    jobs.run_pending()
+    job = _ok(client.get(f"/api/jobs/{started['job']['id']}"))
+    assert job["status"] == "done", job["error"]
+    return _ok(client.get(f"/api/label/datasets/{ds}/results"))
 
 
 def label(client, flow, **kw):

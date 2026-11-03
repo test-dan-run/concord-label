@@ -41,12 +41,15 @@ def _model(session: Session, ref: ModelRef) -> Model:
         raise HTTPException(503, str(exc)) from None
 
 
-def _models(session: Session, seg_ref: ModelRef | None, asr_refs: list[ModelRef]) -> tuple[Model, list[Model]]:
-    if seg_ref is None or seg_ref == "":
-        raise HTTPException(422, "pick a VAD / diarisation model for the segments")
-    seg = _model(session, seg_ref)
-    if not seg.is_seg:
-        raise HTTPException(422, f"{seg.display_name} is not a VAD / diarisation model in the catalog")
+def _models(session: Session, seg_ref: ModelRef | None, asr_refs: list[ModelRef],
+            whole_clip: bool = False) -> tuple[Model | None, list[Model]]:
+    seg = None
+    if not whole_clip:
+        if seg_ref is None or seg_ref == "":
+            raise HTTPException(422, "pick a VAD / diarisation model for the segments")
+        seg = _model(session, seg_ref)
+        if not seg.is_seg:
+            raise HTTPException(422, f"{seg.display_name} is not a VAD / diarisation model in the catalog")
     asr = []
     for ref in asr_refs:
         m = _model(session, ref)
@@ -62,12 +65,12 @@ def _refs(csv: str) -> list[ModelRef]:
 
 
 @router.get("/datasets/{dataset_id}/preview")
-def label_preview(dataset_id: int, seg_model_id: str, asr_model_ids: str = "",
+def label_preview(dataset_id: int, seg_model_id: str = "", asr_model_ids: str = "",
                   session: Session = Depends(get_session)) -> dict[str, Any]:
     """Cost of a label run: which outputs are saved here or in Concord Bench, and the catalog's plan.
-    Model ids are Label's ids or catalog ids."""
+    Model ids are Label's ids or catalog ids. A dataset with one transcript per clip takes no segmenter."""
     ds = get_dataset(session, dataset_id)
-    seg, asr = _models(session, (_refs(seg_model_id) or [None])[0], _refs(asr_model_ids))
+    seg, asr = _models(session, (_refs(seg_model_id) or [None])[0], _refs(asr_model_ids), whole_clip=ds.clips)
     pv = pseudo.preview(session, ds, seg, asr)
     session.commit()  # model rows made on first use
     return pv
@@ -86,7 +89,7 @@ class LabelRunIn(BaseModel):
     """Models by Label id or catalog id (pickers send catalog ids)."""
 
     tasks: list[str] = Field(default_factory=lambda: ["asr", "diar"])
-    seg_model_id: int | str
+    seg_model_id: int | str | None = None  # none for a dataset with one transcript per clip
     asr_model_ids: list[int | str] = Field(default_factory=list)
     strategy: str = "best_aligned"
     single_model_id: int | str | None = None
@@ -107,10 +110,13 @@ def start_label_run(dataset_id: int, body: LabelRunIn, session: Session = Depend
         raise HTTPException(422, f"strategy must be one of {', '.join(fusion.STRATEGIES)}")
     if body.low > body.high:
         raise HTTPException(422, "the review threshold must not be above the auto-accept threshold")
-    seg, asr = _models(session, body.seg_model_id, body.asr_model_ids if "asr" in tasks else [])
+    if ds.clips and (body.seg_model_id is not None or "diar" in tasks):
+        raise HTTPException(422, f"{ds.name!r} has one transcript per clip, so a run takes no segmenter and finds no "
+                                 "speakers; change how the dataset is labelled first")
+    seg, asr = _models(session, body.seg_model_id, body.asr_model_ids if "asr" in tasks else [], whole_clip=ds.clips)
     if "asr" in tasks and not asr:
         raise HTTPException(422, "transcripts need at least one ASR model")
-    if "diar" in tasks and not seg.has_speakers:
+    if seg is not None and "diar" in tasks and not seg.has_speakers:
         raise HTTPException(422, f"{seg.display_name} returns no speakers; pick a diariser for the speakers task")
     single = next((m for m in asr if body.single_model_id in (m.id, m.catalog_id)), None)
     if body.strategy == "single" and single is None:
@@ -121,13 +127,15 @@ def start_label_run(dataset_id: int, body: LabelRunIn, session: Session = Depend
         raise HTTPException(409, f"a pseudo-label run is already {active.status} on this dataset (run {active.id})")
     pv = pseudo.preview(session, ds, seg, asr)
     run = Run(task=RunTask.label, dataset_id=ds.id, status="queued",
-              params={"tasks": tasks, "seg_model_id": seg.id, "asr_model_ids": [m.id for m in asr],
-                      "models": {str(m.id): m.catalog_id for m in [seg, *asr]},
+              params={"tasks": tasks, "whole_clip": ds.clips, "seg_model_id": seg.id if seg else None,
+                      "asr_model_ids": [m.id for m in asr],
+                      "models": {str(m.id): m.catalog_id for m in [*([seg] if seg else []), *asr]},
                       "strategy": body.strategy, "single_model_id": single.id if single else None,
                       "high": body.high, "low": body.low, "skip_failed": body.skip_failed,
                       "preview": {"saved_members": pv["saved_members"], "bench_members": pv["bench_members"],
                                   "new_members": pv["new_members"], "plan": pv["plan"],
-                                  "states": {x["service"]: x["state"] for x in [pv["seg"], *pv["members"]]}}})
+                                  "states": {x["service"]: x["state"] for x in [*([pv["seg"]] if pv["seg"] else []),
+                                                                                *pv["members"]]}}})
     session.add(run)
     session.flush()
     session.refresh(run)
@@ -192,6 +200,31 @@ def _segments(session: Session, ids: list[int]) -> list[Segment]:
 def label_files(dataset_id: int, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
     get_dataset(session, dataset_id)
     return edit.file_counts(session, dataset_id)
+
+
+@router.get("/datasets/{dataset_id}/clips")
+def label_clips(dataset_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Each usable clip with its transcript, for the clip list in Annotate."""
+    return edit.clip_list(session, get_dataset(session, dataset_id))
+
+
+@router.post("/datasets/{dataset_id}/confirm-auto")
+def confirm_auto_clips(dataset_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """'Confirm all high-confidence' for a whole dataset: every auto-accepted segment becomes confirmed."""
+    ds = get_dataset(session, dataset_id)
+    return {"confirmed": _commit_or_400(session, lambda: edit.confirm_auto_dataset(session, ds))}
+
+
+@router.get("/datasets/{dataset_id}/uploaded")
+def uploaded_labels(dataset_id: int, session: Session = Depends(get_session)) -> dict[str, int]:
+    return edit.uploaded_counts(session, get_dataset(session, dataset_id))
+
+
+@router.post("/datasets/{dataset_id}/confirm-uploaded")
+def confirm_uploaded(dataset_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """'Keep all uploaded labels': every uploaded label nobody has checked becomes confirmed, as it was uploaded."""
+    ds = get_dataset(session, dataset_id)
+    return {"confirmed": _commit_or_400(session, lambda: edit.confirm_uploaded(session, ds))}
 
 
 @router.get("/files/{file_id}")

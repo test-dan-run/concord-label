@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, type Inspection, type TaskMatch } from "../../lib/api";
+import { api, type Inspection, type Labelling, type TaskMatch } from "../../lib/api";
 import { bytes, num } from "../../lib/format";
 import { pickedFromDrop, pickedFromInput, uploadFiles, type PickedFile } from "../../lib/upload";
 import * as I from "../../components/icons";
@@ -25,6 +25,12 @@ export function labelTypesOf(ins: Inspection | null): string[] {
   return out;
 }
 
+/** What ingest would pick from these annotations (`labelling_for` in datasets/ingest.py), before you choose. */
+export function suggestedLabelling(ins: Inspection | null): Labelling {
+  const kinds = Object.keys(ins?.tasks ?? {});
+  return kinds.length === 1 && kinds[0] === "asr" && ins!.tasks.asr.records <= ins!.tasks.asr.files ? "clips" : "turns";
+}
+
 export function UploadDataset() {
   const nav = useNavigate();
   const [mode, setMode] = useState<"annotated" | "audio_only">("annotated");
@@ -33,6 +39,7 @@ export function UploadDataset() {
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [source, setSource] = useState<"files" | "path">("files");
+  const [labelling, setLabelling] = useState<Labelling | null>(null);
   const [localPath, setLocalPath] = useState("");
   const [picked, setPicked] = useState<PickedFile[]>([]);
   const [uploadId, setUploadId] = useState<string | null>(null);
@@ -66,6 +73,7 @@ export function UploadDataset() {
         language,
         description: description || null,
         tags,
+        labelling: labelling ?? (mode === "audio_only" ? "turns" : null),
         upload_id: source === "files" ? uploadId : null,
         local_path: source === "path" ? localPath : null,
       }),
@@ -85,6 +93,7 @@ export function UploadDataset() {
   const labels = mode === "annotated" ? labelTypesOf(inspection) : [];
   const ready = !!inspection && inspection.audio_files > 0 && !!name.trim() && (source === "path" || !!uploadId);
   const cta = !inspection ? "Upload" : "Upload dataset";
+  const shownLabelling = labelling ?? (mode === "audio_only" ? "turns" : suggestedLabelling(inspection));
 
   return (
     <>
@@ -96,7 +105,7 @@ export function UploadDataset() {
       <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Upload mode">
         {(
           [
-            ["annotated", "Audio + annotations", "Transcripts and/or speaker labels, complete or partial: kept as confirmed labels to review and extend."],
+            ["annotated", "Audio + annotations", "Transcripts and/or speaker labels, complete or partial: kept as labels to check, and they become references when you confirm them."],
             ["audio_only", "Audio only", "Stored now, then pseudo-labelled with model ensembles and reviewed."],
           ] as const
         ).map(([m, title, body]) => (
@@ -136,6 +145,17 @@ export function UploadDataset() {
               <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} className="bg-canvas border border-line rounded-md px-3 py-2 text-[13px] text-fg" />
             </label>
             <TagInput value={tags} onChange={setTags} label="Tags" />
+            <fieldset className="border-0 p-0 m-0 flex flex-col gap-1.5">
+              <legend className="text-xs text-muted mb-1.5">How you will label it</legend>
+              <label className="flex items-start gap-2 text-[13px]">
+                <input type="radio" name="labelling" className="mt-1" checked={shownLabelling === "clips"} onChange={() => setLabelling("clips")} />
+                <span className="flex flex-col">One transcript per clip<span className="text-xs text-muted">Each file is one utterance, for ASR alone. No speakers, and pseudo-labelling transcribes each file whole.</span></span>
+              </label>
+              <label className="flex items-start gap-2 text-[13px]">
+                <input type="radio" name="labelling" className="mt-1" checked={shownLabelling === "turns"} onChange={() => setLabelling("turns")} />
+                <span className="flex flex-col">Speaker turns<span className="text-xs text-muted">Each file has several turns, with a speaker and a transcript for each, from a VAD or diariser.</span></span>
+              </label>
+            </fieldset>
           </Panel>
           <Panel title="Audio" actions={
             <span role="group" aria-label="Audio source" className="inline-flex border border-line rounded-md overflow-hidden">

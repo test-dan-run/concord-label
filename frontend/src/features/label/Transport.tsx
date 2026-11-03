@@ -60,9 +60,10 @@ export function Transport({
   onClearRange: () => void;
   view: Window;
   onView: (w: Window) => void;
-  split: EditButton;
-  merge: EditButton;
-  remove: EditButton;
+  /** Split, Merge and Delete; the clip view of Annotate has none, because a clip stays one utterance. */
+  split?: EditButton;
+  merge?: EditButton;
+  remove?: EditButton;
   /** More buttons at the start of the right-hand group. */
   children?: ReactNode;
 }) {
@@ -108,12 +109,14 @@ export function Transport({
           <ZoomBar view={view} duration={duration} anchor={anchor} onView={onView} />
         </span>
       </span>
-      <span role="group" aria-label="Edit segments" className="flex gap-1.5">
-        {children}
-        <Button size="sm" title={split.title} disabled={split.disabled} onClick={split.onClick}>Split</Button>
-        <Button size="sm" title={merge.title} disabled={merge.disabled} onClick={merge.onClick}>Merge</Button>
-        <Button size="sm" title={remove.title} disabled={remove.disabled} onClick={remove.onClick}>Delete</Button>
-      </span>
+      {(split || merge || remove || children) && (
+        <span role="group" aria-label="Edit segments" className="flex gap-1.5">
+          {children}
+          {split && <Button size="sm" title={split.title} disabled={split.disabled} onClick={split.onClick}>Split</Button>}
+          {merge && <Button size="sm" title={merge.title} disabled={merge.disabled} onClick={merge.onClick}>Merge</Button>}
+          {remove && <Button size="sm" title={remove.title} disabled={remove.disabled} onClick={remove.onClick}>Delete</Button>}
+        </span>
+      )}
     </div>
   );
 }

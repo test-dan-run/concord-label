@@ -4,8 +4,9 @@ A package is a zip of plain files:
 - manifest.json   format, version, install, dataset details, scope, what is included, counts
 - files.csv       path, sha256, duration, sample_rate
 - segments.jsonl  file_sha256, start, end, speaker, text, status, confidence, source, updated_at
-                  (+ uid and reviewed, so the same segment is recognised on the other side, and
-                  spelling_kept when the annotator kept a spelling a lexicon flags)
+                  (+ uid and reviewed, so the same segment is recognised on the other side,
+                  spelling_kept when the annotator kept a spelling a lexicon flags, and uploaded
+                  when the segment holds a label uploaded with the dataset)
 - keywords.jsonl  empty until KWS lands (kept so packages stay forward-compatible)
 - lexicons.json   every lexicon's latest published version: uid, name, description, version,
                   published_at, entries (lexicons apply to every dataset, so all of them travel)
@@ -110,6 +111,8 @@ def segment_record(s: Segment, sha: str) -> dict[str, Any]:
          "flagged": s.flagged, "updated_at": _iso(s.edited_at or s.updated_at)}
     if (s.meta or {}).get("spelling_kept"):
         r["spelling_kept"] = s.meta["spelling_kept"]
+    if s.uploaded:
+        r["uploaded"] = s.uploaded
     return r
 
 
@@ -225,7 +228,7 @@ def export(session: Session, ds: Dataset, mode: str = "changed", file_ids: list[
     rows: list[dict[str, Any]] = []
     for f in files:
         for s in sorted(f.segments, key=lambda s: (s.start, s.end)):
-            if include_pseudo or s.reviewed:
+            if include_pseudo or s.reviewed or s.uploaded:
                 rows.append(segment_record(s, f.sha256))
     by_status: dict[str, int] = {}
     for r in rows:
@@ -274,7 +277,8 @@ def export(session: Session, ds: Dataset, mode: str = "changed", file_ids: list[
         manifest = {"format": FORMAT, "version": VERSION, "created_at": utcnow().isoformat(),
                     "concord_version": APP_VERSION, "install_id": install_id(),
                     "dataset": {"name": ds.name, "language": ds.language, "tags": ds.tags,
-                                "description": ds.description, "label_types": ds.label_types, "mode": ds.mode},
+                                "description": ds.description, "label_types": ds.label_types, "mode": ds.mode,
+                                "labelling": ds.labelling},
                     "scope": {"mode": mode, "since": _iso(since), "file_ids": file_ids if mode == "files" else None},
                     "include": {"pseudo_labels": include_pseudo, "model_outputs": include_outputs,
                                 "audio": include_audio},
@@ -540,6 +544,8 @@ def _apply_fields(s: Segment, r: dict[str, Any], pkg_id: int) -> None:
     s.meta = {"imported_from": pkg_id, "source": r.get("source")}
     if r.get("spelling_kept"):
         s.meta["spelling_kept"] = sorted({lexicon.norm(str(k)) for k in r["spelling_kept"]})
+    if r.get("uploaded"):
+        s.meta["uploaded"] = r["uploaded"]
 
 
 def _add_file(session: Session, ds: Dataset, f: dict[str, Any], root: Path) -> AudioFile | None:
@@ -602,7 +608,7 @@ def apply(session: Session, pkg: SyncPackage, target_id: int | None, resolutions
         d = pkg.manifest.get("dataset") or {}
         ds = Dataset(name=(new_name or d.get("name") or "Imported labels").strip(), language=d.get("language"),
                      description=d.get("description"), tags=list(d.get("tags") or []), mode=d.get("mode") or "audio_only",
-                     label_types=list(d.get("label_types") or []), status="ready")
+                     label_types=list(d.get("label_types") or []), labelling=d.get("labelling"), status="ready")
         session.add(ds)
         session.flush()
     snap = _snapshot(session, ds, pkg)

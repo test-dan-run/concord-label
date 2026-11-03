@@ -1,7 +1,7 @@
 // Label (Phase 2) helpers shared by the console, pseudo-label, annotate and live pages. The pure
 // functions are unit-tested in components/components.test.tsx.
 
-import type { BarKey, SegStatus, Segment } from "./api";
+import type { BarKey, Clip, SegStatus, Segment } from "./api";
 import { C } from "./colors";
 
 export const BAR_ORDER: BarKey[] = ["confirmed", "auto", "review", "rejected", "running", "unlabelled"];
@@ -60,6 +60,28 @@ export const SHORTCUTS: { key: string; short: string; does: string }[] = [
   { key: "= and -", short: "zoom", does: "Zooms the timeline in or out around the playhead, and Ctrl with the scroll wheel zooms at the pointer." },
   { key: "0", short: "whole file", does: "Shows the whole file on the timeline." },
   { key: "Shift-click", short: "select range", does: "Selects a range of segments in the table." },
+];
+
+const sameKey = (key: string) => SHORTCUTS.find((k) => k.key === key)!;
+
+/** The keys of Annotate's clip view. Most mean what they mean in SHORTCUTS, and the Docs page lists the others. */
+export const CLIP_SHORTCUTS: { key: string; short: string; does: string }[] = [
+  sameKey("Space"),
+  { key: "Ctrl+Space", short: "play / pause, also while typing", does: "Plays or pauses from the playhead, and works while you type in the editor." },
+  { key: "Shift+Space", short: "play the clip", does: "Plays the stretch selected on the waveform, or else the whole clip from its start." },
+  sameKey("← and →"),
+  { key: "↑ and ↓", short: "previous / next clip", does: "Goes to the previous or next clip in the list." },
+  { key: "Tab and Shift+Tab", short: "next / previous to review", does: "Goes to the next or previous clip to review and plays it: one with no transcript, low confidence, a spelling hint, or a pseudo-label that differs from its uploaded label." },
+  { key: "Enter", short: "edit text", does: "Starts editing the transcript. In the editor, Enter saves, Esc cancels, and Tab saves and goes to the next clip to review." },
+  { key: "Ctrl+Enter", short: "confirm and next", does: "Confirms the clip and goes to the next clip that isn't checked yet, auto-accepted ones included. In the editor, it saves the text first." },
+  { key: "U", short: "use uploaded label", does: "Replaces the transcript with the label uploaded with the dataset. Ctrl+Enter then confirms it." },
+  { key: "R", short: "reject and next", does: "Rejects the clip and goes to the next clip that isn't checked yet. A rejected clip stays out of the references." },
+  { key: "Ctrl+Z", short: "undo", does: "Undoes the last change to the clip on the screen. Go back to a clip to undo a change to it." },
+  sameKey("Ctrl+Shift+Z and Ctrl+Y"),
+  { key: "Esc", short: "close / clear", does: "Closes the editor or the spelling hint, and then clears the waveform selection." },
+  sameKey("Alt+Enter"),
+  sameKey("= and -"),
+  { key: "0", short: "whole clip", does: "Shows the whole clip on the timeline." },
 ];
 
 /** The single keys in a SHORTCUTS entry, e.g. "Ctrl+Shift+Z and Ctrl+Y" -> ["Ctrl+Shift+Z", "Ctrl+Y"]. */
@@ -176,6 +198,74 @@ export function segmentAt(segs: Segment[], t: number): number | null {
     if (d < gap) [best, gap] = [s, d];
   }
   return best?.id ?? null;
+}
+
+/** What the clip list's filter calls a clip: no transcript yet, or its status. A clip with several segments needs
+ * review, whatever their statuses. */
+export function clipShow(c: Pick<Clip, "segment" | "segments">): SegStatus | "empty" {
+  if (!c.segment) return "empty";
+  return c.segments > 1 ? "pseudo" : c.segment.status;
+}
+
+/** Whether a clip still needs a person: no transcript, several segments, or a status nobody decided. A rejected clip
+ * is decided once someone has seen it; one the triage rejected still waits for a look. */
+export function clipOpen(c: Pick<Clip, "segment" | "segments">): boolean {
+  const s = c.segment;
+  if (!s || c.segments > 1) return true;
+  if (s.status === "rejected") return !s.reviewed;
+  return s.status !== "confirmed";
+}
+
+/** A clip to review (Tab): no transcript, several segments, low confidence, or sent to review whatever its confidence,
+ * because its pseudo-label differs from its uploaded label. */
+export function clipToReview(c: Pick<Clip, "segment" | "segments">, high = 0.85): boolean {
+  return !c.segment || c.segments > 1 || lowConfidence(c.segment, high) || (!c.segment.reviewed && c.segment.status === "pseudo");
+}
+
+export interface DiffWord {
+  word: string;
+  differs: boolean;
+}
+
+/** The words of two transcripts, marked where one has a word the other lacks at that place. Case and the punctuation
+ * around a word don't count. `count` is the larger side's marked words. This is for reading only: whether a clip
+ * matches its uploaded label is the server's decision (`same_text` in label/pseudo.py). */
+export function wordDiff(a: string, b: string): { a: DiffWord[]; b: DiffWord[]; count: number } {
+  const words = (t: string) => t.split(/\s+/).filter(Boolean);
+  const key = (w: string) => w.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+  const [wa, wb] = [words(a), words(b)];
+  const [ka, kb] = [wa.map(key), wb.map(key)];
+  const rows = wa.length + 1;
+  const cols = wb.length + 1;
+  const best = new Uint16Array(rows * cols); // longest common run of words from (i, j) to the ends
+  for (let i = wa.length - 1; i >= 0; i--) {
+    for (let j = wb.length - 1; j >= 0; j--) {
+      best[i * cols + j] = ka[i] === kb[j] ? best[(i + 1) * cols + j + 1] + 1 : Math.max(best[(i + 1) * cols + j], best[i * cols + j + 1]);
+    }
+  }
+  const da = wa.map((word) => ({ word, differs: true }));
+  const db = wb.map((word) => ({ word, differs: true }));
+  for (let i = 0, j = 0; i < wa.length && j < wb.length; ) {
+    if (ka[i] === kb[j]) {
+      da[i++].differs = false;
+      db[j++].differs = false;
+    } else if (best[(i + 1) * cols + j] >= best[i * cols + j + 1]) i++;
+    else j++;
+  }
+  return { a: da, b: db, count: Math.max(da.filter((w) => w.differs).length, db.filter((w) => w.differs).length) };
+}
+
+/** The next clip after `fromId` (before it when `direction` is -1) that `want` picks, wrapping around the list and
+ * leaving out the clip itself; null when there is none. */
+export function nextClip<T extends { id: number }>(clips: T[], fromId: number | null, direction: 1 | -1, want: (c: T) => boolean): number | null {
+  const n = clips.length;
+  const at = fromId === null ? -1 : clips.findIndex((c) => c.id === fromId);
+  const k = at >= 0 ? at : direction === 1 ? -1 : n;
+  for (let i = 1; i <= n; i++) {
+    const c = clips[(((k + direction * i) % n) + n) % n];
+    if (c.id !== fromId && want(c)) return c.id;
+  }
+  return null;
 }
 
 /** The pseudo-label button: re-fuse saved outputs, or run the members that are not saved first. */

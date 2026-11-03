@@ -6,7 +6,7 @@ import { Link } from "react-router-dom";
 import * as I from "../../components/icons";
 import { Chip, Empty, PageHeader } from "../../components/ui";
 import type { SegStatus } from "../../lib/api";
-import { SHORTCUTS, STATUS_TONE, statusLabel } from "../../lib/label";
+import { CLIP_SHORTCUTS, SHORTCUTS, STATUS_TONE, statusLabel } from "../../lib/label";
 import { MAX_SPEAKERS, MIN_LEN, NUDGE, NUDGE_SHIFT, PLACED_LEN } from "../label/laneDrag";
 
 const STEPS: { n: number; to: string; title: string; text: string }[] = [
@@ -19,7 +19,7 @@ const STEPS: { n: number; to: string; title: string; text: string }[] = [
 
 const STATUSES: { status: SegStatus; created?: boolean; text: string }[] = [
   { status: "pseudo", text: "The models disagree on the segment, so you should check it by ear." },
-  { status: "auto", text: "The models agree on the segment, but nobody has confirmed it yet." },
+  { status: "auto", text: "The models agree on the segment, or its pseudo-label matches its uploaded label, but nobody has confirmed it yet." },
   { status: "pseudo", created: true, text: "Someone drew the segment by hand on a speaker lane, and it needs a transcript." },
   { status: "rejected", text: "The segment isn't speech or isn't usable, so it's left out of scoring and packages." },
   { status: "confirmed", text: "A person checked the segment, so it's used for evaluation and published as a reference." },
@@ -45,6 +45,10 @@ const SECTIONS: Section[] = [
           Concord Label turns audio into confirmed transcripts and speaker turns. Models label the audio first, and then a person checks the
           segments that the models are unsure about and confirms them.
         </p>
+        <p className="m-0">
+          You label a dataset in one of two ways. With <em>Speaker turns</em>, each file has several turns, each with a speaker and a transcript. With{" "}
+          <em>One transcript per clip</em>, each file is one utterance for ASR alone, as <a href="#clips">Labelling clips</a> describes.
+        </p>
         <ol className="m-0 p-0 list-none grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
           {STEPS.map((s) => (
             <li key={s.n} className="flex flex-col gap-1 p-3 bg-panel border border-track rounded-lg">
@@ -64,7 +68,7 @@ const SECTIONS: Section[] = [
       <>
         <p className="m-0">
           A dataset is a set of audio files that you upload on <Link to="/datasets">Datasets</Link>. If you already have references, upload them
-          with the audio, and they count as confirmed straight away. Otherwise the dataset starts unlabelled.
+          with the audio, and they wait in review until a person confirms them. Otherwise the dataset starts unlabelled.
         </p>
         <p className="m-0">
           Uploads run in the background as jobs, and you can follow them on <Link to="/jobs">Jobs</Link>.
@@ -104,6 +108,10 @@ const SECTIONS: Section[] = [
           models still transcribe that segment. The results list each skipped segment with the error, and a retry tries those segments
           again. If a model fails on more than 10 segments and more than 5% of its segments, the run stops. Without the option, the run
           stops at the first error.
+        </p>
+        <p className="m-0">
+          A dataset with one transcript per clip uses no diarisation model. Each ASR model transcribes each clip whole, so each clip gets one
+          transcript and no speaker.
         </p>
         <p className="m-0 flex items-start gap-2 p-3 rounded-md bg-track/60 text-[13px]">
           <span className="text-focus mt-0.5"><I.Info size={14} /></span>
@@ -210,6 +218,66 @@ const SECTIONS: Section[] = [
           </tbody>
         </table>
       </div>
+    ),
+  },
+  {
+    id: "clips",
+    title: "Labelling clips",
+    body: (
+      <>
+        <p className="m-0">
+          Use <em>One transcript per clip</em> when each audio file is one utterance, and you want transcripts without speakers. Annotate then shows the
+          waveform, the clip's transcript, what each model heard, and a list of every clip in the dataset. It has no speaker lanes, and you can't split a clip.
+        </p>
+        <p className="m-0">
+          You choose this way of labelling when you upload the dataset. A dataset whose references are one plain transcript for each file starts this way on its
+          own, and any other dataset starts with speaker turns. To change it later, use the switch on Annotate or on the Pseudo-label page. The switch
+          doesn't change any segments.
+        </p>
+        <p className="m-0">
+          To check a clip, listen to it, press <kbd className={kbd}>Enter</kbd> to fix the text if it needs it, and press <kbd className={kbd}>Ctrl+Enter</kbd>. Label
+          confirms the clip, goes to the next clip that isn't checked, and plays it. To turn off the playing, clear <em>Play the next clip</em>. Press{" "}
+          <kbd className={kbd}>R</kbd> to reject a clip with no usable speech, which keeps it out of the references. A clip with no transcript yet
+          opens with the editor ready, and <kbd className={kbd}>Ctrl+Space</kbd> plays and pauses while you type.
+        </p>
+        <p className="m-0">
+          When you upload a dataset with labels, each clip shows its uploaded label beside its transcript after a pseudo-label run, with the words that differ marked. The
+          pseudo-label becomes the transcript, and the uploaded label stays. A clip is auto-accepted when the two match, and it needs review when they differ, whatever its confidence.
+          Press <kbd className={kbd}>U</kbd> to use the uploaded label, or edit the text, and press <kbd className={kbd}>Ctrl+Enter</kbd> to confirm. If you trust the labels as they
+          are, <em>Keep all uploaded labels</em> confirms every one that nobody has checked, after it asks you.
+        </p>
+        <p className="m-0">
+          Undo works on the clip on the screen, so go back to a clip to undo a change to it. <em>Confirm all high-confidence</em> confirms every auto-accepted clip
+          in the dataset at once, after it asks you.
+        </p>
+        <p className="m-0">
+          A clip with several segments doesn't have one transcript yet. That can happen when you change how a dataset is labelled. Label never joins the segments on
+          its own. It shows them, and you can use <em>Merge into one</em> or open the clip with its speakers. Other than that, a pseudo-label run leaves a clip alone
+          once a person has reviewed any part of it.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full max-w-xl border-collapse text-[13px]">
+            <caption className="sr-only">Keys for labelling clips that differ from the keys above</caption>
+            <thead>
+              <tr className="text-left text-[11px] text-muted uppercase tracking-wider">
+                <th scope="col" className="font-medium px-3 py-2 border-b border-line">Key</th>
+                <th scope="col" className="font-medium px-3 py-2 border-b border-line">What it does with clips</th>
+              </tr>
+            </thead>
+            <tbody>
+              {CLIP_SHORTCUTS.filter((k) => !SHORTCUTS.includes(k)).map((k) => (
+                <tr key={k.key}>
+                  <td className="px-3 py-2 border-b border-track whitespace-nowrap">
+                    <kbd className="num text-[11px] border border-line rounded px-1.5 py-px text-fg bg-track">{k.key}</kbd>
+                  </td>
+                  <td className="px-3 py-2 border-b border-track">{k.does}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="m-0">The other keys in Keyboard shortcuts work the same way. The keys for speakers, splitting, merging and deleting do nothing here.</p>
+      </>
     ),
   },
   {

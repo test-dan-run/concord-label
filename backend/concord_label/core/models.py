@@ -44,6 +44,11 @@ class LabelType(enum.StrEnum):
     kws = "kws"
 
 
+class Labelling(enum.StrEnum):
+    clips = "clips"  # one transcript per clip: no speakers, and pseudo-labelling transcribes each clip whole
+    turns = "turns"  # speaker turns with their transcripts, from a VAD or diariser
+
+
 class Capability(enum.StrEnum):
     asr = "asr"
     vad = "vad"
@@ -94,6 +99,9 @@ class Dataset(Base):
     tags: Mapped[list[str]] = mapped_column(default=list)
     label_types: Mapped[list[str]] = mapped_column(default=list)
     mode: Mapped[str] = mapped_column(String(16), default="annotated")  # annotated | audio_only
+    # How the dataset is labelled (Labelling). Empty until ingest picks one from the references, unless the upload
+    # named one; a package from before this column leaves it empty too, which means `turns`.
+    labelling: Mapped[str | None] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(16), default="ingesting")  # ingesting | ready | failed
     # Ingest report: counts, hours, sample-rate histogram, flagged files, annotation matches.
     report: Mapped[dict[str, Any]] = mapped_column(default=dict)
@@ -105,6 +113,10 @@ class Dataset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     files: Mapped[list[AudioFile]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
+
+    @property
+    def clips(self) -> bool:
+        return self.labelling == Labelling.clips
 
 
 class AudioFile(Base):
@@ -142,7 +154,8 @@ class Segment(Base):
 
     `uid` identifies the segment across installs (label packages). `edited_at` is set whenever a person
     changes or reviews it; pseudo-labelling never replaces a segment a person has touched. `meta` holds
-    what pseudo-labelling knew: the ASR span, each member's cache row and the chosen member."""
+    what pseudo-labelling knew: the ASR span, each member's cache row and the chosen member. `meta["uploaded"]`
+    holds the label uploaded with the dataset ({text, speaker}), which a person still has to check."""
 
     __tablename__ = "segment"
     __table_args__ = (Index("ix_segment_file", "audio_file_id", "start"), Index("ix_segment_uid", "uid"))
@@ -168,6 +181,11 @@ class Segment(Base):
     def reviewed(self) -> bool:
         """Reviewed work: confirmed, or touched by a person. Pseudo-labels never overwrite it."""
         return self.status == SegmentStatus.confirmed or self.edited_at is not None
+
+    @property
+    def uploaded(self) -> dict[str, Any] | None:
+        """The label uploaded with the dataset, when this segment holds one."""
+        return (self.meta or {}).get("uploaded")
 
 
 class SegmentEdit(Base):

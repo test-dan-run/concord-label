@@ -136,6 +136,18 @@ def replay(monkeypatch, data_dir, replay_catalog):
     reset_settings()
 
 
+@pytest.fixture
+def clip_replay(replay, monkeypatch, tmp_path):
+    """`replay`, with an answer from each ASR model for each whole file too (whole-clip pseudo-labelling)."""
+    from concord_label.core.settings import reset_settings
+    from label_helpers import whole_clip_replay
+
+    monkeypatch.setenv("REPLAY_DIR", str(whole_clip_replay(RECORDED, tmp_path / "recorded")))
+    reset_settings()
+    yield
+    reset_settings()
+
+
 # ---------------------------------------------------------------- Label (Phase 2)
 
 @pytest.fixture

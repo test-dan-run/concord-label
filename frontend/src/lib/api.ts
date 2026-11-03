@@ -117,6 +117,8 @@ export interface Job {
   log?: string[];
 }
 
+export type Labelling = "clips" | "turns";
+
 export interface Dataset {
   id: number;
   uid: string;
@@ -126,6 +128,8 @@ export interface Dataset {
   tags: string[];
   label_types: string[];
   mode: string;
+  /** One transcript per clip, or speaker turns with their transcripts. */
+  labelling: Labelling;
   status: string;
   created_at: string;
   files: number | null;
@@ -329,7 +333,8 @@ export interface PlanStep {
 
 export interface LabelPreview {
   files: number;
-  seg: PreviewModel & { cached_files: number; bench_files: number };
+  /** The segmenter; null in a whole-clip run, which has none. */
+  seg: (PreviewModel & { cached_files: number; bench_files: number }) | null;
   members: PreviewMember[];
   saved_members: number;
   bench_members: number;
@@ -361,6 +366,8 @@ export interface Segment {
   created: boolean;
   /** Spelling hints the annotator chose to keep (lower case). */
   spelling_kept: string[];
+  /** The label uploaded with the dataset, which stays here when a pseudo-label takes the segment's text. */
+  uploaded_text: string | null;
   alternatives?: { service: string; model: string; text: string; build_key: string | null; source_app: string | null }[];
   file?: string;
 }
@@ -370,6 +377,9 @@ export interface LabelSummary {
   files: number;
   triage: Partial<Record<SegStatus, number>>;
   kept_reviewed: number;
+  /** Absent from runs older than uploaded labels going to review. */
+  kept_uploaded?: number;
+  uploaded?: { matches: number; differs: number };
   replaced: number;
   agreement: { members: string[]; cells: { ref: string; hyp: string; wer: number | null; n: number }[] };
   chosen: { member: string; n: number; share: number | null }[];
@@ -425,6 +435,24 @@ export interface AnnotateView {
   position: { index: number; of: number };
 }
 
+/** A clip in Annotate's clip list (label/edit.py `clip_list`). */
+export interface Clip {
+  id: number;
+  path: string;
+  stem: string;
+  duration: number | null;
+  /** Its segments that aren't rejected: 1 in a clip with one transcript, more when it needs merging. */
+  segments: number;
+  segment: ClipSegment | null;
+}
+
+export type ClipSegment = Pick<Segment, "id" | "text" | "status" | "confidence" | "flagged" | "reviewed" | "created" | "spelling_kept">;
+
+export interface ClipList {
+  clips: Clip[];
+  thresholds: { high: number; low: number };
+}
+
 export interface LiveModel {
   /** null: a catalog model Label never used, listed for its locked score in Bench alone. */
   model_id: number | null;
@@ -442,7 +470,8 @@ export interface LiveModel {
 }
 
 export interface LiveEval {
-  dataset: { id: number; name: string };
+  /** `clips`: one transcript per clip, so there are no speakers to score. */
+  dataset: { id: number; name: string; clips: boolean };
   asr: { normaliser: string; confirmed: number; min_rank: number; ranked: boolean; models: LiveModel[] };
   /** cpWER of each ASR model with the speakers of the last pseudo-label run's diariser, on each file up to the first
    *  segment nobody has reviewed (`seconds` of audio in all, `complete` files reviewed to the end); `reason` says why

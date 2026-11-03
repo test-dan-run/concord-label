@@ -3,7 +3,8 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 // Concord Label on the replayed fixture set: tests/e2e_server.py lists the fixture models from the replay catalog, uploads the
 // annotated fixture set ("Synth fixtures") and an audio-only copy of its audio ("Unlabelled calls"), and
-// pseudo-labels the copy with pyannote -> both Whispers. Console errors fail the test.
+// pseudo-labels the copy with pyannote -> both Whispers. It also uploads "Short clips", with one transcript per clip,
+// and "Labelled clips", the same with uploaded labels, and pseudo-labels both with both Whispers. Console errors fail the test.
 // With the Dataset Catalog set up (a FakeDatasetCatalog, unless E2E_DATASET_CATALOG=0), the dataset pages publish to
 // it; without it they build reference packages to download. The catalog also holds "Raw calls" (v1 audio only, made into a Label dataset,
 // then v2 from Concord Bench). The tests of the path that isn't set up are skipped.
@@ -842,7 +843,7 @@ test("publish asks first when someone published a newer version", async ({ page,
   const errors = watchErrors(page);
   await page.goto("/datasets");
   await page.getByRole("link", { name: "Raw calls" }).click();
-  await expect(page.getByRole("link", { name: "Pseudo-label" })).toBeVisible();
+  await expect(page.getByRole("main").getByRole("link", { name: "Pseudo-label" })).toBeVisible();
   const panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "Publish to Dataset Catalog" }) });
   const alert = panel.getByRole("alert");
   await expect(alert).toContainText(/v2 was published by concord-bench on .*, after v1, the version this dataset is based on/);
@@ -875,4 +876,283 @@ test("open in Label by sha256: the annotator opens on the file at t", async ({ p
   await expect(page.getByText(/in a dataset made from that Dataset Catalog dataset/)).toBeVisible();
   await expect(page.getByRole("link", { name: "New from Dataset Catalog" })).toBeVisible();
   expect(errors.filter((e) => !e.includes("404"))).toEqual([]);
+});
+
+// Last: these confirm ASR text across "Short clips", which the lexicon test above would count as variants.
+test.describe("clips", () => {
+  type ClipRow = { id: number; stem: string; duration: number; segments: number; segment: { id: number; text: string | null; status: string } | null };
+  const dataset = async (request: APIRequestContext) => {
+    const all = (await (await request.get("/api/datasets")).json()) as { id: number; name: string }[];
+    return all.find((d) => d.name === "Short clips")!.id;
+  };
+  const clips = async (request: APIRequestContext, ds: number) => ((await (await request.get(`/api/label/datasets/${ds}/clips`)).json()) as { clips: ClipRow[] }).clips;
+  const list = (page: Page) => page.getByRole("list", { name: "Clips" });
+  const row = (page: Page, stem: string) => list(page).getByRole("listitem").filter({ hasText: stem });
+
+  test("annotate: one transcript for each clip, walked from the keyboard", async ({ page, request }) => {
+    const errors = watchErrors(page);
+    const ds = await dataset(request);
+    const before = await clips(request, ds);
+    expect(before.every((c) => c.segments === 1 && c.segment?.status !== "confirmed")).toBe(true);
+    await page.goto(`/label/annotate/${ds}`);
+    await expect(page.getByRole("heading", { name: "Transcript" })).toBeVisible();
+    await expect(list(page).getByRole("listitem")).toHaveCount(before.length);
+    // nothing about speakers or splitting
+    for (const name of ["Add speaker", "Split", "Merge", "Delete"]) await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "Focus" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "One transcript per clip" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByText("Speaker", { exact: true })).toHaveCount(0);
+    const [first, second, third] = before;
+    await expect(page.getByRole("heading", { name: first.stem })).toBeVisible();
+
+    // Ctrl+Enter confirms and goes on, and the next clip plays
+    await page.keyboard.press("Control+Enter");
+    await expect(page.getByRole("heading", { name: second.stem })).toBeVisible();
+    await expect(row(page, first.stem)).toContainText("Confirmed");
+    await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
+    await expect(page.getByLabel("Playhead")).not.toContainText("0:00 /", { timeout: 15_000 });
+
+    // Ctrl+Space plays and pauses while typing, and the space goes nowhere; Ctrl+Enter saves, confirms and goes on
+    await page.keyboard.press("Enter");
+    const editor = page.getByRole("textbox", { name: /^Transcript at/ });
+    await expect(editor).toBeFocused();
+    await page.keyboard.press("Control+Space");
+    await expect(page.getByRole("button", { name: "Play", exact: true }).first()).toBeVisible();
+    await editor.fill("a corrected transcript");
+    await page.keyboard.press("Control+Space");
+    await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
+    await expect(editor).toHaveValue("a corrected transcript");
+    await page.keyboard.press("Control+Enter");
+    await expect(page.getByRole("heading", { name: third.stem })).toBeVisible();
+    await expect.poll(async () => (await clips(request, ds)).find((c) => c.id === second.id)?.segment).toMatchObject({ text: "a corrected transcript", status: "confirmed" });
+
+    // ↑ goes back, and undo works on the clip on the screen
+    await page.keyboard.press("ArrowUp");
+    await expect(page.getByRole("heading", { name: second.stem })).toBeVisible();
+    await expect(page.locator("[data-transcript]")).toContainText("a corrected transcript");
+    await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
+    await page.keyboard.press("Control+z");
+    await expect(page.getByText("Undid confirm")).toBeVisible();
+    await expect(row(page, second.stem)).not.toContainText("Confirmed");
+    await page.keyboard.press("Control+Shift+z");
+    await expect(page.getByText("Redid confirm")).toBeVisible();
+    await expect(row(page, second.stem)).toContainText("Confirmed");
+
+    // R rejects and goes on, and a rejected clip stays decided
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("heading", { name: third.stem })).toBeVisible();
+    await page.keyboard.press("r");
+    await expect(row(page, third.stem)).toContainText("Rejected");
+    await expect(page.getByRole("heading", { name: before[3].stem })).toBeVisible();
+
+    // the filter and the search narrow the list; a click there opens the clip
+    await page.getByLabel("Show").selectOption("confirmed");
+    await expect(list(page).getByRole("listitem")).toHaveCount(2);
+    await page.getByLabel("Show").selectOption("all");
+    await page.getByLabel("Search clips by name or transcript").fill("a corrected");
+    await expect(list(page).getByRole("listitem")).toHaveCount(1);
+    await list(page).getByRole("button").click();
+    await expect(page.getByRole("heading", { name: second.stem })).toBeVisible();
+    await page.getByLabel("Search clips by name or transcript").fill("");
+    expect(errors).toEqual([]);
+  });
+
+  test("annotate: a clip with no transcript, and a clip with several segments", async ({ page, request }) => {
+    const errors = watchErrors(page);
+    const ds = await dataset(request);
+    const [blank, split] = (await clips(request, ds)).slice(-2);
+    await request.delete(`/api/label/segments/${blank.segment!.id}`);
+    await request.delete(`/api/label/segments/${split.segment!.id}`);
+    for (const [start, end, text] of [[0, 1, "first part"], [1, 2, "second part"]]) {
+      await request.post(`/api/label/files/${split.id}/segments`, { data: { start, end, text } });
+    }
+
+    // Tab reaches the blank clip with the editor ready, and confirming needs text
+    await page.goto(`/label/annotate/${ds}?file=${(await clips(request, ds))[0].id}`);
+    await expect(page.getByRole("heading", { name: "Transcript" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Review" })).toContainText("to review");
+    await expect(row(page, blank.stem)).toContainText("No transcript");
+    await page.keyboard.press("Shift+Tab");
+    await expect(page.getByRole("heading", { name: split.stem })).toBeVisible();
+    await page.keyboard.press("Shift+Tab");
+    await expect(page.getByRole("heading", { name: blank.stem })).toBeVisible();
+    const editor = page.getByRole("textbox", { name: /^Transcript at/ });
+    await expect(editor).toBeFocused();
+    await page.keyboard.press("Control+Enter");
+    await expect(page.getByText(/Type a transcript before you confirm/)).toBeVisible();
+    await expect(page.getByRole("heading", { name: blank.stem })).toBeVisible();
+
+    // text saved with Ctrl+Enter makes one segment over the whole clip, and confirms it
+    await page.getByRole("button", { name: /No transcript yet/ }).click();
+    await page.getByRole("textbox", { name: /^Transcript at/ }).fill("typed from nothing");
+    await page.keyboard.press("Control+Enter");
+    await expect(page.getByRole("heading", { name: split.stem })).toBeVisible();
+    await expect.poll(async () => (await clips(request, ds)).find((c) => c.id === blank.id)?.segment).toMatchObject({ text: "typed from nothing", status: "confirmed" });
+    const view = (await (await request.get(`/api/label/files/${blank.id}`)).json()) as { segments: { start: number; end: number; speaker: string | null }[] };
+    expect(view.segments).toHaveLength(1);
+    expect(view.segments[0]).toMatchObject({ start: 0, speaker: null });
+    expect(Math.abs(view.segments[0].end - blank.duration)).toBeLessThan(0.002);
+
+    // several segments are never joined on their own: confirm does nothing, and the page offers a merge
+    const several = page.getByRole("group", { name: "Several segments" });
+    await expect(several).toContainText("first part");
+    await expect(several).toContainText("second part");
+    await expect(row(page, split.stem)).toContainText("2 segments");
+    await page.keyboard.press("Control+Enter");
+    await expect(page.getByRole("heading", { name: split.stem })).toBeVisible();
+    await expect(several.getByRole("link", { name: "Open with speakers" })).toHaveAttribute("href", new RegExp(`view=speakers&file=${split.id}`));
+    await several.getByRole("button", { name: "Merge into one" }).click();
+    await expect(page.locator("[data-transcript]")).toContainText("first part second part");
+    await expect(row(page, split.stem)).not.toContainText("2 segments");
+
+    // the link to the speaker view, and back again without changing the dataset
+    await page.goto(`/label/annotate/${ds}?view=speakers&file=${split.id}`);
+    await expect(page.getByRole("button", { name: "Add speaker" })).toBeVisible();
+    await page.getByRole("button", { name: "One transcript per clip" }).click();
+    await expect(page.getByRole("heading", { name: "Transcript" })).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("a clip dataset: confirm all, pseudo-label without a segmenter, live evaluation without speakers, and the switch", async ({ page, request }) => {
+    const errors = watchErrors(page);
+    const ds = await dataset(request);
+    await page.goto(`/label/pseudo/${ds}`);
+    await expect(page.getByRole("button", { name: "One transcript per clip" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByLabel("Segments from")).toHaveCount(0);
+    await expect(page.getByText("Speakers", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Re-fuse 2 saved outputs" })).toBeEnabled();
+    await expect(page.getByLabel(/Skip a clip when an ASR model fails on it/)).toBeChecked();
+
+    // a re-run leaves the clips people reviewed
+    const reviewed = (await clips(request, ds)).filter((c) => c.segment?.status === "confirmed");
+    expect(reviewed.length).toBeGreaterThan(0);
+    const before = await page.getByText(/ from run \d+/).textContent();
+    await page.getByRole("button", { name: "Re-fuse 2 saved outputs" }).click();
+    await expect(page.getByText(/ from run \d+/)).not.toHaveText(before!, { timeout: 30_000 });
+    const after = await clips(request, ds);
+    for (const c of reviewed) expect(after.find((x) => x.id === c.id)?.segment).toMatchObject({ id: c.segment!.id, text: c.segment!.text, status: "confirmed" });
+    expect(after.every((c) => c.segments <= 1)).toBe(true);
+
+    await page.goto(`/label/annotate/${ds}`);
+    const all = page.getByRole("button", { name: /Confirm all high-confidence/ });
+    const auto = after.filter((c) => c.segment?.status === "auto").length;
+    await expect(all).toContainText(`(${auto})`);
+    page.once("dialog", (d) => void d.accept());
+    await all.click();
+    await expect(all).toContainText("(0)");
+    expect((await clips(request, ds)).filter((c) => c.segment?.status === "auto")).toHaveLength(0);
+
+    await page.goto(`/label/live/${ds}`);
+    await expect(page.getByRole("heading", { name: "Standings" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "WER", exact: true })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "cpWER" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: /Diarisation/ })).toHaveCount(0);
+
+    // the switch brings the speaker view and the segmenter back, and it changes no segments
+    const segments = await clips(request, ds);
+    await page.goto(`/label/annotate/${ds}`);
+    await page.getByRole("button", { name: "Speaker turns" }).click();
+    await expect(page.getByRole("button", { name: "Add speaker" })).toBeVisible();
+    expect(await clips(request, ds)).toEqual(segments);
+    await page.goto(`/label/pseudo/${ds}`);
+    await expect(page.getByLabel("Segments from")).toBeVisible();
+    await page.getByRole("button", { name: "One transcript per clip" }).click();
+    await expect(page.getByLabel("Segments from")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+});
+
+// Beside the "clips" group, because it fails requests on purpose and so does not watch for console errors.
+test("annotate clips: a failed save never confirms, and an undone transcript can't be confirmed", async ({ page, request }) => {
+  const all = (await (await request.get("/api/datasets")).json()) as { id: number; name: string }[];
+  const ds = all.find((d) => d.name === "Short clips")!.id;
+  type Row = { id: number; stem: string; segment: { id: number; text: string | null; status: string } | null };
+  const clips = async () => ((await (await request.get(`/api/label/datasets/${ds}/clips`)).json()) as { clips: Row[] }).clips;
+  const [blank, kept] = await clips();
+  await request.delete(`/api/label/segments/${blank.segment!.id}`);
+  await request.post("/api/label/segments/bulk", { data: { ids: [kept.segment!.id], action: "review" } });
+
+  // text saved and then undone leaves nothing to confirm
+  await page.goto(`/label/annotate/${ds}?file=${blank.id}`);
+  await page.getByRole("button", { name: /No transcript yet/ }).click();
+  await page.getByRole("textbox", { name: /^Transcript at/ }).fill("typed then undone");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-transcript]")).toContainText("typed then undone");
+  await page.keyboard.press("Control+z");
+  await expect(page.getByRole("button", { name: /No transcript yet/ })).toBeVisible();
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByText(/Type a transcript before you confirm/)).toBeVisible();
+  expect((await clips()).find((c) => c.id === blank.id)?.segment).toBeNull();
+
+  // a failed save on a clip with no transcript confirms nothing, and the error keeps the text
+  await page.route("**/api/label/files/*/segments", (r) => r.fulfill({ status: 500, json: { detail: "disk full" } }));
+  await page.getByRole("button", { name: /No transcript yet/ }).click();
+  await page.getByRole("textbox", { name: /^Transcript at/ }).fill("words that did not save");
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByText(/wasn't saved.*words that did not save/)).toBeVisible();
+  expect((await clips()).find((c) => c.id === blank.id)?.segment).toBeNull();
+  await page.unroute("**/api/label/files/*/segments");
+
+  // a failed edit doesn't confirm the old text
+  await page.route("**/api/label/segments/*", (r) => (r.request().method() === "PATCH" ? r.fulfill({ status: 500, json: { detail: "disk full" } }) : r.continue()));
+  await page.goto(`/label/annotate/${ds}?file=${kept.id}`);
+  await expect(page.locator("[data-transcript]")).toBeVisible();
+  await page.keyboard.press("Enter");
+  await page.getByRole("textbox", { name: /^Transcript at/ }).fill("an edit that did not save");
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByText(/wasn't saved.*an edit that did not save/)).toBeVisible();
+  const after = (await clips()).find((c) => c.id === kept.id)!.segment!;
+  expect(after).toMatchObject({ text: kept.segment!.text, status: "pseudo" });
+});
+
+test("upload: choose how the dataset is labelled", async ({ page }) => {
+  await page.goto("/datasets/upload");
+  const clipsChoice = page.getByRole("radio", { name: /One transcript per clip/ });
+  const turnsChoice = page.getByRole("radio", { name: /Speaker turns/ });
+  await expect(turnsChoice).toBeChecked();
+  await clipsChoice.check();
+  await expect(clipsChoice).toBeChecked();
+  await page.getByRole("radio", { name: /Audio only/ }).click();
+  await expect(clipsChoice).toBeChecked();
+});
+
+test("annotate clips: pseudo-labels checked against uploaded labels", async ({ page, request }) => {
+  const errors = watchErrors(page);
+  type Row = { id: number; stem: string; segment: { id: number; text: string; status: string } };
+  const all = (await (await request.get("/api/datasets")).json()) as { id: number; name: string }[];
+  const ds = all.find((d) => d.name === "Labelled clips")!.id;
+  const clips = async () => ((await (await request.get(`/api/label/datasets/${ds}/clips`)).json()) as { clips: Row[] }).clips;
+  const before = await clips();
+  // the clip whose label says what the models said is auto-accepted, and nothing is confirmed on its own
+  expect(before.every((c) => c.segment.status !== "confirmed")).toBe(true);
+  const match = before.find((c) => c.segment.status === "auto")!;
+  const differ = before.find((c) => c.segment.status === "pseudo")!;
+
+  await page.goto(`/label/annotate/${ds}?file=${differ.id}`);
+  const panel = page.getByRole("heading", { name: "Uploaded label" });
+  await expect(panel).toBeVisible();
+  await expect(page.getByText(/\d+ words? differs?/)).toBeVisible();
+  await expect(page.locator("[data-uploaded] mark").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /Keep all uploaded labels/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Confirm all auto-accepted/ })).toBeVisible();
+  const label = (await page.locator("[data-uploaded]").innerText()).trim();
+  expect(label).not.toBe(differ.segment.text.trim());
+
+  // U takes the uploaded label, and Ctrl+Enter confirms it
+  await page.keyboard.press("u");
+  await expect(page.getByText("Same words as the transcript")).toBeVisible();
+  await page.keyboard.press("Control+Enter");
+  await expect.poll(async () => (await clips()).find((c) => c.id === differ.id)?.segment.status).toBe("confirmed");
+  expect((await clips()).find((c) => c.id === differ.id)?.segment.text).toBe(label);
+
+  await page.goto(`/label/annotate/${ds}?file=${match.id}`);
+  await expect(page.getByText("Same words as the transcript")).toBeVisible();
+  await expect(page.locator("[data-uploaded] mark")).toHaveCount(0);
+
+  // keeping all of them restores each label, after asking
+  page.once("dialog", (d) => void d.accept());
+  await page.getByRole("button", { name: /Keep all uploaded labels/ }).click();
+  await expect(page.getByRole("button", { name: /Keep all uploaded labels/ })).toHaveCount(0);
+  expect((await clips()).every((c) => c.segment.status === "confirmed")).toBe(true);
+  expect(errors).toEqual([]);
 });

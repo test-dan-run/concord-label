@@ -70,8 +70,15 @@ tests, and look at the page in a browser, because several bugs in Annotate only 
   Annotate can undo it. A new edit in `label/edit.py` takes a `history.snapshot` of the segments before
   and after, and calls `_record`. Code that changes segments for any other reason, e.g., a pseudo-label run
   or a package import, calls `history.forget` for the files it changes.
-- Annotate's keyboard shortcuts are listed once, in `SHORTCUTS` in `frontend/src/lib/label.ts`. The
-  strip under the segment table and the Docs page both read that list, so add a new shortcut there.
+- Annotate's keyboard shortcuts are listed once, in `SHORTCUTS` in `frontend/src/lib/label.ts`, and the
+  clip view's are in `CLIP_SHORTCUTS` beside it. The strip under each view and the Docs page read those
+  lists, so add a new shortcut there.
+- A dataset with one transcript per clip (`dataset.labelling`) keeps each clip as one segment. Pseudo-labelling
+  runs no segmenter for it (`whole_clip` in the run's params, so `seg_model_id` can be null), and code that
+  reads a run's segmenter must allow for that. `features/label/ClipAnnotate.tsx` is its view in Annotate, and
+  `AnnotateDataset` picks the view.
+- A label uploaded with a dataset stays in `meta.uploaded` (`Segment.uploaded`) when a pseudo-label takes the segment's
+  text, and code that replaces a segment or rewrites its `meta` must keep it unless the span changed.
 - `components/Timeline.tsx` is shared with Bench and draws the waveform and the axis. The speaker lane
   editing in Annotate lives in `features/label/SpeakerLanes.tsx`, the drag maths in `laneDrag.ts`, and
   the zoom maths in `zoom.ts`, and all three are Label's own.
@@ -132,7 +139,8 @@ purpose, so compare them by hand before you copy a fix from one app to the other
   and it keeps its `push` rows only as history.
 - `datasets/ingest.py`: both send each original to the store and hold it. Label uploads and holds each
   file in the ingest loop. Bench uploads in `_process_audio` and holds the dataset's audio at the end.
-  Bench also refuses a dataset without references.
+  Bench also refuses a dataset without references. `labelling_for` is Label's alone. Label's ingest starts uploaded
+  labels in review with a copy in `meta.uploaded`, and Bench's confirms them, because Bench uses them as references.
 - `datasets/`: Bench alone has `catalog.py` (import and publish), `store.py` (`just move-originals`) and
   `refpackage.py`. Label's versions of these live in `label/publish.py`, `label/from_catalog.py` and
   `move_originals.py`.
@@ -217,3 +225,13 @@ These changes came from the updated design canvas and from requests that followe
   speakers of the last pseudo-label run's diariser, on each file up to the first segment nobody has reviewed
   (`reviewed_until`). Ctrl+Enter in Annotate goes to
   the next segment that isn't confirmed, auto-accepted ones included, instead of the next one to review.
+- Datasets can be labelled with one transcript per clip, for ASR alone (HANDOFF.md §4, "Labelling clips"). Migration
+  `label_0009` added `dataset.labelling`, and it starts a dataset as `clips` when its files have at most one
+  segment each and none has a speaker. Whole-clip pseudo-labelling skips the segmenter, and Annotate has a clip view
+  with a list of every clip. `tests/label_helpers.py` makes the whole-file ASR answers these runs need
+  (`whole_clip_replay`), because `fixtures/recorded` holds only cuts. When Bench records the fixtures again,
+  these could come from there.
+- Uploaded labels are no longer confirmed at ingest (HANDOFF.md §4, "Uploaded labels"). Migration `label_0010` moved the
+  ones nobody had touched to review, except in datasets the Dataset Catalog or Bench knows about. A whole-clip run writes
+  the pseudo-label beside the label, and the clip view compares them. `POST /label/datasets/{id}/confirm-uploaded`
+  confirms the labels as uploaded, and tests that need references call it through `keep_uploaded` in `tests/label_helpers.py`.

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, qs, type CacheState, type LabelPreview, type LabelResults, type LabelSummary, type Model, type ModelList, type Run, type Job } from "../../lib/api";
 import { ago, capLabel, clock, coldStart, etaText, jobStatusText, num, pct, stageText, timingLabel } from "../../lib/format";
@@ -7,7 +7,7 @@ import { confidenceColor, labelButton, STATUS_LABELS } from "../../lib/label";
 import { C } from "../../lib/colors";
 import * as I from "../../components/icons";
 import { Bar, Button, Chip, Empty, ErrorNote, Fact, JobPill, PageHeader, Panel, Select, Spinner, StatusDot, cx } from "../../components/ui";
-import { BarLegend, Crumbs, DatasetChooser, LabelTabs, StatusBar } from "./common";
+import { BarLegend, Crumbs, DatasetChooser, LabellingSwitch, LabelTabs, StatusBar } from "./common";
 
 const STRATEGIES = [
   { value: "best_aligned", label: "Best-aligned single hypothesis", hint: "The member hypothesis with the lowest summed WER to the others. Default." },
@@ -64,14 +64,18 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
 
   // Defaults once models load: the first diariser, every ASR model; the last run's settings when there is one.
   const lastParams = results.data?.run?.params as Record<string, unknown> | undefined;
+  const clips = results.data?.dataset.labelling === "clips";
+  const started = useRef(false);
   useEffect(() => {
-    if (!all || !results.data || segId !== null) return;
-    if (lastParams?.seg_model_id) {
+    if (!all || !all.length || !results.data || started.current) return;
+    started.current = true;
+    if (lastParams?.asr_model_ids) {
       const named = (lastParams.models as Record<string, string> | undefined) ?? {};
       const cid = (id: unknown) => named[String(id)] ?? all.find((m) => m.id === id)?.catalog_id ?? null;
-      setSegId(cid(lastParams.seg_model_id));
+      if (lastParams.seg_model_id) setSegId(cid(lastParams.seg_model_id));
       setAsrIds(new Set(((lastParams.asr_model_ids as number[]) ?? []).map(cid).filter((x): x is string => !!x)));
-      setTasks(new Set((lastParams.tasks as string[]) ?? ["asr", "diar"]));
+      // the speakers task comes back with the segmenter, when a whole-clip dataset goes back to speaker turns
+      setTasks(new Set(lastParams.whole_clip ? ["asr", "diar"] : ((lastParams.tasks as string[]) ?? ["asr", "diar"])));
       setStrategy((lastParams.strategy as string) ?? "best_aligned");
       setSingleId(lastParams.single_model_id ? cid(lastParams.single_model_id) : null);
       setHigh((lastParams.high as number) ?? 0.85);
@@ -79,24 +83,28 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
       setSkipFailed((lastParams.skip_failed as boolean | undefined) ?? true);
       return;
     }
-    const diar = segModels.find((m) => m.capabilities.includes("diar")) ?? segModels[0];
-    if (diar) setSegId(diar.catalog_id);
     setAsrIds(new Set(asrModels.map((m) => m.catalog_id)));
-  }, [all, results.data, segModels, asrModels, segId, lastParams]);
+  }, [all, results.data, segModels, asrModels, lastParams]);
+  // The first diariser, also when one is registered after the page opened; a last run's segmenter comes first.
+  useEffect(() => {
+    if (segId !== null || !segModels.length || !results.data || lastParams?.seg_model_id) return;
+    setSegId((segModels.find((m) => m.capabilities.includes("diar")) ?? segModels[0]).catalog_id);
+  }, [segId, segModels, results.data, lastParams]);
 
-  const seg = segModels.find((m) => m.catalog_id === segId);
-  const wantAsr = tasks.has("asr");
+  // A dataset with one transcript per clip takes no segmenter and finds no speakers (label/pseudo.py).
+  const seg = clips ? undefined : segModels.find((m) => m.catalog_id === segId);
+  const wantAsr = clips || tasks.has("asr");
   const ids = [...asrIds].sort();
   const preview = useQuery({
-    queryKey: ["label-preview", datasetId, segId, ids.join(",")],
-    queryFn: () => api.get<LabelPreview>(`/label/datasets/${datasetId}/preview${qs({ seg_model_id: segId, asr_model_ids: ids.join(",") })}`),
-    enabled: segId !== null,
+    queryKey: ["label-preview", datasetId, clips ? null : segId, ids.join(",")],
+    queryFn: () => api.get<LabelPreview>(`/label/datasets/${datasetId}/preview${qs({ seg_model_id: clips ? null : segId, asr_model_ids: ids.join(",") })}`),
+    enabled: !!results.data && (clips || segId !== null),
   });
   const start = useMutation({
     mutationFn: () =>
       api.post<{ run: Run; job: Job }>(`/label/datasets/${datasetId}/runs`, {
-        tasks: [...tasks],
-        seg_model_id: segId,
+        tasks: clips ? ["asr"] : [...tasks],
+        seg_model_id: clips ? null : segId,
         asr_model_ids: wantAsr ? ids : [],
         strategy,
         single_model_id: strategy === "single" ? singleId : null,
@@ -126,10 +134,12 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
   const fresh = wantAsr ? (pv?.new_members ?? 0) : 0;
   const fromBench = wantAsr ? (pv?.bench_members ?? 0) : 0;
   const problems: string[] = [];
-  if (!seg) problems.push("Pick a VAD / diarisation model for the segments.");
-  if (tasks.has("diar") && seg && !seg.capabilities.includes("diar")) problems.push(`${seg.display_name} returns no speakers; pick a diariser for the speakers task.`);
+  if (!clips) {
+    if (!seg) problems.push("Pick a VAD / diarisation model for the segments.");
+    if (tasks.has("diar") && seg && !seg.capabilities.includes("diar")) problems.push(`${seg.display_name} returns no speakers; pick a diariser for the speakers task.`);
+    if (!tasks.size) problems.push("Choose at least one task.");
+  }
   if (wantAsr && !ids.length) problems.push("Pick at least one ASR model.");
-  if (!tasks.size) problems.push("Choose at least one task.");
   if (strategy === "single" && !ids.includes(singleId ?? "")) problems.push("Pick the model to use as the starting hypothesis.");
   if (low > high) problems.push("The review threshold must not be above the auto-accept threshold.");
   const button = !wantAsr ? "Label speakers" : labelButton(saved, fresh);
@@ -143,20 +153,25 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
 
   return (
     <>
-      <PageHeader crumbs={<Crumbs name={r?.dataset.name} />} title="Ensemble pseudo-labelling" subtitle="Segments come from one VAD / diarisation model; each segment is transcribed by every ASR member and the members are fused." />
+      <PageHeader crumbs={<Crumbs name={r?.dataset.name} />} title="Ensemble pseudo-labelling" subtitle={clips ? "Each clip is transcribed whole by every ASR member, and the members are fused into one transcript." : "Segments come from one VAD / diarisation model; each segment is transcribed by every ASR member and the members are fused."} />
       <LabelTabs datasetId={datasetId} current="pseudo" />
       <ErrorNote error={results.error ?? models.error} />
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
         <Panel title="Set up" subtitle={r ? `${num(r.dataset.usable_files)} usable files` : undefined}>
-          <fieldset className="border-0 p-0 m-0 flex flex-col gap-2">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[11px] text-muted uppercase tracking-wider">Labelling</span>
+            <LabellingSwitch datasetId={datasetId} />
+            {clips && <span className="text-xs text-muted">No VAD or diariser runs, so each clip stays one utterance with no speakers. Clips you already reviewed keep their transcripts, and a clip's uploaded label stays beside its pseudo-label.</span>}
+          </div>
+          {!clips && <fieldset className="border-0 p-0 m-0 flex flex-col gap-2">
             <legend className="text-[11px] text-muted uppercase tracking-wider mb-1.5">Tasks</legend>
             <span className="flex flex-wrap gap-4 text-[13px]">
               <label className="flex items-center gap-2"><input type="checkbox" checked={tasks.has("asr")} onChange={() => toggleTask("asr")} /> Transcripts</label>
               <label className="flex items-center gap-2"><input type="checkbox" checked={tasks.has("diar")} onChange={() => toggleTask("diar")} /> Speakers</label>
               <label className="flex items-center gap-2 text-subtle" title="Keyword spotting is not built yet (Q6)"><input type="checkbox" disabled /> Keywords</label>
             </span>
-          </fieldset>
-          <div className="flex flex-col gap-1.5">
+          </fieldset>}
+          {!clips && <div className="flex flex-col gap-1.5">
             <Select label="Segments from" value={segId ?? ""} onChange={(e) => setSegId(e.target.value)}>
               {segModels.map((m) => (
                 <option key={m.catalog_id} value={m.catalog_id}>
@@ -165,15 +180,15 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
               ))}
             </Select>
             {seg && <ModelFacts m={seg} />}
-            {pv && (
+            {pv?.seg && (
               <span className="text-xs text-muted">
                 <Chip tone={STATE_TONE[pv.seg.state]}>{STATE_TEXT[pv.seg.state]}</Chip> <span className="num">{pv.seg.cached_files}/{pv.files}</span> files segmented already
                 {pv.seg.bench_files > 0 && <>, <span className="num">{pv.seg.bench_files}</span> in Concord Bench</>}
               </span>
             )}
-            {models.data && !models.data.catalog.reachable && <ErrorNote error={`The Model Catalog is not reachable: ${models.data.catalog.error}`} />}
             {!segModels.length && models.data && <Empty>No VAD / diarisation model in the catalog. Register one in the <a href={catalogUi} target="_blank" rel="noreferrer">Model Catalog</a>.</Empty>}
-          </div>
+          </div>}
+          {models.data && !models.data.catalog.reachable && <ErrorNote error={`The Model Catalog is not reachable: ${models.data.catalog.error}`} />}
           {wantAsr && (
             <fieldset className="border-0 p-0 m-0 flex flex-col gap-1.5">
               <legend className="text-[11px] text-muted uppercase tracking-wider mb-1.5">ASR members</legend>
@@ -197,7 +212,7 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
                       <ModelFacts m={m} />
                     </span>
                     {st && (
-                      <Chip tone={STATE_TONE[st.state]} title={`${st.cached_cuts} of ${st.known_cuts} known segments saved here, ${st.bench_cuts} in Concord Bench${st.files_without_segments ? `; ${st.files_without_segments} files not segmented yet` : ""}`}>
+                      <Chip tone={STATE_TONE[st.state]} title={`${st.cached_cuts} of ${st.known_cuts} known ${clips ? "clips" : "segments"} saved here, ${st.bench_cuts} in Concord Bench${st.files_without_segments ? `; ${st.files_without_segments} files not segmented yet` : ""}`}>
                         {STATE_TEXT[st.state]}
                       </Chip>
                     )}
@@ -249,7 +264,7 @@ function PseudoLabel({ datasetId }: { datasetId: number }) {
               <label className="flex items-start gap-2 text-[13px]">
                 <input type="checkbox" checked={skipFailed} onChange={(e) => setSkipFailed(e.target.checked)} className="mt-1" />
                 <span>
-                  Skip a segment when an ASR model fails on it
+                  {clips ? "Skip a clip when an ASR model fails on it" : "Skip a segment when an ASR model fails on it"}
                   <span className="block text-xs text-muted">The other models still transcribe it, and a retry tries it again. Without this, the run stops at the first error.</span>
                 </span>
               </label>
@@ -356,10 +371,13 @@ function Results({ r, running, loading, onCancel, cancelError }: { r?: LabelResu
       {!s && !running && <Empty>No pseudo-labels yet. Set up an ensemble and start.</Empty>}
       {s && (
         <>
-          <Panel title="Triage" subtitle={`${num(s.segments)} segments in ${num(s.files)} files from run ${r.run?.id}${r.segmenter ? ` · segments from ${r.segmenter}` : ""}`}>
+          <Panel title="Triage" subtitle={`${num(s.segments)} ${r.dataset.labelling === "clips" && r.run?.params.whole_clip ? "transcripts" : "segments"} in ${num(s.files)} files from run ${r.run?.id}${r.segmenter ? ` · segments from ${r.segmenter}` : ""}`}>
             <TriageBar s={s} />
             <div className="grid sm:grid-cols-2 gap-x-6">
               <Fact k="Left to reviewed work" v={num(s.kept_reviewed)} />
+              {!!s.kept_uploaded && <Fact k="Left to uploaded labels" v={num(s.kept_uploaded)} />}
+              {!!(s.uploaded?.matches || s.uploaded?.differs) && <Fact k="Match the uploaded label" v={num(s.uploaded.matches)} />}
+              {!!(s.uploaded?.matches || s.uploaded?.differs) && <Fact k="Differ from the uploaded label" v={num(s.uploaded.differs)} />}
               <Fact k="Earlier pseudo-labels replaced" v={num(s.replaced)} />
               {Object.entries(s.strategy_applied).map(([k, v]) => <Fact key={k} k={`Fused with ${k.replace("_", "-")}`} v={num(v)} />)}
             </div>

@@ -27,7 +27,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..core.models import AudioFile, Dataset, FileStatus, Segment, SegmentStatus
-from ..datasets.ingest import _process_audio, label_types_for
+from ..datasets.ingest import _process_audio, label_types_for, labelling_for
 from ..datasets.parsers import RefRecord, flatten, parse_file, stem_of
 from ..platform import datasets as dataset_catalog
 
@@ -158,6 +158,7 @@ def ingest_version(session: Session, dataset_id: int, progress: Progress | None 
         dc.add_use(did, n, ds.uid)
     ds.label_types = label_types_for(records)
     ds.mode = "annotated" if ds.label_types else "audio_only"
+    ds.labelling = ds.labelling or labelling_for(records)
     files = list(ds.files)
     usable = [f for f in files if f.usable]
     with_refs = {stem_of(f.rel_path).lower() for f in files} & set(by_stem)

@@ -12,16 +12,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, qs, type AnnotateView, type LabelFile, type SegStatus, type Segment } from "../../lib/api";
+import { api, qs, type AnnotateView, type Dataset, type LabelFile, type SegStatus, type Segment } from "../../lib/api";
 import { houseSpelled, Matcher, norm, type ActiveLexicon, type Hint } from "../../lib/lexicon";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { lowConfidence, nextToReview, nextUnconfirmed, overlapRegions, playingSegment, segmentAt, selectRange, SHORTCUTS, STATUS_LABELS } from "../../lib/label";
+import { lowConfidence, nextToReview, nextUnconfirmed, overlapRegions, playingSegment, segmentAt, selectRange, STATUS_LABELS } from "../../lib/label";
 import { useAudio } from "../../components/AudioPlayer";
 import { Timeline } from "../../components/Timeline";
 import * as I from "../../components/icons";
 import { Button, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner } from "../../components/ui";
-import { Crumbs, DatasetChooser, LabelTabs } from "./common";
+import { ClipAnnotate } from "./ClipAnnotate";
+import { Crumbs, DatasetChooser, isTyping, KeepUploaded, LabellingSwitch, LabelTabs, LexiconLink, ModelOutputs, Shortcuts } from "./common";
 import { MAX_SPEAKERS, nextSpeakerName } from "./laneDrag";
 import { SegmentRow, type RowMenu } from "./SegmentRow";
 import { SpeakerLanes, type Lane, type LaneEdit } from "./SpeakerLanes";
@@ -89,7 +90,18 @@ export function AnnotatePage() {
   return <AnnotateDataset datasetId={Number(datasetId)} />;
 }
 
+/** The view that fits how the dataset is labelled; `?view=speakers` opens the speaker view on a clip dataset, for
+ * a clip that was split into several segments. */
 function AnnotateDataset({ datasetId }: { datasetId: number }) {
+  const [params] = useSearchParams();
+  const ds = useQuery({ queryKey: ["dataset", String(datasetId)], queryFn: () => api.get<Dataset>(`/datasets/${datasetId}`) });
+  if (ds.isLoading) return <Spinner />;
+  if (ds.error) return <ErrorNote error={ds.error} />;
+  if (ds.data?.labelling === "clips" && params.get("view") !== "speakers") return <ClipAnnotate datasetId={datasetId} />;
+  return <TurnsDataset datasetId={datasetId} />;
+}
+
+function TurnsDataset({ datasetId }: { datasetId: number }) {
   const [params, setParams] = useSearchParams();
   const files = useQuery({ queryKey: ["label-files", datasetId], queryFn: () => api.get<LabelFile[]>(`/label/datasets/${datasetId}/files`) });
   const status = params.get("status") as SegStatus | null;
@@ -164,16 +176,6 @@ function useLabelMutations(fileId: number, datasetId: number) {
   const history = useMutation({ mutationFn: (way: "undo" | "redo") => api.post<{ action: string; ids: number[] }>(`/label/files/${fileId}/${way}`), onSettled: done });
   const error = patch.error ?? move.error ?? boundary.error ?? bulk.error ?? merge.error ?? split.error ?? create.error ?? remove.error ?? confirmAuto.error ?? history.error;
   return { patch, move, boundary, bulk, merge, split, create, remove, confirmAuto, history, error };
-}
-
-const NOT_TEXT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "file", "color"]);
-
-/** Whether a key goes to a field that takes text (a checkbox or a button does not: the shortcuts apply). */
-function isTyping(e: KeyboardEvent): boolean {
-  const t = e.target as HTMLElement | null;
-  if (!t) return false;
-  if (t.tagName === "INPUT") return !NOT_TEXT.has((t as HTMLInputElement).type);
-  return t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable;
 }
 
 function Annotator({
@@ -540,6 +542,8 @@ function Annotator({
       />
       <LabelTabs datasetId={datasetId} current="annotate" />
       <div className="flex flex-wrap items-center gap-3">
+        <LabellingSwitch datasetId={datasetId} />
+        <KeepUploaded datasetId={datasetId} />
         <span role="group" aria-label="Focus" className="inline-flex border border-line rounded-md overflow-hidden">
           <button type="button" aria-pressed className="min-h-8 px-3 text-xs border-0 bg-active text-fg">Transcript + speakers</button>
           <button type="button" disabled title="Keyword spotting is not built yet (Q6)" className="min-h-8 px-3 text-xs border-0 bg-transparent text-subtle cursor-not-allowed">Keywords</button>
@@ -754,17 +758,6 @@ function Annotator({
   );
 }
 
-/** In the segments header: the lexicons in use and how many hints they give in this file. */
-function LexiconLink({ lexicons, hints }: { lexicons: ActiveLexicon[]; hints: number }) {
-  const one = lexicons.length === 1 ? lexicons[0] : null;
-  return (
-    <Link to={one ? `/lexicons/${one.id}` : "/lexicons"} className="inline-flex items-center gap-2 text-xs font-normal !text-muted hover:!text-fg no-underline">
-      <I.Book size={14} />
-      {one ? <>{one.name} <span className="num">v{one.version}</span></> : <>{lexicons.length} lexicons</>} · <span className="num">{num(hints)}</span> spelling hint{hints === 1 ? "" : "s"}
-    </Link>
-  );
-}
-
 /** Under the lanes: where the speakers came from, e.g. "2 detected by pyannote-diarization · 1 added by you". */
 function speakerNote(segs: Segment[], lanes: string[], diariser: string | null): string {
   const fromRun = new Set(segs.filter((s) => s.source_run_id !== null && s.speaker).map((s) => s.speaker!));
@@ -803,25 +796,7 @@ function SidePanel({ s, ctl, onUse, onFlag, onLive }: { s: Segment | null; ctl: 
   if (!s) return <Panel title="Segment"><span className="text-[13px] text-muted">Select a segment.</span></Panel>;
   return (
     <Panel title="Segment" subtitle={<span className="num">{clock(s.start)} – {clock(s.end)} · {(s.end - s.start).toFixed(2)} s</span>}>
-      <div className="flex flex-col gap-2">
-        <span className="text-[11px] text-muted uppercase tracking-wider">Model outputs</span>
-        {!s.alternatives?.length && <span className="text-[13px] text-muted">None stored for this span{s.reviewed ? " (edited or created by hand)" : ""}.</span>}
-        {s.alternatives?.map((a) => (
-          <div key={a.service} className="flex flex-col gap-1 bg-canvas border border-track rounded-md p-2">
-            <span className="flex items-center justify-between gap-2 text-xs">
-              <span className="truncate">
-                {a.model}
-                {s.chosen === a.service && <span className="ml-1.5 text-primary">· starting hypothesis</span>}
-                {a.source_app && <span className="ml-1.5 text-subtle" title={`output read from ${a.source_app} through the Model Catalog's index`}>· from {a.source_app === "bench" ? "Concord Bench" : a.source_app}</span>}
-                {!a.build_key && <span className="ml-1.5 text-subtle" title="made before the Model Catalog: not reused by new runs">· older build</span>}
-              </span>
-              {s.agreement?.[a.service] !== undefined && <span className="num text-muted">agrees {(100 * s.agreement[a.service]).toFixed(0)}%</span>}
-            </span>
-            <span className="text-[13px]">{a.text || <span className="text-subtle">(empty)</span>}</span>
-            <Button size="sm" variant="ghost" className="self-start" disabled={a.text === s.text} onClick={() => onUse(a.text)}>Use this text</Button>
-          </div>
-        ))}
-      </div>
+      <ModelOutputs s={s} onUse={onUse} />
       <div className="flex flex-wrap gap-2">
         <Button size="sm" onClick={() => ctl.play(s.start, s.end)}><I.Play size={11} /> Play</Button>
         <Button size="sm" variant={s.flagged ? "danger" : "outline"} onClick={onFlag} aria-pressed={s.flagged}><I.Flag size={12} /> {s.flagged ? "Unflag" : "Flag"}</Button>
@@ -833,19 +808,5 @@ function SidePanel({ s, ctl, onUse, onFlag, onLive }: { s: Segment | null; ctl: 
         <Button size="sm" variant="ghost" onClick={onLive}><I.Pulse size={12} /> Live evaluation</Button>
       </div>
     </Panel>
-  );
-}
-
-export function Shortcuts() {
-  return (
-    <span className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted" aria-label="Keyboard shortcuts">
-      {SHORTCUTS.map(({ key, short }) => (
-        <span key={key} className="flex items-center gap-1.5">
-          <kbd className="num text-[10px] border border-line rounded px-1 py-px text-fg bg-track">{key}</kbd>
-          {short}
-        </span>
-      ))}
-      <Link to="/label" className="ml-auto text-[11px]">Back to the console</Link>
-    </span>
   );
 }

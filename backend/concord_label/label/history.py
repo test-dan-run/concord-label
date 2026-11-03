@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from ..core.models import AudioFile, Run, Segment, SegmentEdit, utcnow
 
 KEEP = 200  # edits kept for each file; older ones are deleted
+CHUNK = 500  # file ids in one query (SQLite limits a query's variables)
 COLUMNS = ("id", "uid", "audio_file_id", "start", "end", "speaker", "text", "status", "confidence", "source_run_id",
            "flagged", "flag_note", "edited_at", "meta", "updated_at")
 CHANGED = "This file changed since that edit, so it can't be undone"
@@ -59,6 +60,19 @@ def record(session: Session, f: AudioFile | int, action: str, before: list[dict[
     keep = select(SegmentEdit.id).where(SegmentEdit.audio_file_id == fid).order_by(SegmentEdit.id.desc()).limit(KEEP)
     session.execute(delete(SegmentEdit).where(SegmentEdit.audio_file_id == fid, SegmentEdit.id.not_in(keep)))
     return e
+
+
+def record_many(session: Session, action: str, edits: dict[int, tuple[list[dict[str, Any]], list[dict[str, Any]]]]) -> None:
+    """Save one edit to each of many files ({file id: (before, after)}), all at once: confirming a dataset's clips
+    touches thousands of files. A file's next `record` trims its history to KEEP."""
+    edits = {fid: e for fid, e in edits.items() if not _same(*e)}
+    ids = sorted(edits)
+    for k in range(0, len(ids), CHUNK):
+        session.execute(delete(SegmentEdit).where(SegmentEdit.audio_file_id.in_(ids[k:k + CHUNK]),
+                                                  SegmentEdit.undone.is_(True)))
+    session.add_all(SegmentEdit(audio_file_id=fid, action=action, before=b, after=a, undone=False)
+                    for fid, (b, a) in edits.items())
+    session.flush()
 
 
 def forget(session: Session, file_ids: Iterable[int]) -> None:
