@@ -7,7 +7,8 @@
 // S split at the playhead · M merge · Delete · Ctrl+Z undo · Ctrl+Shift+Z or Ctrl+Y redo · Esc close/clear ·
 // 1–8 assign speaker · Alt+Enter use house spelling · = - 0 zoom. Variants the published lexicons flag are
 // underlined in the transcript with a choice to use the house spelling or keep the text; the text never
-// changes on its own.
+// changes on its own. The table narrows and orders by the models' agreement (ReviewFilter in lib/label.ts), and
+// the filter stays in the URL from file to file. The timeline keeps every segment.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,13 +17,13 @@ import { api, qs, type AnnotateView, type Dataset, type LabelFile, type SegStatu
 import { houseSpelled, Matcher, norm, type ActiveLexicon, type Hint } from "../../lib/lexicon";
 import { C, speakerColors } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { lowConfidence, nextToReview, nextUnconfirmed, overlapRegions, playingSegment, segmentAt, selectRange, STATUS_LABELS } from "../../lib/label";
+import { byAgreement, countInRange, filterActive, lowConfidence, matchesFilter, nextClip, nextToReview, nextUnconfirmed, overlapRegions, playingSegment, segmentAt, selectRange, STATUS_LABELS } from "../../lib/label";
 import { useAudio } from "../../components/AudioPlayer";
 import { Timeline } from "../../components/Timeline";
 import * as I from "../../components/icons";
 import { Button, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 import { ClipAnnotate } from "./ClipAnnotate";
-import { Crumbs, DatasetChooser, isTyping, KeepUploaded, LabellingSwitch, LabelTabs, LexiconLink, ModelOutputs, Shortcuts } from "./common";
+import { Crumbs, DatasetChooser, isTyping, KeepUploaded, LabellingSwitch, LabelTabs, LexiconLink, ModelOutputs, ReviewFilters, Shortcuts, useFilterArrival, useReviewFilter } from "./common";
 import { MAX_SPEAKERS, nextSpeakerName } from "./laneDrag";
 import { SegmentRow, type RowMenu } from "./SegmentRow";
 import { SpeakerLanes, type Lane, type LaneEdit } from "./SpeakerLanes";
@@ -106,13 +107,14 @@ function TurnsDataset({ datasetId }: { datasetId: number }) {
   const files = useQuery({ queryKey: ["label-files", datasetId], queryFn: () => api.get<LabelFile[]>(`/label/datasets/${datasetId}/files`) });
   const status = params.get("status") as SegStatus | null;
   const fileParam = params.get("file");
+  const [filter] = useReviewFilter();
   const fileId = useMemo(() => {
     if (fileParam) return Number(fileParam);
     const list = (files.data ?? []).filter((f) => f.usable);
     const key = status === "pseudo" ? "review" : status;
-    const hit = key ? list.find((f) => f.counts[key as keyof LabelFile["counts"]] > 0) : undefined;
+    const hit = key ? list.find((f) => f.counts[key as keyof LabelFile["counts"]] > 0) : filterActive(filter) ? list.find((f) => countInRange(f.agreement, filter) > 0) : undefined;
     return (hit ?? list[0])?.id ?? null;
-  }, [fileParam, files.data, status]);
+  }, [fileParam, files.data, status, filter]);
   const go = (id: number) => {
     const p = new URLSearchParams(params);
     p.set("file", String(id));
@@ -212,7 +214,13 @@ function Annotator({
 
   const v = q.data;
   const segs = useMemo(() => v?.segments ?? [], [v]);
-  const visible = useMemo(() => (show === "all" ? segs : segs.filter((s) => s.status === show)), [segs, show]);
+  const high = v?.thresholds.high ?? 0.85;
+  const [urlFilter, setFilter] = useReviewFilter();
+  // Uploaded turns aren't compared with pseudo-labels (HANDOFF.md §4), so this view has no filter on the label.
+  const filter = useMemo(() => ({ ...urlFilter, label: "any" as const }), [urlFilter]);
+  const matches = useCallback((s: Segment) => matchesFilter(s, filter, high), [filter, high]);
+  const ordered = useMemo(() => byAgreement(segs, filter.order, (s) => s.confidence), [segs, filter.order]);
+  const visible = useMemo(() => ordered.filter((s) => (show === "all" || s.status === show) && matches(s)), [ordered, show, matches]);
   // Speaker lanes: every speaker seen on this file since it opened (a lane stays while you move its last
   // segment away) plus the ones added by hand, sorted; their order is also the 1–8 keys'.
   const [seen, setSeen] = useState<string[]>([]);
@@ -222,7 +230,6 @@ function Annotator({
   }, [v]);
   const speakers = useMemo(() => [...new Set([...seen, ...(v?.speakers ?? []), ...added])].sort(), [seen, v, added]);
   const colors = useMemo(() => speakerColors(speakers), [speakers]);
-  const high = v?.thresholds.high ?? 0.85;
   const current = segs.find((s) => s.id === cur) ?? null;
   // The part of the file the timeline shows (zoom): the whole file until zoomed; follows playback and
   // the selected segment.
@@ -275,11 +282,15 @@ function Annotator({
     if (cur !== null && loaded.current.has(cur)) return;
     if (first) {
       const atTime = initialTime !== null && !seeked.current ? segmentAt(segs, initialTime) : null;
-      setCur(atTime ?? nextToReview(segs, null, 1, high) ?? segs[0]?.id ?? null);
+      setCur(atTime ?? nextToReview(ordered, null, 1, high, undefined, matches) ?? visible[0]?.id ?? segs[0]?.id ?? null);
     } else if (cur !== null && had.has(cur)) {
       setCur(curAt.current !== null ? segmentAt(segs, curAt.current) : null);
     }
-  }, [v, segs, cur, high, initialTime]);
+  }, [v, segs, cur, high, initialTime, ordered, matches, visible]);
+  // A new order starts at the top of the table, and a new filter leaves a segment that it no longer shows.
+  useFilterArrival(filter, (order) => {
+    if (visible.length && (order || !visible.some((s) => s.id === cur))) setCur(nextToReview(visible, null, 1, high) ?? visible[0].id);
+  });
   useEffect(() => {
     if (!v || initialTime === null || seeked.current) return;
     seeked.current = true;
@@ -318,8 +329,8 @@ function Annotator({
   // The next segment to review after `from` (Tab and Shift+Tab); `done` were just confirmed.
   const toReview = useCallback(
     (from: number | null, direction: 1 | -1, done: number[] = []) =>
-      nextToReview(done.length ? segs.map((s) => (done.includes(s.id) ? { ...s, status: "confirmed" as const, reviewed: true } : s)) : segs, from, direction, high, hasHint),
-    [segs, high, hasHint],
+      nextToReview(done.length ? ordered.map((s) => (done.includes(s.id) ? { ...s, status: "confirmed" as const, reviewed: true } : s)) : ordered, from, direction, high, hasHint, matches),
+    [ordered, high, hasHint, matches],
   );
   // Select segment `id`; with `play` (Tab and Shift+Tab), also play it from start to end. The timeline brings
   // the selected segment into view.
@@ -516,7 +527,12 @@ function Annotator({
     ...(live.some((s) => !s.speaker) ? [{ key: "", speaker: null, label: "no speaker", color: C.subtle }] : []),
   ];
   const autoCount = segs.filter((s) => s.status === "auto").length;
-  const reviewCount = segs.filter((s) => lowConfidence(s, high) || hasHint(s)).length;
+  const reviewCount = segs.filter((s) => (lowConfidence(s, high) || hasHint(s)) && matches(s)).length;
+  const filtering = filterActive(filter);
+  const scored = filtering || filter.order !== "list" || segs.some((s) => s.confidence !== null) || files.some((f) => Object.keys(f.agreement ?? {}).length > 0);
+  const elsewhere = filtering ? files.filter((f) => f.id !== fileId && f.usable && countInRange(f.agreement, filter) > 0) : [];
+  const elsewhereCount = elsewhere.reduce((a, f) => a + countInRange(f.agreement, filter), 0);
+  const nextFile = filtering ? nextClip(files, fileId, 1, (f) => f.usable && countInRange(f.agreement, filter) > 0) : null;
   const order = visible.map((s) => s.id);
   const fileIndex = files.findIndex((f) => f.id === fileId);
 
@@ -531,7 +547,7 @@ function Annotator({
             <Select aria-label="File" value={fileId} onChange={(e) => onFile(Number(e.target.value))}>
               {files.map((f) => (
                 <option key={f.id} value={f.id} disabled={!f.usable}>
-                  {f.stem} · {f.counts.review + f.counts.rejected} to review · {f.counts.confirmed} confirmed
+                  {f.stem} · {filtering ? `${countInRange(f.agreement, filter)} to check in range` : `${f.counts.review + f.counts.rejected} to review · ${f.counts.confirmed} confirmed`}
                 </option>
               ))}
             </Select>
@@ -642,7 +658,7 @@ function Annotator({
         <Panel
           title={
             <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              Segments · {num(segs.length)}
+              Segments · {filtering ? `${num(visible.length)} of ${num(segs.length)}` : num(segs.length)}
               {lexicons.length > 0 && <LexiconLink lexicons={lexicons} hints={[...hints.values()].reduce((a, h) => a + h.length, 0)} />}
             </span>
           }
@@ -656,6 +672,17 @@ function Annotator({
             </span>
           }
         >
+          {scored && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <ReviewFilters filter={filter} onChange={setFilter} listOrder="By time" />
+              {filtering && (
+                <span className="flex items-center gap-2 text-xs text-muted">
+                  {elsewhere.length ? <span className="num">{num(elsewhereCount)} to check in {num(elsewhere.length)} other file{elsewhere.length === 1 ? "" : "s"}</span> : "None to check in other files"}
+                  {nextFile !== null && <Button size="sm" onClick={() => onFile(nextFile)}>Next file in range ›</Button>}
+                </span>
+              )}
+            </div>
+          )}
           {sel.size > 0 && (
             <BulkBar
               n={sel.size}
@@ -672,7 +699,7 @@ function Annotator({
               onClear={() => setSel(new Set())}
             />
           )}
-          {visible.length === 0 && <Empty>No segments {show === "all" ? "in this file" : `with status “${STATUS_LABELS[show as SegStatus]}”`}.</Empty>}
+          {visible.length === 0 && (filtering ? <Empty>No segments in this file match the filter.</Empty> : <Empty>No segments {show === "all" ? "in this file" : `with status “${STATUS_LABELS[show as SegStatus]}”`}.</Empty>)}
           {visible.length > 0 && (
             <div ref={listBox} className="overflow-auto scroll-thin max-h-[60vh] border border-track rounded-md">
               <table className="w-full border-collapse text-[13px]" style={{ minWidth: 640 }}>

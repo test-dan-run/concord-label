@@ -1116,6 +1116,118 @@ test("upload: choose how the dataset is labelled", async ({ page }) => {
   await expect(clipsChoice).toBeChecked();
 });
 
+test("annotate clips: filter by agreement, and find the clips where only the label differs", async ({ page, request }) => {
+  const errors = watchErrors(page);
+  type Row = { id: number; stem: string; segment: { confidence: number | null; reviewed: boolean; uploaded_differs: boolean | null } };
+  const all = (await (await request.get("/api/datasets")).json()) as { id: number; name: string }[];
+  const ds = all.find((d) => d.name === "Labelled clips")!.id;
+  const clips = ((await (await request.get(`/api/label/datasets/${ds}/clips`)).json()) as { clips: Row[] }).clips;
+  const stems = (rows: Row[]) => rows.map((c) => c.stem);
+  const low = [...clips].sort((a, b) => a.segment.confidence! - b.segment.confidence!);
+  const rows = page.getByRole("list", { name: "Clips" }).getByRole("listitem");
+  const shown = async () => (await rows.locator("span.num.text-xs").allInnerTexts()).map((t) => t.trim());
+  const lowest = page.getByLabel("Lowest agreement in percent");
+  const highest = page.getByLabel("Highest agreement in percent");
+  const uploaded = page.getByRole("combobox", { name: /^Uploaded label/ });
+  await page.goto(`/label/annotate/${ds}`);
+  await expect(rows).toHaveCount(clips.length);
+  await expect(uploaded).toHaveValue("any");
+
+  // the worst clip first, and the page goes there
+  await page.getByLabel("Order").selectOption("low");
+  await expect.poll(shown).toEqual(stems(low));
+  await expect(page).toHaveURL(/order=low/);
+  await expect(page.getByRole("heading", { name: low.find((c) => !c.segment.reviewed)!.stem })).toBeVisible();
+
+  // a range: only what is in it, and the walking keys stay inside it
+  const limit = Math.round(100 * low[0].segment.confidence!);
+  const inRange = low.filter((c) => Math.round(100 * c.segment.confidence!) <= limit);
+  await highest.fill(String(limit));
+  await expect.poll(shown).toEqual(stems(inRange));
+  await expect(page.getByRole("heading", { name: `Clips · ${inRange.length}` })).toBeVisible();
+  await expect(rows.first().getByTitle("Agreement between the models")).toHaveText(`${limit}%`);
+  await expect(page).toHaveURL(new RegExp(`agree_to=${limit}`));
+  await page.locator("body").click({ position: { x: 1, y: 1 } });
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("heading", { name: inRange[inRange.length > 1 ? 1 : 0].stem })).toBeVisible();
+
+  // the filter stays through a reload, and goes when cleared
+  await page.reload();
+  await expect.poll(shown).toEqual(stems(inRange));
+  await expect(highest).toHaveValue(String(limit));
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(rows).toHaveCount(clips.length);
+  await expect(page).not.toHaveURL(/agree_to/);
+  await expect(page).toHaveURL(/order=low/); // an order isn't a filter
+
+  // nothing above 100%: a limit that nothing meets says so
+  await lowest.fill("100");
+  await highest.fill("0");
+  await expect(page.getByText("No clips match.")).toBeVisible();
+  await page.getByRole("button", { name: "Clear filters" }).click();
+
+  // the label filters count the clips nobody has checked, and "only" needs the models to agree
+  const differs = low.filter((c) => c.segment.uploaded_differs && !c.segment.reviewed);
+  const only = differs.filter((c) => c.segment.confidence! >= 0.85);
+  await expect(uploaded.locator("option[value=differs]")).toHaveText(`Label differs (${differs.length})`);
+  await expect(uploaded.locator("option[value=only]")).toHaveText(`Models agree, label differs (${only.length})`);
+  await uploaded.selectOption("differs");
+  await expect.poll(shown).toEqual(stems(differs));
+  await expect(rows.getByText("Only label differs")).toHaveCount(only.length);
+  await uploaded.selectOption("only");
+  await expect.poll(shown).toEqual(stems(only));
+  await expect(page).toHaveURL(/label=only/);
+  expect(only.length).toBeGreaterThan(0);
+  await expect(page.getByRole("heading", { name: only[0].stem })).toBeVisible();
+  await expect(page.getByText(new RegExp(`differs?, and the models agree \\d+%`))).toBeVisible();
+
+  // a click in the list, then Tab plays the next clip inside the filter
+  if (only.length > 1) {
+    await rows.first().getByRole("button").click();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("heading", { name: only[1].stem })).toBeVisible();
+  }
+  await expect(page.getByText(`${only.length} to review`)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("annotate: filter a file's segments by agreement, and go to the next file in range", async ({ page, request }) => {
+  const errors = watchErrors(page);
+  type Seg = { id: number; confidence: number | null };
+  type File = { id: number; stem: string; usable: boolean; agreement: Record<string, number> };
+  const all = (await (await request.get("/api/datasets")).json()) as { id: number; name: string }[];
+  const ds = all.find((d) => d.name === "Unlabelled calls")!.id;
+  const files = ((await (await request.get(`/api/label/datasets/${ds}/files`)).json()) as File[]).filter((f) => f.usable && Object.keys(f.agreement).length);
+  expect(files.length).toBeGreaterThan(1);
+  const segsOf = async (id: number) => ((await (await request.get(`/api/label/files/${id}`)).json()) as { segments: Seg[] }).segments;
+  // a limit that keeps part of the first file, and leaves segments in another file too
+  const pcts = Object.keys(files[0].agreement).map(Number).sort((a, b) => a - b);
+  const limit = pcts[0];
+  const segs = await segsOf(files[0].id);
+  const kept = segs.filter((s) => s.confidence !== null && Math.round(100 * s.confidence) >= limit).length;
+  await page.goto(`/label/annotate/${ds}?file=${files[0].id}`);
+  const table = page.locator("tbody tr");
+  await expect(table.first()).toBeVisible();
+  await page.getByLabel("Lowest agreement in percent").fill(String(limit));
+  await expect(page.getByRole("heading", { name: `Segments · ${kept} of ${segs.length}` })).toBeVisible();
+  await expect(table).toHaveCount(kept);
+
+  // lowest first in the table; the timeline keeps every segment
+  await page.getByLabel("Order").selectOption("low");
+  const shownPct = async () => (await table.getByText(/^\d+%$/).allInnerTexts()).map((t) => parseInt(t, 10));
+  await expect.poll(async () => { const p = await shownPct(); return p.every((x, i) => i === 0 || p[i - 1] <= x); }).toBe(true);
+
+  // the filter comes along to the next file, and the file menu counts what is in range
+  await expect(page.getByLabel("File", { exact: true })).toContainText("to check in range");
+  await page.getByRole("button", { name: "Next file in range ›" }).click();
+  await expect(page).toHaveURL(new RegExp(`file=(?!${files[0].id}\\b)\\d+`));
+  await expect(page).toHaveURL(new RegExp(`agree_from=${limit}`));
+  await expect(page.getByRole("heading", { name: /Segments · \d+ of \d+/ })).toBeVisible();
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.getByRole("heading", { name: /Segments · \d+(?! of)/ })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("annotate clips: pseudo-labels checked against uploaded labels", async ({ page, request }) => {
   const errors = watchErrors(page);
   type Row = { id: number; stem: string; segment: { id: number; text: string; status: string } };

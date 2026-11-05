@@ -68,7 +68,6 @@ from ..core import paths
 from ..core.models import AudioFile, Dataset, Model, ModelOutput, Run, Segment, SegmentStatus, utcnow
 from ..cuts import Cut, prepare_cuts, usable_files
 from ..datasets.audio import cut, load_derived
-from ..metrics import normalisers
 from ..platform import catalog
 from ..runs import cache
 from ..runs.cache import Key
@@ -541,12 +540,6 @@ def _overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     return max(0.0, min(a1, b1) - max(a0, b0))
 
 
-def same_text(a: str, b: str) -> bool:
-    """Whether a pseudo-label says what an uploaded label says, after the default normaliser."""
-    norm = normalisers.get(normalisers.DEFAULT)
-    return norm(a) == norm(b)
-
-
 def write_segments(session: Session, run: Run, files: list[AudioFile]) -> dict[str, Any]:
     """Fuse the run's member outputs per cut and write the segments (see the module docstring)."""
     p = run.params
@@ -618,7 +611,7 @@ def write_segments(session: Session, run: Run, files: list[AudioFile]) -> dict[s
             if fill is not None:
                 label = fill.uploaded.get("text")
                 if label is not None and text is not None:
-                    same = same_text(text, label)
+                    same = fusion.same_text(text, label)
                     status = SegmentStatus.auto if same else SegmentStatus.pseudo
                     matches, differs = matches + same, differs + (not same)
                 fill.start, fill.end, fill.text, fill.status = round(s0, 3), round(s1, 3), text, status

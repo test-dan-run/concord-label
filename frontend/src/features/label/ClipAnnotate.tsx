@@ -5,7 +5,9 @@
 // Docs page), and Ctrl+Space plays and pauses while you type. A clip with no segment gets one, spanning the clip, when
 // you first save text for it or reject it. A clip with several segments (a run with a segmenter, or an earlier
 // way of labelling the dataset) is never joined on its own: the page says so and offers to merge them. A clip uploaded
-// with a label shows that label beside its pseudo-label, with the words that differ marked.
+// with a label shows that label beside its pseudo-label, with the words that differ marked. The list narrows and orders
+// by the models' agreement and by what the uploaded label says (ReviewFilter in lib/label.ts), and the walking keys and
+// the count to review stay inside what it shows.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
@@ -13,13 +15,13 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, type AnnotateView, type Clip, type ClipList, type ClipSegment, type SegStatus, type Segment } from "../../lib/api";
 import { C } from "../../lib/colors";
 import { clock, num } from "../../lib/format";
-import { CLIP_SHORTCUTS, clipOpen, clipShow, clipToReview, confidenceColor, nextClip, STATUS_TONE, statusLabel, wordDiff, type DiffWord } from "../../lib/label";
+import { byAgreement, CLIP_SHORTCUTS, clipOpen, clipShow, clipToReview, confidenceColor, filterActive, labelDiffers, matchesFilter, nextClip, onlyLabelDiffers, percent, STATUS_TONE, statusLabel, wordDiff, type DiffWord, type LabelFilter } from "../../lib/label";
 import { houseSpelled, Matcher, norm, type ActiveLexicon, type Hint } from "../../lib/lexicon";
 import { useAudio } from "../../components/AudioPlayer";
 import { Timeline } from "../../components/Timeline";
 import * as I from "../../components/icons";
 import { Bar, Button, Chip, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner } from "../../components/ui";
-import { Crumbs, isTyping, KeepUploaded, LabellingSwitch, LabelTabs, LexiconLink, ModelOutputs, Shortcuts, useUploaded } from "./common";
+import { Crumbs, isTyping, KeepUploaded, LabellingSwitch, LabelTabs, LexiconLink, ModelOutputs, ReviewFilters, Shortcuts, useFilterArrival, useReviewFilter, useUploaded } from "./common";
 import { Editor, HintBar, Transcript } from "./SegmentRow";
 import { Overview, useWheelZoom } from "./TimelineZoom";
 import { Transport } from "./Transport";
@@ -57,7 +59,7 @@ function storeAutoplay(on: boolean) {
 }
 
 function clipSegment(s: Segment): ClipSegment {
-  return { id: s.id, text: s.text, status: s.status, confidence: s.confidence, flagged: s.flagged, reviewed: s.reviewed, created: s.created, spelling_kept: s.spelling_kept };
+  return { id: s.id, text: s.text, status: s.status, confidence: s.confidence, flagged: s.flagged, reviewed: s.reviewed, created: s.created, spelling_kept: s.spelling_kept, uploaded_differs: s.uploaded_differs };
 }
 
 /** How the page got to a clip: whether to play it, and whether to open the editor if it has no text yet. */
@@ -91,6 +93,7 @@ export function ClipAnnotate({ datasetId }: { datasetId: number }) {
   const asked = params.get("status") as Show | null;
   const [show, setShow] = useState<Show>(SHOW.some((o) => o.value === asked) ? (asked as Show) : "all");
   const [search, setSearch] = useState("");
+  const [filter, setFilter] = useReviewFilter();
   const [autoplay, setAutoplay] = useState(storedAutoplay);
   const [arrival, setArrival] = useState<Arrival & { id?: number }>({});
   const [note, setNote] = useState("");
@@ -114,7 +117,10 @@ export function ClipAnnotate({ datasetId }: { datasetId: number }) {
     },
     [matcher, hintCounts],
   );
-  const toReview = useCallback((c: Clip) => clipToReview(c, high) || hintCount(c) > 0, [high, hintCount]);
+  const matches = useCallback((c: Clip) => matchesFilter(c.segment, filter, high), [filter, high]);
+  const toReview = useCallback((c: Clip) => (clipToReview(c, high) || hintCount(c) > 0) && matches(c), [high, hintCount, matches]);
+  // The walking keys go through this order. A clip you just confirmed may have left the list, but it still has a place here.
+  const ordered = useMemo(() => byAgreement(clips, filter.order, (c) => c.segment?.confidence ?? null), [clips, filter.order]);
 
   const counts = useMemo(() => {
     const out: Record<string, number> = { all: clips.length };
@@ -124,12 +130,20 @@ export function ClipAnnotate({ datasetId }: { datasetId: number }) {
     }
     return out;
   }, [clips]);
+  const labelCounts = useMemo(() => {
+    const out = { differs: 0, only: 0 };
+    for (const c of clips) {
+      if (c.segment && labelDiffers(c.segment)) out.differs += 1;
+      if (c.segment && onlyLabelDiffers(c.segment, high)) out.only += 1;
+    }
+    return out;
+  }, [clips, high]);
   const reviewCount = useMemo(() => clips.filter(toReview).length, [clips, toReview]);
   const hintTotal = useMemo(() => clips.reduce((a, c) => a + hintCount(c), 0), [clips, hintCount]);
   const visible = useMemo(() => {
     const t = search.trim().toLowerCase();
-    return clips.filter((c) => (show === "all" || clipShow(c) === show) && (!t || c.stem.toLowerCase().includes(t) || (c.segment?.text ?? "").toLowerCase().includes(t)));
-  }, [clips, show, search]);
+    return ordered.filter((c) => (show === "all" || clipShow(c) === show) && matches(c) && (!t || c.stem.toLowerCase().includes(t) || (c.segment?.text ?? "").toLowerCase().includes(t)));
+  }, [ordered, show, matches, search]);
   const shown = useMemo(() => new Set(visible.map((c) => c.id)), [visible]);
 
   // The clip on the screen is the one in the URL, else the first shown that still needs a person.
@@ -152,6 +166,10 @@ export function ClipAnnotate({ datasetId }: { datasetId: number }) {
     },
     [params, setParams, autoplay],
   );
+  // A new order starts at the top of the list, and a new filter leaves a clip that it no longer shows.
+  useFilterArrival(filter, (order) => {
+    if (visible.length && (order || fileId === null || !shown.has(fileId))) go((visible.find(clipOpen) ?? visible[0]).id);
+  });
   useEffect(() => {
     // the page's first clip goes in the URL, so it stays on the screen once it is confirmed
     if (fileId !== null && fileId !== fileParam) {
@@ -162,7 +180,7 @@ export function ClipAnnotate({ datasetId }: { datasetId: number }) {
   }, [fileId, fileParam]);
   useEffect(() => {
     // the next clip's transcript is there before you get to it
-    const n = fileId === null ? null : nextClip(clips, fileId, 1, (c) => shown.has(c.id) && clipOpen(c));
+    const n = fileId === null ? null : nextClip(ordered, fileId, 1, (c) => shown.has(c.id) && clipOpen(c));
     if (n !== null) void qc.prefetchQuery({ queryKey: ["annotate", n], queryFn: () => api.get<AnnotateView>(`/label/files/${n}`) });
   }, [fileId]);
 
@@ -236,7 +254,7 @@ export function ClipAnnotate({ datasetId }: { datasetId: number }) {
         settle(c.id, out.segments[0]);
       });
     const onward = (c: Clip, what: string) => {
-      const n = nextClip(clips, c.id, 1, (o) => shown.has(o.id) && clipOpen(o));
+      const n = nextClip(ordered, c.id, 1, (o) => shown.has(o.id) && clipOpen(o));
       if (n === null) setNote(`${what}. No other clip is waiting for you here.`);
       go(n, { play: true, edit: true });
     };
@@ -265,13 +283,13 @@ export function ClipAnnotate({ datasetId }: { datasetId: number }) {
         onward(c, "Rejected");
       },
       review: (c, direction) => {
-        const n = nextClip(clips, c.id, direction, toReview);
+        const n = nextClip(ordered, c.id, direction, toReview);
         if (n === null) setNote("Nothing left to review");
         go(n, { play: true, edit: true });
       },
-      step: (c, direction) => go(nextClip(clips, c.id, direction, (o) => shown.has(o.id))),
+      step: (c, direction) => go(nextClip(ordered, c.id, direction, (o) => shown.has(o.id))),
     };
-  }, [write, segmentOf, makeSegment, settle, clips, shown, toReview, go, qc, listKey, touched]);
+  }, [write, segmentOf, makeSegment, settle, ordered, shown, toReview, go, qc, listKey, touched]);
 
   const hasLabels = !!useUploaded(datasetId).data?.labels;
   const confirmAll = useCallback(() => {
@@ -299,6 +317,7 @@ export function ClipAnnotate({ datasetId }: { datasetId: number }) {
   }
   const index = clips.findIndex((c) => c.id === clip.id);
   const confirmed = counts.confirmed ?? 0;
+  const scored = filterActive(filter) || filter.order !== "list" || clips.some((c) => c.segment?.confidence != null);
   return (
     <>
       <PageHeader
@@ -357,7 +376,14 @@ export function ClipAnnotate({ datasetId }: { datasetId: number }) {
           subtitle={lexicons.length > 0 ? <LexiconLink lexicons={lexicons} hints={hintTotal} /> : undefined}
         >
           <div className="flex flex-col gap-2">
-            <Select label="Show" value={show} onChange={(e) => setShow(e.target.value as Show)}>
+            <Select
+              label="Show"
+              value={show}
+              onChange={(e) => {
+                setShow(e.target.value as Show);
+                e.currentTarget.blur(); // so Tab and Enter go to the page rather than to this menu
+              }}
+            >
               {SHOW.map((o) => (
                 <option key={o.value} value={o.value}>{o.label} ({num(counts[o.value] ?? 0)})</option>
               ))}
@@ -370,6 +396,27 @@ export function ClipAnnotate({ datasetId }: { datasetId: number }) {
               placeholder="Search name or transcript"
               className="min-h-8 bg-canvas border border-line rounded-md px-2 text-xs text-fg"
             />
+            {scored && (
+              <ReviewFilters filter={filter} onChange={setFilter} listOrder="By name">
+                {hasLabels && (
+                  <label className="flex w-full items-center gap-2 whitespace-nowrap" title={`Clips nobody has checked. The models agree when their agreement is at least ${percent(high)}%, the auto-accept threshold of the last run.`}>
+                    Uploaded label
+                    <Select
+                      className="min-w-0 flex-1"
+                      value={filter.label}
+                      onChange={(e) => {
+                        setFilter({ label: e.target.value as LabelFilter });
+                        e.currentTarget.blur();
+                      }}
+                    >
+                      <option value="any">Any</option>
+                      <option value="only">Models agree, label differs ({num(labelCounts.only)})</option>
+                      <option value="differs">Label differs ({num(labelCounts.differs)})</option>
+                    </Select>
+                  </label>
+                )}
+              </ReviewFilters>
+            )}
           </div>
           <ClipRows clips={visible} current={clip.id} high={high} low={low} box={listBox} onPick={(id) => go(id)} />
         </Panel>
@@ -419,8 +466,8 @@ function ClipRows({ clips, current, high, low, box, onPick }: { clips: Clip[]; c
                 <span className="flex items-center gap-2 min-w-0">
                   <span className="num text-xs text-fg truncate flex-1 min-w-0">{c.stem}</span>
                   {s?.flagged && <span className="text-warn" title="Flagged"><I.Flag size={11} /></span>}
-                  {s && s.confidence !== null && <span className="num text-[11px] font-semibold" style={{ color: confidenceColor(s.confidence, high, low) }}>{s.confidence.toFixed(2)}</span>}
-                  {c.segments > 1 ? <Chip tone="warn">{c.segments} segments</Chip> : s ? <Chip tone={STATUS_TONE[s.status]}>{statusLabel(s)}</Chip> : <Chip>No transcript</Chip>}
+                  {s && s.confidence !== null && <span className="num text-[11px] font-semibold" title="Agreement between the models" style={{ color: confidenceColor(s.confidence, high, low) }}>{percent(s.confidence)}%</span>}
+                  {c.segments > 1 ? <Chip tone="warn">{c.segments} segments</Chip> : s && onlyLabelDiffers(s, high) ? <Chip tone="bad" title="The models agree with each other, but the uploaded label says something else. Nobody has checked this clip.">Only label differs</Chip> : s ? <Chip tone={STATUS_TONE[s.status]}>{statusLabel(s)}</Chip> : <Chip>No transcript</Chip>}
                 </span>
                 <span className="text-xs text-muted truncate">{s?.text || <span className="text-subtle">(no transcript)</span>}</span>
               </button>
@@ -696,14 +743,14 @@ function ClipPanel({
                   </Button>
                 )}
                 <span className="ml-auto flex items-center gap-2">
-                  {s && <span className="num text-xs font-semibold" style={{ color: confidenceColor(s.confidence, high, low) }}>{s.confidence === null ? "—" : s.confidence.toFixed(2)}</span>}
+                  {s && <span className="num text-xs font-semibold" title="Agreement between the models" style={{ color: confidenceColor(s.confidence, high, low) }}>{s.confidence === null ? "—" : `${percent(s.confidence)}%`}</span>}
                   {s ? <Chip tone={STATUS_TONE[s.status]}>{statusLabel(s)}</Chip> : <Chip>No transcript</Chip>}
                 </span>
               </div>
             </div>
           )}
         </Panel>
-        {v && s && !several && s.uploaded_text !== null && <UploadedLabel datasetId={datasetId} s={s} onUse={onText} />}
+        {v && s && !several && s.uploaded_text !== null && <UploadedLabel datasetId={datasetId} s={s} high={high} onUse={onText} />}
         {v && s && (
           <Panel>
             <ModelOutputs s={s} onUse={(t) => onText(t)} />
@@ -729,7 +776,7 @@ function Words({ words }: { words: DiffWord[] }) {
 }
 
 /** The clip's uploaded label against its transcript, for checking one with the other. */
-function UploadedLabel({ datasetId, s, onUse }: { datasetId: number; s: Segment; onUse: (t: string) => void }) {
+function UploadedLabel({ datasetId, s, high, onUse }: { datasetId: number; s: Segment; high: number; onUse: (t: string) => void }) {
   const label = s.uploaded_text ?? "";
   const text = s.text ?? "";
   const diff = useMemo(() => wordDiff(label, text), [label, text]);
@@ -737,7 +784,7 @@ function UploadedLabel({ datasetId, s, onUse }: { datasetId: number; s: Segment;
   return (
     <Panel
       title="Uploaded label"
-      subtitle={noRun ? undefined : diff.count ? <span className="num">{num(diff.count)} {diff.count === 1 ? "word differs" : "words differ"}</span> : "Same words as the transcript"}
+      subtitle={noRun ? undefined : diff.count ? <span className="num">{num(diff.count)} {diff.count === 1 ? "word differs" : "words differ"}{onlyLabelDiffers(s, high) && `, and the models agree ${percent(s.confidence ?? 0)}%`}</span> : "Same words as the transcript"}
       actions={<Button size="sm" disabled={label === text} title="Use the uploaded label as the transcript (U)" onClick={() => onUse(label)}>Use this text</Button>}
     >
       {noRun ? (

@@ -98,6 +98,102 @@ export function confidenceColor(c: number | null | undefined, high = 0.85, low =
   return C.bad;
 }
 
+/** Agreement between the models in whole percent, as the lists show it and the filter compares it. */
+export function percent(c: number): number {
+  return Math.round(100 * c);
+}
+
+export type LabelFilter = "any" | "differs" | "only";
+export type AgreementOrder = "list" | "low" | "high";
+
+/** How Annotate narrows and orders its list, kept in the URL so it stays while you walk from file to file. */
+export interface ReviewFilter {
+  /** The lowest and highest agreement to show, in percent; null for no limit. */
+  from: number | null;
+  to: number | null;
+  label: LabelFilter;
+  order: AgreementOrder;
+}
+
+/** A limit as typed or as it stands in the URL: a whole percent, or null when there is none. */
+export function percentParam(v: string | null): number | null {
+  const n = v === null || v.trim() === "" ? NaN : Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : null;
+}
+
+export function readFilter(params: URLSearchParams): ReviewFilter {
+  const label = params.get("label");
+  const order = params.get("order");
+  return {
+    from: percentParam(params.get("agree_from")),
+    to: percentParam(params.get("agree_to")),
+    label: label === "differs" || label === "only" ? label : "any",
+    order: order === "low" || order === "high" ? order : "list",
+  };
+}
+
+/** `params` with `filter` written into it, leaving the defaults out of the URL. */
+export function writeFilter(params: URLSearchParams, filter: ReviewFilter): URLSearchParams {
+  const p = new URLSearchParams(params);
+  const put = (key: string, value: string | null) => (value === null ? p.delete(key) : p.set(key, value));
+  put("agree_from", filter.from === null ? null : String(filter.from));
+  put("agree_to", filter.to === null ? null : String(filter.to));
+  put("label", filter.label === "any" ? null : filter.label);
+  put("order", filter.order === "list" ? null : filter.order);
+  return p;
+}
+
+/** Whether the filter leaves anything out. The order only changes where things are. */
+export function filterActive(f: ReviewFilter): boolean {
+  return f.from !== null || f.to !== null || f.label !== "any";
+}
+
+/** Whether a confidence is in the filter's range. With a limit set, a segment with no score is not. */
+function inRange(c: number | null, f: ReviewFilter): boolean {
+  if (f.from === null && f.to === null) return true;
+  if (c === null) return false;
+  const p = percent(c);
+  return (f.from === null || p >= f.from) && (f.to === null || p <= f.to);
+}
+
+type Compared = Pick<Segment, "confidence" | "reviewed" | "uploaded_differs">;
+
+/** A segment nobody has checked whose transcript says something other than its uploaded label. */
+export function labelDiffers(s: Compared): boolean {
+  return !!s.uploaded_differs && !s.reviewed;
+}
+
+/** The same, when the models agree with each other, so the label is the odd one out. */
+export function onlyLabelDiffers(s: Compared, high = 0.85): boolean {
+  return labelDiffers(s) && s.confidence !== null && s.confidence >= high;
+}
+
+/** Whether a segment passes the filter. A clip with no segment passes only when the filter leaves nothing out. */
+export function matchesFilter(s: Compared | null, f: ReviewFilter, high = 0.85): boolean {
+  if (!filterActive(f)) return true;
+  if (!s || !inRange(s.confidence, f)) return false;
+  return f.label === "any" || (f.label === "only" ? onlyLabelDiffers(s, high) : labelDiffers(s));
+}
+
+/** `items` in the filter's order. Those with no score go last either way, and ties keep the order they came in. */
+export function byAgreement<T>(items: T[], order: AgreementOrder, score: (item: T) => number | null): T[] {
+  if (order === "list") return items;
+  const sign = order === "low" ? 1 : -1;
+  return items
+    .map((item, k) => ({ item, k, c: score(item) }))
+    .sort((a, b) => (a.c === null ? (b.c === null ? a.k - b.k : 1) : b.c === null ? -1 : sign * (a.c - b.c) || a.k - b.k))
+    .map((x) => x.item);
+}
+
+/** How many of a file's unchecked segments (`LabelFile.agreement`) are in the filter's range. */
+export function countInRange(agreement: Record<string, number> | undefined, f: ReviewFilter): number {
+  let n = 0;
+  for (const [p, count] of Object.entries(agreement ?? {})) {
+    if ((f.from === null || Number(p) >= f.from) && (f.to === null || Number(p) <= f.to)) n += count;
+  }
+  return n;
+}
+
 /** Checkbox selection with shift-click ranges over the visible order. */
 export function selectRange(order: number[], selected: Set<number>, id: number, anchor: number | null, shift: boolean): Set<number> {
   const next = new Set(selected);
@@ -149,9 +245,9 @@ export function lowConfidence(s: Pick<Segment, "reviewed" | "status" | "confiden
 
 /** "Tab" and "Shift+Tab": the next segment to review after `fromId`, or before it when `direction` is -1,
  * wrapping around the file. A segment to review has low confidence, or `also` picks it (Annotate: a segment
- * with a spelling hint). */
-export function nextToReview(segs: Segment[], fromId: number | null, direction: 1 | -1 = 1, high = 0.85, also?: (s: Segment) => boolean): number | null {
-  const want = (s: Segment) => lowConfidence(s, high) || !!also?.(s);
+ * with a spelling hint), and `only` leaves out the ones it doesn't pick (Annotate: the agreement filter). */
+export function nextToReview(segs: Segment[], fromId: number | null, direction: 1 | -1 = 1, high = 0.85, also?: (s: Segment) => boolean, only?: (s: Segment) => boolean): number | null {
+  const want = (s: Segment) => (lowConfidence(s, high) || !!also?.(s)) && (!only || only(s));
   const n = segs.length;
   const at = fromId === null ? -1 : segs.findIndex((s) => s.id === fromId);
   const k = at >= 0 ? at : direction === 1 ? -1 : n;

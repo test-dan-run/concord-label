@@ -10,6 +10,7 @@ match the segment. Each change is also recorded in its file's history, so Annota
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from math import floor
 from typing import Any
 
 from sqlalchemy import func, select
@@ -17,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..core.models import AudioFile, Dataset, FileStatus, Model, Run, Segment, SegmentStatus, utcnow
 from ..runs import cache
-from . import console, history
+from . import console, fusion, history
 
 EDITABLE = ("text", "speaker", "start", "end", "status", "flagged", "flag_note", "spelling_kept")
 MIN_LEN = 0.05
@@ -29,8 +30,14 @@ class EditError(ValueError):
     pass
 
 
+def _uploaded_differs(text: str | None, label: str | None) -> bool | None:
+    """Whether a transcript says something other than its uploaded label; None with nothing to compare."""
+    return None if text is None or label is None else not fusion.same_text(text, label)
+
+
 def segment_json(s: Segment) -> dict[str, Any]:
     m = s.meta or {}
+    label = (m.get("uploaded") or {}).get("text")
     return {"id": s.id, "uid": s.uid, "file_id": s.audio_file_id, "start": s.start, "end": s.end,
             "speaker": s.speaker, "text": s.text, "status": s.status, "confidence": s.confidence,
             "source_run_id": s.source_run_id, "flagged": s.flagged, "flag_note": s.flag_note,
@@ -38,7 +45,7 @@ def segment_json(s: Segment) -> dict[str, Any]:
             "updated_at": s.updated_at.isoformat() if s.updated_at else None,
             "chosen": m.get("chosen"), "agreement": m.get("agreement"), "words": m.get("words"),
             "created": bool(m.get("created")), "spelling_kept": m.get("spelling_kept") or [],
-            "uploaded_text": (m.get("uploaded") or {}).get("text")}
+            "uploaded_text": label, "uploaded_differs": _uploaded_differs(s.text, label)}
 
 
 def _touch(s: Segment) -> None:
@@ -323,17 +330,24 @@ def confirm_uploaded(session: Session, ds: Dataset) -> int:
 # ---------------------------------------------------------------- views
 
 def file_counts(session: Session, dataset_id: int) -> list[dict[str, Any]]:
+    """Each file with its segments by status. `agreement` counts the segments nobody has checked by their agreement
+    in whole percent, rounded as the page rounds it, so the page can say which files hold segments in a range."""
     files = session.scalars(select(AudioFile).where(AudioFile.dataset_id == dataset_id)
                             .order_by(AudioFile.rel_path)).all()
     counts: dict[int, dict[str, int]] = {}
-    for fid, st, flag in session.execute(select(Segment.audio_file_id, Segment.status, Segment.flagged)
-                                         .join(AudioFile).where(AudioFile.dataset_id == dataset_id)):
+    agreement: dict[int, Counter[int]] = defaultdict(Counter)
+    for fid, st, flag, conf, edited in session.execute(
+            select(Segment.audio_file_id, Segment.status, Segment.flagged, Segment.confidence, Segment.edited_at)
+            .join(AudioFile).where(AudioFile.dataset_id == dataset_id)):
         c = counts.setdefault(fid, {"confirmed": 0, "auto": 0, "review": 0, "rejected": 0, "flagged": 0})
         c[console.STATUS_BAR.get(st, "review")] += 1
         c["flagged"] += bool(flag)
+        if conf is not None and edited is None and st != SegmentStatus.confirmed:
+            agreement[fid][floor(100 * conf + 0.5)] += 1
     return [{"id": f.id, "path": f.rel_path, "stem": f.stem, "duration": f.duration, "status": f.status,
              "usable": f.usable, "counts": counts.get(f.id, {"confirmed": 0, "auto": 0, "review": 0, "rejected": 0,
-                                                             "flagged": 0})} for f in files]
+                                                             "flagged": 0}),
+             "agreement": agreement.get(f.id, {})} for f in files]
 
 
 def _thresholds(session: Session, dataset_id: int) -> dict[str, float]:
@@ -346,13 +360,15 @@ def clip_list(session: Session, ds: Dataset) -> dict[str, Any]:
     """The usable clips of a dataset with their transcripts, in one go, so the page can list thousands of clips and
     walk them without asking again. `segments` counts a clip's segments that aren't rejected, which is 1 in a clip
     that fits this way of labelling. `segment` is the clip's transcript: that one segment, a rejected one when no
-    other is left, or the first of several with all their text. Only the JSON fields the list needs are read."""
+    other is left, or the first of several with all their text and the lowest of their confidences. Several segments
+    have no one text to compare with an uploaded label. Only the JSON fields the list needs are read."""
     files = session.execute(select(AudioFile.id, AudioFile.rel_path, AudioFile.duration, AudioFile.status)
                             .where(AudioFile.dataset_id == ds.id).order_by(AudioFile.rel_path)).all()
     by_file: dict[int, list[Any]] = defaultdict(list)
     for row in session.execute(select(Segment.audio_file_id, Segment.id, Segment.text, Segment.status,
                                       Segment.confidence, Segment.flagged, Segment.edited_at,
-                                      Segment.meta["created"], Segment.meta["spelling_kept"])
+                                      Segment.meta["created"], Segment.meta["spelling_kept"],
+                                      Segment.meta["uploaded"]["text"])
                                .join(AudioFile).where(AudioFile.dataset_id == ds.id)
                                .order_by(Segment.start, Segment.end)):
         by_file[row[0]].append(row)
@@ -364,12 +380,14 @@ def clip_list(session: Session, ds: Dataset) -> dict[str, Any]:
         live = [r for r in rows if r[3] != SegmentStatus.rejected]
         seg = None
         if rows:
-            _, sid, text, st, conf, flagged, edited, created, kept = (live or rows)[0]
+            _, sid, text, st, conf, flagged, edited, created, kept, label = (live or rows)[0]
             if len(live) > 1:
                 text = " ".join(r[2].strip() for r in live if r[2] and r[2].strip())
+                conf = min((r[4] for r in live if r[4] is not None), default=None)
+                label = None
             seg = {"id": sid, "text": text, "status": st, "confidence": conf, "flagged": flagged,
                    "reviewed": st == SegmentStatus.confirmed or edited is not None, "created": bool(created),
-                   "spelling_kept": kept or []}
+                   "spelling_kept": kept or [], "uploaded_differs": _uploaded_differs(text, label)}
         name = path.rsplit("/", 1)[-1]
         clips.append({"id": fid, "path": path, "stem": name.rsplit(".", 1)[0] if "." in name else name,
                       "duration": duration, "segments": len(live), "segment": seg})

@@ -368,6 +368,8 @@ export interface Segment {
   spelling_kept: string[];
   /** The label uploaded with the dataset, which stays here when a pseudo-label takes the segment's text. */
   uploaded_text: string | null;
+  /** Whether the text says something other than the uploaded label (after the default normaliser), or null with nothing to compare. */
+  uploaded_differs: boolean | null;
   alternatives?: { service: string; model: string; text: string; build_key: string | null; source_app: string | null }[];
   file?: string;
 }
@@ -417,6 +419,8 @@ export interface LabelFile {
   status: string;
   usable: boolean;
   counts: { confirmed: number; auto: number; review: number; rejected: number; flagged: number };
+  /** The segments nobody has checked, by their agreement in whole percent. */
+  agreement: Record<string, number>;
 }
 
 export interface AnnotateView {
@@ -446,7 +450,7 @@ export interface Clip {
   segment: ClipSegment | null;
 }
 
-export type ClipSegment = Pick<Segment, "id" | "text" | "status" | "confidence" | "flagged" | "reviewed" | "created" | "spelling_kept">;
+export type ClipSegment = Pick<Segment, "id" | "text" | "status" | "confidence" | "flagged" | "reviewed" | "created" | "spelling_kept" | "uploaded_differs">;
 
 export interface ClipList {
   clips: Clip[];

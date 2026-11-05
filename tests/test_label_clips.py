@@ -7,7 +7,7 @@ from alembic import command
 
 from concord_label.core import db
 from concord_label.core.db import session_scope
-from concord_label.core.models import AudioFile, Dataset, Segment
+from concord_label.core.models import AudioFile, Dataset, Segment, SegmentStatus
 from concord_label.core.settings import reset_settings
 from concord_label.datasets.ingest import labelling_for
 from concord_label.datasets.parsers import RefRecord
@@ -233,6 +233,60 @@ def test_a_whole_clip_run_writes_the_pseudo_label_beside_the_uploaded_one(clip_r
     assert third["kept_reviewed"] == 1
     kept = _segment(client, differ)
     assert kept["status"] == "confirmed" and kept["text"] == "no model says this"
+
+
+def test_a_transcript_is_compared_with_its_uploaded_label_wherever_it_is_listed(client, tmp_path) -> None:
+    ds = _uploaded_clips(client, tmp_path)
+    clip = _clips(client, ds["id"])[0]
+
+    def listed():
+        return next(c for c in _clips(client, ds["id"]) if c["id"] == clip["id"])["segment"]["uploaded_differs"]
+
+    s = _segment(client, clip)
+    label = s["uploaded_text"]
+    assert s["uploaded_differs"] is False and listed() is False  # the label is still the text
+    # case and punctuation don't count, as in a whole-clip run
+    assert _ok(client.patch(f"/api/label/segments/{s['id']}", json={"text": label.upper() + "!"}))["uploaded_differs"] is False
+    assert listed() is False
+    assert _ok(client.patch(f"/api/label/segments/{s['id']}", json={"text": "something else"}))["uploaded_differs"] is True
+    assert listed() is True and _segment(client, clip)["uploaded_differs"] is True
+    assert _ok(client.patch(f"/api/label/segments/{s['id']}", json={"text": None}))["uploaded_differs"] is None
+    assert listed() is None
+    # a clip with no label has nothing to compare
+    plain = _clip_dataset(client, tmp_path / "plain")
+    bare = _clips(client, plain)[0]
+    made = _ok(client.post(f"/api/label/files/{bare['id']}/segments", json={"start": 0, "end": 1, "text": "hi"}), 201)
+    assert made["uploaded_differs"] is None
+
+
+def test_a_clip_with_several_segments_lists_its_lowest_confidence_and_no_comparison(client, session, tmp_path) -> None:
+    ds = _uploaded_clips(client, tmp_path)
+    clip = _clips(client, ds["id"])[0]
+    first = _segment(client, clip)
+    second = _ok(client.post(f"/api/label/files/{clip['id']}/segments", json={"start": 1, "end": 2, "text": "second"}), 201)
+    thrown = _ok(client.post(f"/api/label/files/{clip['id']}/segments", json={"start": 2, "end": 3, "text": "thrown"}), 201)
+    _ok(client.post("/api/label/segments/bulk", json={"ids": [thrown["id"]], "action": "reject"}))
+    for sid, conf in ((first["id"], 0.9), (second["id"], 0.4), (thrown["id"], 0.1)):
+        session.get(Segment, sid).confidence = conf
+    session.commit()
+    row = next(c for c in _clips(client, ds["id"]) if c["id"] == clip["id"])
+    assert row["segments"] == 2 and row["segment"]["confidence"] == 0.4 and row["segment"]["uploaded_differs"] is None
+
+
+def test_each_file_counts_its_unchecked_segments_by_agreement(client, session, tmp_path) -> None:
+    ds = _clip_dataset(client, tmp_path)
+    fid = _clips(client, ds)[0]["id"]
+    made = [_ok(client.post(f"/api/label/files/{fid}/segments", json={"start": i, "end": i + 1, "text": "x"}), 201)["id"] for i in range(6)]
+    rows = {sid: session.get(Segment, sid) for sid in made}
+    for sid, conf in zip(made, (0.494, 0.495, 0.9, 0.9, None, 0.9), strict=True):
+        rows[sid].confidence = conf
+        rows[sid].edited_at = None
+    rows[made[3]].status = SegmentStatus.confirmed  # a person checked this one
+    rows[made[5]].edited_at = rows[made[5]].updated_at  # and edited this one
+    session.commit()
+    files = _ok(client.get(f"/api/label/datasets/{ds}/files"))
+    assert next(f for f in files if f["id"] == fid)["agreement"] == {"49": 1, "50": 1, "90": 1}
+    assert all(f["agreement"] == {} for f in files if f["id"] != fid)
 
 
 def test_keep_all_uploaded_labels_restores_them_and_undoes_clip_by_clip(clip_replay, client, tmp_path) -> None:

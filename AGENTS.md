@@ -235,3 +235,7 @@ These changes came from the updated design canvas and from requests that followe
   ones nobody had touched to review, except in datasets the Dataset Catalog or Bench knows about. A whole-clip run writes
   the pseudo-label beside the label, and the clip view compares them. `POST /label/datasets/{id}/confirm-uploaded`
   confirms the labels as uploaded, and tests that need references call it through `keep_uploaded` in `tests/label_helpers.py`.
+- Annotate filters by agreement (HANDOFF.md §4, "Filtering by agreement"). `ReviewFilter` in `lib/label.ts` holds the range, the order and
+  the uploaded-label filter, and it lives in the URL so it survives the speaker view's remount per file. `Segment.uploaded_differs` comes from the
+  server (`fusion.same_text`, which moved from `pseudo.py`), because only the server has the normaliser. `LabelFile.agreement` counts each file's
+  unchecked segments by percent for the file menu. Annotate's lists now show agreement as a percent, and the Pseudo-label page still shows decimals.

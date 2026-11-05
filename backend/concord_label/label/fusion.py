@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..core.models import SegmentStatus
-from ..metrics import wer
+from ..metrics import normalisers, wer
 from ..metrics.normalisers import basic_one
 
 STRATEGIES = ("best_aligned", "rover", "single")
@@ -61,6 +61,12 @@ def agreement(ref: str, hyp: str) -> float:
     if n == 0:
         return 1.0 if e == 0 else 0.0
     return max(0.0, 1.0 - e / n)
+
+
+def same_text(a: str, b: str) -> bool:
+    """Whether a pseudo-label says what an uploaded label says, after the default normaliser."""
+    norm = normalisers.get(normalisers.DEFAULT)
+    return norm(a) == norm(b)
 
 
 def best_aligned(hyps: list[Hyp]) -> int:

@@ -12,7 +12,7 @@ import * as I from "../../components/icons";
 import { Button, Chip, cx } from "../../components/ui";
 import type { Segment } from "../../lib/api";
 import { clock } from "../../lib/format";
-import { confidenceColor, STATUS_TONE, statusLabel, timedWords, wordAt, type TimedWord } from "../../lib/label";
+import { confidenceColor, percent, STATUS_TONE, statusLabel, timedWords, wordAt, type TimedWord } from "../../lib/label";
 import type { Hint } from "../../lib/lexicon";
 import { MAX_SPEAKERS } from "./laneDrag";
 
@@ -174,7 +174,7 @@ export function SegmentRow({
           <span className="flex items-center gap-1.5 whitespace-nowrap">
             {s.flagged && <span className="text-warn" title={s.flag_note ?? "Flagged"}><I.Flag size={12} /></span>}
             <span className="num text-xs font-semibold" style={{ color: confidenceColor(s.confidence, high, low) }}>
-              {s.confidence === null ? "—" : s.confidence.toFixed(2)}
+              {s.confidence === null ? "—" : `${percent(s.confidence)}%`}
             </span>
             <Chip tone={STATUS_TONE[s.status]}>{statusLabel(s)}</Chip>
           </span>

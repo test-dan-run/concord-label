@@ -149,6 +149,12 @@ dataset from the keyboard. Enter edits the text, Ctrl+Enter confirms the clip an
 isn't checked, R rejects it, and Ctrl+Space plays and pauses while you type. Undo works on the clip on the
 screen. Live evaluation leaves out DER and cpWER, because the clips have no speakers.
 
+To choose what to review first, Annotate can filter by a range of agreement between the models, and it can
+list the lowest agreement first. In speaker turns, this works on one file at a time, and a button goes to the
+next file with unchecked segments in the range. With one transcript per clip, the filter covers the whole
+dataset. There, "Models agree, label differs" also lists the unchecked clips where the models agree with each
+other, and the uploaded label says something else.
+
 A clip with several segments doesn't have one transcript yet, and that can happen when you change how a dataset
 is labelled. The app never joins the segments on its own. It shows them, and you can merge them into one or
 open the clip with its speakers.

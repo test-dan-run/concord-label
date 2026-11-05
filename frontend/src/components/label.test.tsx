@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ClipSegment, Inspection, Segment } from "../lib/api";
 import { suggestedLabelling } from "../features/datasets/UploadDataset";
-import { clipOpen, clipShow, clipToReview, CLIP_SHORTCUTS, confidenceColor, labelButton, nextClip, nextToReview, nextUnconfirmed, overlapRegions, playingSegment, segmentAt, selectRange, shortcutKeys, SHORTCUTS, timedWords, wordAt, wordDiff } from "../lib/label";
+import { byAgreement, clipOpen, clipShow, clipToReview, CLIP_SHORTCUTS, confidenceColor, countInRange, filterActive, labelButton, labelDiffers, matchesFilter, nextClip, nextToReview, nextUnconfirmed, overlapRegions, onlyLabelDiffers, percent, playingSegment, readFilter, segmentAt, selectRange, shortcutKeys, SHORTCUTS, timedWords, wordAt, wordDiff, writeFilter } from "../lib/label";
 import { C } from "../lib/colors";
 
 function seg(id: number, over: Partial<Segment> = {}): Segment {
   return {
     id, uid: `u${id}`, file_id: 1, start: id, end: id + 1, speaker: "spk0", text: "x", status: "pseudo", confidence: 0.6,
     source_run_id: 1, flagged: false, flag_note: null, reviewed: false, edited_at: null, updated_at: null, chosen: null,
-    agreement: null, words: null, created: false, spelling_kept: [], uploaded_text: null, ...over,
+    agreement: null, words: null, created: false, spelling_kept: [], uploaded_text: null, uploaded_differs: null, ...over,
   };
 }
 
@@ -108,7 +108,7 @@ describe("playingSegment", () => {
 });
 
 describe("clips", () => {
-  const seg = (o: Partial<ClipSegment> = {}): ClipSegment => ({ id: 1, text: "hi", status: "pseudo", confidence: 0.6, flagged: false, reviewed: false, created: false, spelling_kept: [], ...o });
+  const seg = (o: Partial<ClipSegment> = {}): ClipSegment => ({ id: 1, text: "hi", status: "pseudo", confidence: 0.6, flagged: false, reviewed: false, created: false, spelling_kept: [], uploaded_differs: null, ...o });
   const empty = { segment: null, segments: 0 };
   const clip = (o: Partial<ClipSegment> = {}) => ({ segment: seg(o), segments: o.status === "rejected" ? 0 : 1 });
 
@@ -229,5 +229,83 @@ describe("nextUnconfirmed", () => {
   it("wraps around, and gives null when everything is confirmed", () => {
     expect(nextUnconfirmed(segs, 5)).toBe(2);
     expect(nextUnconfirmed(segs, 4, [2, 4, 5])).toBeNull();
+  });
+});
+
+describe("review filter", () => {
+  const filter = (query: string) => readFilter(new URLSearchParams(query));
+  const compared = (confidence: number | null, uploaded_differs: boolean | null = null, reviewed = false) => ({ confidence, uploaded_differs, reviewed });
+
+  it("reads limits from the URL as whole percents, and ignores what it doesn't know", () => {
+    expect(filter("")).toEqual({ from: null, to: null, label: "any", order: "list" });
+    expect(filter("agree_from=49.6&agree_to=120&label=only&order=low")).toEqual({ from: 50, to: 100, label: "only", order: "low" });
+    expect(filter("agree_from=&agree_to=abc&label=x&order=y")).toEqual({ from: null, to: null, label: "any", order: "list" });
+  });
+
+  it("writes the filter back, keeps the other params, and leaves the defaults out", () => {
+    const out = writeFilter(new URLSearchParams("file=7&agree_from=10&order=low"), { from: 0, to: null, label: "differs", order: "list" });
+    expect(Object.fromEntries(out)).toEqual({ file: "7", agree_from: "0", label: "differs" });
+  });
+
+  it("counts a range or a label as a filter, but not an order", () => {
+    expect(filterActive(filter("order=low"))).toBe(false);
+    expect(filterActive(filter("agree_from=0"))).toBe(true);
+    expect(filterActive(filter("label=only"))).toBe(true);
+  });
+
+  it("compares the percent the page shows, at both ends of the range", () => {
+    expect(percent(0.849)).toBe(85);
+    const f = filter("agree_from=50&agree_to=85");
+    expect(matchesFilter(compared(0.495), f)).toBe(true);
+    expect(matchesFilter(compared(0.494), f)).toBe(false);
+    expect(matchesFilter(compared(0.854), f)).toBe(true);
+    expect(matchesFilter(compared(0.855), f)).toBe(false);
+  });
+
+  it("leaves out a segment with no score, or a clip with no segment, only when a limit is set", () => {
+    expect(matchesFilter(compared(null), filter(""))).toBe(true);
+    expect(matchesFilter(null, filter(""))).toBe(true);
+    expect(matchesFilter(compared(null), filter("agree_from=0"))).toBe(false);
+    expect(matchesFilter(null, filter("agree_to=100"))).toBe(false);
+  });
+
+  it("finds a label that differs on a segment nobody has checked, and whether the models agree on it", () => {
+    expect(labelDiffers(compared(0.3, true))).toBe(true);
+    expect(onlyLabelDiffers(compared(0.3, true))).toBe(false);
+    expect(onlyLabelDiffers(compared(0.85, true))).toBe(true);
+    expect(onlyLabelDiffers(compared(0.7, true), 0.6)).toBe(true);
+    expect(onlyLabelDiffers(compared(null, true))).toBe(false);
+    expect(onlyLabelDiffers(compared(0.9, false))).toBe(false);
+    expect(onlyLabelDiffers(compared(0.9, null))).toBe(false);
+    expect(labelDiffers(compared(0.9, true, true))).toBe(false);
+    expect(matchesFilter(compared(0.3, true), filter("label=differs"))).toBe(true);
+    expect(matchesFilter(compared(0.3, true), filter("label=only"))).toBe(false);
+    expect(matchesFilter(compared(0.9, true), filter("label=only&agree_to=80"))).toBe(false);
+    expect(matchesFilter(null, filter("label=differs"))).toBe(false);
+  });
+
+  it("orders by agreement with no score last, and ties in the order they came in", () => {
+    const items = [{ k: "a", c: 0.5 }, { k: "b", c: null }, { k: "c", c: 0.9 }, { k: "d", c: 0.5 }, { k: "e", c: null }];
+    const keys = (order: "list" | "low" | "high") => byAgreement(items, order, (x) => x.c).map((x) => x.k).join("");
+    expect(keys("list")).toBe("abcde");
+    expect(keys("low")).toBe("adcbe");
+    expect(keys("high")).toBe("cadbe");
+  });
+
+  it("counts a file's unchecked segments in the range", () => {
+    const agreement = { "12": 2, "50": 3, "85": 4 };
+    expect(countInRange(agreement, filter("agree_from=50"))).toBe(7);
+    expect(countInRange(agreement, filter("agree_to=50"))).toBe(5);
+    expect(countInRange(agreement, filter("agree_from=13&agree_to=49"))).toBe(0);
+    expect(countInRange(undefined, filter("agree_from=50"))).toBe(0);
+  });
+
+  it("keeps Tab inside the filter, in the order it is given", () => {
+    const segs = [seg(1, { confidence: 0.2 }), seg(2, { confidence: 0.6 }), seg(3, { confidence: 0.7 })];
+    const inRange = (s: Segment) => (s.confidence ?? 0) >= 0.5;
+    expect(nextToReview(segs, null, 1, 0.85, undefined, inRange)).toBe(2);
+    expect(nextToReview(segs, 3, 1, 0.85, undefined, inRange)).toBe(2);
+    expect(nextToReview(segs, 1, -1, 0.85, undefined, inRange)).toBe(3);
+    expect(nextToReview(segs, 1, 1, 0.85, undefined, () => false)).toBeNull();
   });
 });

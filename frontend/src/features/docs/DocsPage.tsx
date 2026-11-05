@@ -247,6 +247,17 @@ const SECTIONS: Section[] = [
           are, <em>Keep all uploaded labels</em> confirms every one that nobody has checked, after it asks you.
         </p>
         <p className="m-0">
+          To choose what to look at first, set a range under <em>Agreement</em>, or set <em>Order</em> to <em>Lowest agreement first</em>. Agreement is how closely the models agree with
+          the transcript they started from. A clip with no score is left out when you set a limit. The list, the count to review, and the walking keys all stay inside the filter, and the filter
+          stays in the page's address.
+        </p>
+        <p className="m-0">
+          To find uploaded labels that may be wrong, set <em>Uploaded label</em> to <em>Models agree, label differs</em>. It lists the clips nobody has checked where the agreement reaches the run's auto-accept
+          threshold, and the transcript still differs from the label. These clips show "Only label differs" in the list. <em>Label differs</em> lists every unchecked clip that differs, whether
+          the models agree or not. Speaker turns also have the agreement filter and the order, one file at a time, and <em>Next file in range</em> goes to the next file with
+          unchecked segments in the range.
+        </p>
+        <p className="m-0">
           Undo works on the clip on the screen, so go back to a clip to undo a change to it. <em>Confirm all high-confidence</em> confirms every auto-accepted clip
           in the dataset at once, after it asks you.
         </p>

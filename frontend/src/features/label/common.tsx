@@ -3,13 +3,14 @@
 // labelling a dataset, and what Annotate's two views have in common.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Link, NavLink, useSearchParams } from "react-router-dom";
 import { api, type ConsoleRow, type Dataset, type LabelProgress, type Labelling, type Segment } from "../../lib/api";
 import { hours, num } from "../../lib/format";
-import { BAR_COLORS, BAR_LABELS, BAR_ORDER, SHORTCUTS } from "../../lib/label";
+import { BAR_COLORS, BAR_LABELS, BAR_ORDER, filterActive, percentParam, readFilter, SHORTCUTS, writeFilter, type AgreementOrder, type ReviewFilter } from "../../lib/label";
 import type { ActiveLexicon } from "../../lib/lexicon";
 import * as I from "../../components/icons";
-import { Button, cx, Empty, ErrorNote, PageHeader, Panel, Spinner } from "../../components/ui";
+import { Button, cx, Empty, ErrorNote, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 
 export function useConsole() {
   return useQuery({
@@ -197,6 +198,78 @@ export function KeepUploaded({ datasetId }: { datasetId: number }) {
       </Button>
       <ErrorNote error={keep.error} />
     </span>
+  );
+}
+
+/** Annotate's filter, kept in the URL. */
+export function useReviewFilter(): [ReviewFilter, (change: Partial<ReviewFilter>) => void] {
+  const [params, setParams] = useSearchParams();
+  const raw = params.toString();
+  const filter = useMemo(() => readFilter(new URLSearchParams(raw)), [raw]);
+  const change = useCallback((c: Partial<ReviewFilter>) => setParams((p) => writeFilter(p, { ...readFilter(p), ...c }), { replace: true }), [setParams]);
+  return [filter, change];
+}
+
+/** Calls `arrive` when the filter has stopped changing, so a page can bring a segment from the new list to the screen.
+ * It waits a moment because typing "85" is two changes. `order` says the order changed, not just what is shown. */
+export function useFilterArrival(filter: ReviewFilter, arrive: (order: boolean) => void) {
+  const key = JSON.stringify(filter);
+  const last = useRef(filter);
+  const latest = useRef(arrive);
+  latest.current = arrive;
+  useEffect(() => {
+    if (JSON.stringify(last.current) === key) return;
+    const t = window.setTimeout(() => {
+      const order = last.current.order !== filter.order;
+      last.current = filter;
+      latest.current(order);
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [key]);
+}
+
+function PercentInput({ label, value, placeholder, onChange }: { label: string; value: number | null; placeholder: string; onChange: (v: number | null) => void }) {
+  return (
+    <input
+      type="number"
+      min={0}
+      max={100}
+      step={1}
+      aria-label={label}
+      value={value ?? ""}
+      placeholder={placeholder}
+      onChange={(e) => onChange(percentParam(e.target.value))}
+      className="w-14 min-h-8 bg-canvas border border-line rounded-md px-1.5 text-xs text-fg num"
+    />
+  );
+}
+
+/** The agreement range and the list's order, with any other filter the view has as `children`. */
+export function ReviewFilters({ filter, onChange, listOrder, children }: { filter: ReviewFilter; onChange: (c: Partial<ReviewFilter>) => void; listOrder: string; children?: ReactNode }) {
+  return (
+    <div role="group" aria-label="Filter by agreement" className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted">
+      <span className="flex items-center gap-1.5" title="How closely the models agree with the starting hypothesis. A segment with no score, because one model or none transcribed it, is left out when you set a limit.">
+        Agreement
+        <PercentInput label="Lowest agreement in percent" value={filter.from} placeholder="0" onChange={(from) => onChange({ from })} />
+        to
+        <PercentInput label="Highest agreement in percent" value={filter.to} placeholder="100" onChange={(to) => onChange({ to })} />
+        %
+      </span>
+      <Select
+        label="Order"
+        value={filter.order}
+        onChange={(e) => {
+          onChange({ order: e.target.value as AgreementOrder });
+          e.currentTarget.blur(); // so Tab and Enter go to the page rather than to this menu
+        }}
+      >
+        <option value="list">{listOrder}</option>
+        <option value="low">Lowest agreement first</option>
+        <option value="high">Highest agreement first</option>
+      </Select>
+      {children}
+      {filterActive(filter) && <Button size="sm" variant="ghost" onClick={() => onChange({ from: null, to: null, label: "any" })}>Clear filters</Button>}
+    </div>
   );
 }
 
