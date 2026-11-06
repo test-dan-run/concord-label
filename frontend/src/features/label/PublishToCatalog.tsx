@@ -20,11 +20,16 @@ const REFS_LABELS: Record<string, string> = {
   "refs.rttm": "speakers (RTTM)",
 };
 
-/** Publish to Dataset Catalog when the catalog is set up, else a reference package to download. */
-export function PublishOrDownload({ datasetId, className }: { datasetId: number; className?: string }) {
+/** Publish to Dataset Catalog when the catalog is set up, and always a reference package to download. */
+export function PublishAndDownload({ datasetId }: { datasetId: number }) {
   const cfg = useConfig();
   if (!cfg.data) return null;
-  return cfg.data.dataset_catalog.enabled ? <PublishToCatalog datasetId={datasetId} className={className} /> : <DownloadPackage datasetId={datasetId} className={className} />;
+  return (
+    <>
+      {cfg.data.dataset_catalog.enabled && <PublishToCatalog datasetId={datasetId} />}
+      <DownloadPackage datasetId={datasetId} />
+    </>
+  );
 }
 
 function when(iso: string | null | undefined): string {

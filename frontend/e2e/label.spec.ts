@@ -6,7 +6,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 // pseudo-labels the copy with pyannote -> both Whispers. It also uploads "Short clips", with one transcript per clip,
 // and "Labelled clips", the same with uploaded labels, and pseudo-labels both with both Whispers. Console errors fail the test.
 // With the Dataset Catalog set up (a FakeDatasetCatalog, unless E2E_DATASET_CATALOG=0), the dataset pages publish to
-// it; without it they build reference packages to download. The catalog also holds "Raw calls" (v1 audio only, made into a Label dataset,
+// it, and they build reference packages to download either way. The catalog also holds "Raw calls" (v1 audio only, made into a Label dataset,
 // then v2 from Concord Bench). The tests of the path that isn't set up are skipped.
 
 async function catalogOn(request: APIRequestContext): Promise<boolean> {
@@ -742,11 +742,12 @@ test("live evaluation loads standings and DER; Publish or Download, no locked sc
   await expect(page.getByText(/with the speakers pyannote-diarization found\. .* of audio in [1-9]\d* of 6 files so far, [1-9]\d* of them reviewed to the end/)).toBeVisible();
   const row = page.getByRole("row", { name: /whisper-large-v3/ }).first();
   await expect(row.getByRole("cell").nth(4)).toHaveText(/\d+\.\d%/);
-  // Publish to Dataset Catalog replaces Promote and Send to Bench; without the catalog the panel builds a package to
-  // download. Without BENCH_URL the locked score is hidden.
+  // Publish to Dataset Catalog replaces Promote and Send to Bench, and a package to download is there either way.
+  // Without BENCH_URL the locked score is hidden.
   await expect(page.getByRole("heading", { name: "Promote to benchmark dataset" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Send to Bench" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: catalog ? "Publish to Dataset Catalog" : "Download references" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Publish to Dataset Catalog" })).toHaveCount(catalog ? 1 : 0);
+  await expect(page.getByRole("heading", { name: "Download references" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Locked" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Use for retraining" })).toHaveCount(0);
   expect(errors).toEqual([]);
@@ -775,8 +776,8 @@ test("import / export: build a package, import it back, see the merge plan", asy
   expect(errors).toEqual([]);
 });
 
-test("without the Dataset Catalog: download a reference package, listed in the history", async ({ page, request }) => {
-  test.skip(await catalogOn(request), "the Dataset Catalog is set up, so the panel publishes there");
+test("download a reference package, listed in the history, and the confirmed labels", async ({ page, request }) => {
+  const catalog = await catalogOn(request);
   const errors = watchErrors(page);
   await page.goto("/datasets");
   await page.getByRole("link", { name: "Synth fixtures" }).click();
@@ -793,8 +794,15 @@ test("without the Dataset Catalog: download a reference package, listed in the h
   const file = await download.path();
   expect(fs.statSync(file!).size).toBeGreaterThan(1000);
   expect(fs.readFileSync(file!).subarray(0, 2).toString()).toBe("PK");
-  const history = page.locator("section").filter({ has: page.getByRole("heading", { name: "Reference packages" }) });
+  const history = page.locator("section").filter({ has: page.getByRole("heading", { name: catalog ? "Published versions" : "Reference packages" }) });
   await expect(history.getByRole("row", { name: /v\d+ complete .*download done/ }).first()).toBeVisible();
+  // the confirmed labels so far, as one file with speakers
+  const labels = panel.getByRole("link", { name: /^Download confirmed labels only/ });
+  const [plain] = await Promise.all([page.waitForEvent("download"), labels.click()]);
+  expect(plain.suggestedFilename()).toBe("synth-fixtures-confirmed.jsonl");
+  const first = JSON.parse(fs.readFileSync((await plain.path())!, "utf8").split("\n")[0]) as { speaker: string; text: string };
+  expect(first.speaker).toBeTruthy();
+  expect(first.text).toBeTruthy();
   expect(errors).toEqual([]);
 });
 

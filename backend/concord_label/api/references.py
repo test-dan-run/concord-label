@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,16 +27,29 @@ router = APIRouter(tags=["bench"])
 
 
 @router.get("/datasets/{dataset_id}/reference-preview")
-def reference_preview(dataset_id: int, scope: str = "complete", session: Session = Depends(get_session)) -> dict:
-    """What a package or a published version would hold: counts, the references file and the files left out."""
+def reference_preview(dataset_id: int, scope: str = "complete", catalog: bool = True,
+                      session: Session = Depends(get_session)) -> dict:
+    """What a package or a published version would hold: counts, the references file and the files left out. The
+    download panel asks with `catalog=false`, so it still works while the catalog service doesn't answer."""
     ds = get_dataset(session, dataset_id)
     try:
         pv = refpkg.preview(session, ds, scope)
     except refpkg.RefPkgError as exc:
         raise HTTPException(400, str(exc)) from None
-    # With the Dataset Catalog set up, the panel publishes there (DATASET_CATALOG_PLAN.md §8.2).
-    cat = publish.status(ds) if dataset_catalog.enabled() else None
+    # With the Dataset Catalog set up, the publish panel shows its state (DATASET_CATALOG_PLAN.md §8.2).
+    cat = publish.status(ds) if catalog and dataset_catalog.enabled() else None
     return {**pv, "dataset": {"id": ds.id, "name": ds.name, "uid": ds.uid, "tags": ds.tags}, "catalog": cat}
+
+
+@router.get("/datasets/{dataset_id}/confirmed-labels.jsonl")
+def confirmed_labels(dataset_id: int, session: Session = Depends(get_session)) -> Response:
+    """Every confirmed segment so far, in any file, with its speaker and text (refpkg.confirmed_labels)."""
+    ds = get_dataset(session, dataset_id)
+    sel = refpkg.select_files(session, ds, "any")
+    if not sel.files:
+        raise HTTPException(404, "no confirmed segments yet")
+    return Response(refpkg.confirmed_labels(sel), media_type="application/x-ndjson",
+                    headers={"Content-Disposition": f'attachment; filename="{refpkg.slug(ds.name)}-confirmed.jsonl"'})
 
 
 class SendIn(BaseModel):

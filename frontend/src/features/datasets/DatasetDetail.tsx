@@ -5,7 +5,7 @@ import { api, type Dataset, type Run } from "../../lib/api";
 import { ago, clock, hours, num } from "../../lib/format";
 import { TagInput } from "../../components/TagInput";
 import { Button, Chip, Empty, ErrorNote, Fact, JobPill, LinkButton, PageHeader, Panel, Spinner, StatusDot } from "../../components/ui";
-import { PublishOrDownload } from "../label/PublishToCatalog";
+import { PublishAndDownload } from "../label/PublishToCatalog";
 import { ImportFlags, PackageHistory } from "../label/ReferencePackages";
 
 interface FileRow {
@@ -192,7 +192,7 @@ export function DatasetDetail() {
                 </>
               )}
             </Panel>
-            <PublishOrDownload datasetId={d.id} />
+            <PublishAndDownload datasetId={d.id} />
             <ImportFlags datasetId={d.id} />
           </aside>
         </div>

@@ -1,5 +1,5 @@
-// Reference packages (CONTRACTS.md §2): a dataset's confirmed segments as a zip to download, which is what the
-// dataset panel offers when the Dataset Catalog is not set up. Contract version 3 removed "Send to Bench": datasets
+// Reference packages (CONTRACTS.md §2): a dataset's confirmed segments as a zip to download, and the confirmed labels
+// as one plain file. Both work with or without the Dataset Catalog. Contract version 3 removed "Send to Bench": datasets
 // reach Concord Bench through the Dataset Catalog (PublishToCatalog.tsx). Also the history of packages, publishes
 // and earlier sends, and the import of a flags file from Bench (CONTRACTS.md §3, offline case).
 
@@ -31,6 +31,7 @@ export function useReferenceExport(id: number | null) {
 
 export function DownloadPackage({ datasetId, className }: { datasetId: number; className?: string }) {
   const qc = useQueryClient();
+  const catalog = useConfig().data?.dataset_catalog.enabled ?? false;
   const [scope, setScope] = useState<"complete" | "any">("complete");
   const [name, setName] = useState<string | null>(null);
   const [tags, setTags] = useState<string[] | null>(null);
@@ -38,8 +39,8 @@ export function DownloadPackage({ datasetId, className }: { datasetId: number; c
   const [outputs, setOutputs] = useState(false);
   const [sent, setSent] = useState<number | null>(null);
   const pv = useQuery({
-    queryKey: ["reference-preview", datasetId, scope],
-    queryFn: () => api.get<ReferencePreview>(`/datasets/${datasetId}/reference-preview${qs({ scope })}`),
+    queryKey: ["reference-preview", datasetId, scope, "download"],
+    queryFn: () => api.get<ReferencePreview>(`/datasets/${datasetId}/reference-preview${qs({ scope, catalog: false })}`),
   });
   const p = pv.data;
   useEffect(() => {
@@ -72,7 +73,11 @@ export function DownloadPackage({ datasetId, className }: { datasetId: number; c
   return (
     <Panel
       title="Download references"
-      subtitle="Confirmed segments only, as a reference package (zip). To send a dataset to Concord Bench, set up the Dataset Catalog and publish it there."
+      subtitle={
+        catalog
+          ? "Confirmed segments only, as a reference package (zip). Nothing goes to the Dataset Catalog."
+          : "Confirmed segments only, as a reference package (zip). To send a dataset to Concord Bench, set up the Dataset Catalog and publish it there."
+      }
       className={className}
     >
       <label className="flex flex-col gap-1 text-xs text-muted">
@@ -86,7 +91,7 @@ export function DownloadPackage({ datasetId, className }: { datasetId: number; c
       <TagInput value={tags ?? []} onChange={setTags} />
       <Select label="Include audio" value={audio} onChange={(e) => setAudio(e.target.value)}>
         <option value="auto">Every file</option>
-        <option value="never">None: the receiver must already have the audio</option>
+        <option value="never">None (the receiver has it)</option>
       </Select>
       <label className="flex items-center gap-2 text-[13px]">
         <input type="checkbox" checked={outputs} onChange={(e) => setOutputs(e.target.checked)} />
@@ -111,6 +116,14 @@ export function DownloadPackage({ datasetId, className }: { datasetId: number; c
         {rec.data && !finished && <JobPill status={rec.data.status} />}
       </div>
       {rec.data && finished && <PackageResult r={rec.data} />}
+      {p && (p.review.confirmed ?? 0) > 0 && (
+        <div className="border-t border-track pt-2 text-[13px]">
+          <a href={`/api/datasets/${datasetId}/confirmed-labels.jsonl`} download>
+            Download confirmed labels only
+          </a>
+          <span className="block text-xs text-muted">Every confirmed segment so far ({num(p.review.confirmed)}), as JSONL with speakers and text.</span>
+        </div>
+      )}
     </Panel>
   );
 }

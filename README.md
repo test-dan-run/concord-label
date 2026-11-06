@@ -73,8 +73,11 @@ on, these things change:
   Catalog. When no dataset here was made from that catalog dataset, the page points to New from Dataset
   Catalog.
 
-Without the Dataset Catalog, the panel is Download references, which builds a reference package zip. Label
-no longer sends datasets to Bench directly.
+Download references sits on the same pages, with or without the Dataset Catalog, and it doesn't need the
+catalog service to answer. It builds a reference package zip, and "Any file with confirmed segments" takes
+the confirmed segments of files that aren't fully reviewed, with their text but not their speakers. "Download
+confirmed labels only" gives every confirmed segment so far as one JSONL file, with its file, times, speaker
+and text. Label no longer sends datasets to Bench directly.
 
 To move the audio of existing datasets into the store, run `just move-originals`. It uploads every file in
 `data/originals/` to the store, holds each one, and renames the folder to `data/originals.moved/`. It

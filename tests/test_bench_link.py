@@ -19,6 +19,7 @@ import pytest
 from concord_label import adapters, peer
 from concord_label.core.models import AudioFile, Dataset, Model, ModelOutput, Run, Segment, SegmentStatus
 from concord_label.core.settings import CONTRACT_VERSION, reset_settings
+from concord_label.datasets.parsers import parse_file
 from concord_label.label import refpkg
 from concord_label.runs import jobs
 from label_helpers import _ok
@@ -279,6 +280,29 @@ def test_pseudo_labelled_dataset_complete_and_any(labelled, client, tmp_path, no
     rows = jsonl(root / "refs" / "segments.jsonl")
     assert {(r["start"], r["end"]) for r in rows if r["file"] == second["file"]["path"]} == \
         {(s["start"], s["end"]) for s in confirmed_2}
+
+
+def test_confirmed_labels_file_has_every_confirmed_segment_with_its_speaker(labelled, client, no_bench, tmp_path):
+    """The partial export: both the fully and the part-reviewed file, nothing unconfirmed, speakers kept."""
+    ds = labelled["unlabelled"]
+    assert client.get(f"/api/datasets/{ds}/confirmed-labels.jsonl").status_code == 404
+    first, second = review_files(client, ds)
+    r = client.get(f"/api/datasets/{ds}/confirmed-labels.jsonl")
+    assert r.status_code == 200 and "-confirmed.jsonl" in r.headers["content-disposition"]
+    rows = [json.loads(ln) for ln in r.text.splitlines()]
+    confirmed = [(v["file"], s) for v in (first, second) for s in v["segments"] if s["status"] == "confirmed"]
+    assert {row["uid"] for row in rows} == {s["uid"] for _, s in confirmed}
+    by_uid = {s["uid"]: (v, s) for v, s in confirmed}
+    for row in rows:
+        v, s = by_uid[row["uid"]]
+        assert row["file"] == v["path"] and len(row["sha256"]) == 64
+        assert (row["start"], row["end"], row["speaker"], row["text"]) == (s["start"], s["end"], s["speaker"], s["text"])
+    assert any(row["speaker"] for row in rows)
+    # the apps' annotated upload reads the same file, with speakers
+    out = tmp_path / "labels.jsonl"
+    out.write_text(r.text, encoding="utf-8")
+    res = parse_file(out, out.name)
+    assert not res.errors and len(res.records) == len(rows) and res.format == "json-segments"
 
 
 # ---------------------------------------------------------------- the push to Bench is gone

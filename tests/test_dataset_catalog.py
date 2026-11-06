@@ -8,6 +8,7 @@ import io
 import json
 import shutil
 
+import httpx
 import numpy as np
 import pytest
 import soundfile as sf
@@ -218,6 +219,26 @@ def test_publish_after_the_catalog_dataset_was_deleted_makes_a_new_one(client, s
     session.expire_all()
     ds = session.get(Dataset, d["id"])
     assert rec["status"] == "done" and ds.catalog_dataset_id != old and rec["version"] == 1
+
+
+def test_download_works_while_the_catalog_does_not_answer(client, dataset_catalog, monkeypatch, tmp_path):
+    """The download panel's preview, the package and the confirmed labels make no call to the catalog service."""
+    d = annotated(client, tmp_path)
+    assert publish(client, d["id"])["status"] == "done"
+
+    def down(*a, **kw):
+        raise httpx.ConnectTimeout("no answer")
+
+    monkeypatch.setattr(dataset_catalog, "dataset", down)
+    assert _ok(client.get(f"/api/datasets/{d['id']}/reference-preview"))["catalog"]["error"]
+    assert _ok(client.get(f"/api/datasets/{d['id']}/reference-preview?catalog=false"))["catalog"] is None
+    body = {"name": "x", "scope": "any", "include_audio": "never"}
+    started = _ok(client.post(f"/api/datasets/{d['id']}/reference-exports", json=body), 202)
+    jobs.run_pending()
+    rec = _ok(client.get(f"/api/reference-exports/{started['export']['id']}"))
+    assert rec["status"] == "done", rec["error"]
+    assert rec["catalog_dataset_id"] is None
+    assert client.get(f"/api/datasets/{d['id']}/confirmed-labels.jsonl").status_code == 200
 
 
 def test_send_to_bench_still_works_without_the_dataset_catalog(client, tmp_path):

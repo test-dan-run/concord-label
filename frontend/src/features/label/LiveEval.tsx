@@ -7,7 +7,7 @@ import { useNormaliser, useNormalisers } from "../../lib/config";
 import { ago, clock, deltaPts, hours, num, pct } from "../../lib/format";
 import { Empty, ErrorNote, Fact, PageHeader, Panel, Select, Spinner } from "../../components/ui";
 import { Crumbs, DatasetChooser, LabelTabs } from "./common";
-import { PublishOrDownload } from "./PublishToCatalog";
+import { PublishAndDownload } from "./PublishToCatalog";
 
 export function LiveEvalPage() {
   const { datasetId } = useParams();
@@ -83,7 +83,7 @@ function Live({ datasetId }: { datasetId: number }) {
             <Panel title="Keyword spotting">
               <span className="text-[13px] text-muted">Not built yet (Q6). Package files keep an empty keywords.jsonl so progress stays forward-compatible.</span>
             </Panel>
-            <PublishOrDownload datasetId={datasetId} />
+            <PublishAndDownload datasetId={datasetId} />
           </div>
           <Panel title="Latest confirmations">
             {d.feed.length === 0 && <span className="text-[13px] text-muted">Nothing confirmed by hand yet.</span>}

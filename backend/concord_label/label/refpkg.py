@@ -244,6 +244,14 @@ def refs_text(sel: Selection) -> str:
     raise RefPkgError(sel.problem or "nothing to write")
 
 
+def confirmed_labels(sel: Selection) -> str:
+    """Each selected confirmed segment as one JSON line, with its speaker. This is not a package and not part of the
+    contract: a package of part-reviewed files must leave speakers out, or Bench would score DER on those files."""
+    return "".join(json.dumps({"file": f.rel_path, "sha256": f.sha256, "start": _t(s.start), "end": _t(s.end),
+                               "speaker": s.speaker, "text": s.text, "uid": s.uid}, ensure_ascii=False) + "\n"
+                   for f, ss in sel.files for s in ss)
+
+
 def attributes(sel: Selection) -> dict[str, Any]:
     """refs/attributes.json (CONTRACTS.md §2.7): the files' metadata as file labels; empty when no file has
     any. Label keeps no labels per speaker or per segment, so `speakers` and record `attributes` stay out."""

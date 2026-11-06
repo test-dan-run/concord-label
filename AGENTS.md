@@ -239,3 +239,6 @@ These changes came from the updated design canvas and from requests that followe
   the uploaded-label filter, and it lives in the URL so it survives the speaker view's remount per file. `Segment.uploaded_differs` comes from the
   server (`fusion.same_text`, which moved from `pseudo.py`), because only the server has the normaliser. `LabelFile.agreement` counts each file's
   unchecked segments by percent for the file menu. Annotate's lists now show agreement as a percent, and the Pseudo-label page still shows decimals.
+- Partial labels can be exported (HANDOFF.md §4, "Exporting partial labels"). `PublishAndDownload` shows "Download references" beside Publish when the Dataset Catalog is on, and
+  its preview asks with `catalog=false`, so a catalog that doesn't answer doesn't hold it up. `GET /datasets/{id}/confirmed-labels.jsonl` gives every confirmed segment with its speaker.
+  Keep speakers out of a package with scope `any`: Bench sets `diar` from the records it reads, whatever the manifest says, so it would score DER on part-reviewed files.

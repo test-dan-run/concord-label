@@ -350,10 +350,16 @@ const SECTIONS: Section[] = [
           published a newer version after the one your dataset is based on, the panel says who and when, and it asks before you publish anyway.
         </p>
         <p className="m-0">
-          Without the Dataset Catalog, the same panel is <em>Download references</em>, which builds the confirmed segments into a reference
-          package zip. The package can also include the audio and model outputs, and each package gets a new version number. Label no longer
-          sends datasets to Bench directly, so set up the Dataset Catalog to get them there. Scores and flags from Bench come back only for a
-          dataset you published to the catalog or made from it.
+          <em>Download references</em> sits on the same pages, with or without the Dataset Catalog, and it builds the confirmed segments into a
+          reference package zip. The package can also include the audio and model outputs, and each package gets a new version number. Label no
+          longer sends datasets to Bench directly, so set up the Dataset Catalog to get them there. Scores and flags from Bench come back only
+          for a dataset you published to the catalog or made from it.
+        </p>
+        <p className="m-0">
+          You can export your labels before the review is finished. Choose <em>Any file with confirmed segments</em> to build a package from files
+          that aren't fully reviewed. That package has the text but not the speakers, because Bench can't score diarisation on part of a file.{" "}
+          <em>Download confirmed labels only</em> gives every confirmed segment so far as one JSONL file, with its file, times, speaker and text.
+          Neither includes segments that were auto-accepted, still need review or were rejected.
         </p>
         <p className="m-0">
           Bench's flags, the locked score on Live evaluation and <em>Open in Label</em> find your dataset by the catalog dataset it belongs to.
